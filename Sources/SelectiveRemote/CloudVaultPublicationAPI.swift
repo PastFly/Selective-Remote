@@ -10,12 +10,28 @@ enum SelectiveRemotePublicationLifecycle {
         lock.withLock { if let value = epochs[endpoint.absoluteString] { return value }; let value = UUID(); epochs[endpoint.absoluteString] = value; return value }
     }
     static func invalidate(endpoint: URL) { lock.withLock { epochs[endpoint.absoluteString] = UUID(); authenticationLosses.removeValue(forKey: endpoint.absoluteString) } }
-    static func loseAuthentication(endpoint: URL, expectedEpoch: UUID) throws {
+    static func withCurrent<T>(endpoint: URL, expectedEpoch: UUID, _ operation: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard epochs[endpoint.absoluteString] == expectedEpoch else { throw CancellationError() }
+            return try operation()
+        }
+    }
+    static func transitionIfCurrent<T>(endpoint: URL, expectedEpoch: UUID, _ operation: (UUID) throws -> T) throws -> T {
+        try lock.withLock {
+            guard epochs[endpoint.absoluteString] == expectedEpoch else { throw CancellationError() }
+            let next = UUID()
+            epochs[endpoint.absoluteString] = next
+            authenticationLosses.removeValue(forKey: endpoint.absoluteString)
+            return try operation(next)
+        }
+    }
+    static func loseAuthentication(endpoint: URL, expectedEpoch: UUID, _ operation: () throws -> Void) throws {
         try lock.withLock {
             guard epochs[endpoint.absoluteString] == expectedEpoch else { throw CancellationError() }
             let retired = UUID()
             epochs[endpoint.absoluteString] = retired
             authenticationLosses[endpoint.absoluteString] = (expectedEpoch, retired)
+            try operation()
         }
     }
     static func authenticationLossEpoch(endpoint: URL, requestEpoch: UUID) -> UUID? {
@@ -116,6 +132,12 @@ protocol SelectiveRemoteVaultPublicationRemote: Sendable {
     func publicationOwnTrust(endpoint: URL) async throws -> SelectiveRemoteCloudDeviceTrustSnapshot
 }
 
+/// Explicit isolated token stores may own session resolution. This branch never consults app preferences.
+/// A provider must bind endpoint/account/device/token and fail closed if its authorization is unavailable.
+protocol SelectiveRemotePublicationSessionProviding: Sendable {
+    func isolatedPublicationSession(endpoint: URL, token: String, deviceID: UUID?) throws -> SelectiveRemotePublicationSession?
+}
+
 extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
     func publicationRead(scope: SelectiveRemotePublicationScope, route: String, generation: String? = nil, hash: String? = nil, cursor: String? = nil) async throws -> SelectiveRemoteJSONValue {
         var query: [URLQueryItem] = []
@@ -123,7 +145,8 @@ extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
         if let hash { query.append(.init(name: "headerHash", value: hash)) }
         if let cursor { query.append(.init(name: "cursor", value: cursor)) }
         let (data, response) = try await authorizedResponse(endpoint: scope.endpoint,
-            path: "v1/teams/\(scope.teamID.canonicalCloudString)/vaults/\(scope.vaultID.canonicalCloudString)/publication/\(route)", queryItems: query)
+            path: "v1/teams/\(scope.teamID.canonicalCloudString)/vaults/\(scope.vaultID.canonicalCloudString)/publication/\(route)",
+            headers: ["X-Vault-Schema-Version": "2", "X-Vault-Capability": "resource_acl_v2", "X-Publication-Version": "1"], queryItems: query)
         guard (200..<300).contains(response.statusCode) else {
             let code = (try? JSONSerialization.jsonObject(with: data) as? [String: String])?["error"]
             throw SelectiveRemoteCloudError.serviceError(response.statusCode, code)
@@ -150,6 +173,12 @@ extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
     }
     /// Reuse one captured catalog per authorization, never perform catalog I/O for each part read.
     func publicationRetirementSession(endpoint: URL, token: String, deviceID: UUID? = nil) throws -> SelectiveRemotePublicationSession? {
+        if let provider = tokenStore as? any SelectiveRemotePublicationSessionProviding {
+            let session = try provider.isolatedPublicationSession(endpoint: endpoint, token: token, deviceID: deviceID)
+            try session?.check()
+            if let session { try publicationStore().captureRetirementOwners(session: session) }
+            return session
+        }
         if let current = publicationRetirementSessions[endpoint.absoluteString],
            (try? current.check()) != nil, deviceID == nil || deviceID == current.deviceID { return current }
         let configuredEndpoint = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1").flatMap { try? SelectiveRemoteCloudEndpoint.normalized($0) }
@@ -162,6 +191,12 @@ extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
     }
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession? {
         guard let token = try tokenStore.token(for: endpoint) else { throw SelectiveRemoteCloudError.authenticationRequired }
+        if let provider = tokenStore as? any SelectiveRemotePublicationSessionProviding {
+            let session = try provider.isolatedPublicationSession(endpoint: endpoint, token: token, deviceID: deviceID)
+            try session?.check()
+            if let session { try publicationStore().captureRetirementOwners(session: session) }
+            return session
+        }
         let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         let preflight = try publicationRetirementSession(endpoint: endpoint, token: token, deviceID: deviceID)
         let id: UUID
@@ -196,6 +231,8 @@ extension SelectiveRemoteCloudAPIClient {
         await detachRetiredPublications(session: session, selection: selection)
     }
     private func detachRetiredPublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async {
+        // Isolated providers own their presentation. Durable retirement above still runs normally.
+        if tokenStore is any SelectiveRemotePublicationSessionProviding { return }
         await MainActor.run {
             let presentation = SelectiveRemotePublicationPresentation.shared
             let scopes = presentation.caches.map(\.scope).filter {

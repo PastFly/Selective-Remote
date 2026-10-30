@@ -72,6 +72,16 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     static let namespace = "cloud-secure-envelope.v1"
     private static let lock = NSLock()
 
+    // Internal persistence seam; the default production initializer is unchanged.
+    struct Storage: Sendable {
+        let read: @Sendable (URL) throws -> SelectiveRemoteCloudSecureEnvelope?
+        let write: @Sendable (SelectiveRemoteCloudSecureEnvelope, URL) throws -> Void
+        let delete: @Sendable (URL) throws -> Void
+    }
+    private let storage: Storage?
+    init() { storage = nil }
+    init(storage: Storage) { self.storage = storage }
+
     func envelope(for endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
         try Self.synchronized {
             try readUnlocked(endpoint: endpoint)
@@ -84,7 +94,9 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     ) throws {
         try Self.synchronized {
             var envelope = try readUnlocked(endpoint: endpoint) ?? .init()
+            let original = envelope
             try mutation(&envelope)
+            guard envelope != original else { return }
             if envelope.isEmpty {
                 try deleteUnlocked(endpoint: endpoint)
             } else {
@@ -94,6 +106,7 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     }
 
     private func readUnlocked(endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
+        if let storage { return try storage.read(endpoint) }
         if let data = try UnifiedCredentialVault.shared.readProtectedData(
             namespace: Self.namespace,
             key: endpoint.absoluteString
@@ -136,6 +149,7 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
         _ envelope: SelectiveRemoteCloudSecureEnvelope,
         endpoint: URL
     ) throws {
+        if let storage { return try storage.write(envelope, endpoint) }
         let data = try JSONEncoder().encode(envelope)
         try UnifiedCredentialVault.shared.saveProtectedData(
             data,
@@ -146,6 +160,7 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     }
 
     private func deleteUnlocked(endpoint: URL) throws {
+        if let storage { return try storage.delete(endpoint) }
         try UnifiedCredentialVault.shared.deleteProtectedData(
             namespace: Self.namespace,
             key: endpoint.absoluteString

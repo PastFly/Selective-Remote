@@ -192,6 +192,7 @@ export function createWholePublicationAccessDriver({transport,sessionIdentity,ge
     }
   };
   const rowsFor=scope=>{checkScope(scope);const v=currentVault(context,scope.vaultID);return v.resources.map(r=>({...r,teamID:context.teamID,vaultID:v.vaultID,policyKind:r.kind,resourceVersion:v.sequence,version:v.sequence}));};
+  const inspect=(scope,query)=>{checkScope(scope);const c=capture(getIdentity),v=currentVault(context,scope.vaultID);return c.checked(()=>transport.inspection(scope,{generationID:v.generationID,headerHash:v.headerHash,...query}));};
   const driver={
     get enabled(){return !disposed&&context?.publicationAvailable===true&&context.recoveryOnly!==true;},
     get writesBlocked(){return pending?.coordinator?.writesBlocked??!!pending?.prepared;},
@@ -237,6 +238,10 @@ export function createWholePublicationAccessDriver({transport,sessionIdentity,ge
     groups(){return {rows:copy(context.groups),nextCursor:null};},
     groupMembers(groupID){return {rows:copy(context.edges.filter(e=>e.groupID===groupID)),nextCursor:null};},
     getResource(scope,resourceID){const row=rowsFor(scope).find(r=>r.id===resourceID);if(!row)fail('publication_resource_missing');return row;},
+    effective(scope,resourceID,subjectUserID,subjectDeviceID){return inspect(scope,{inspection:'effective',resourceID,subjectUserID,subjectDeviceID});},
+    whoHas(scope,resourceID,options={}){return inspect(scope,{inspection:'who',resourceID,limit:options.limit,cursor:options.cursor});},
+    resourcesByPrincipal(scope,principalKind,principalID,options={}){return inspect(scope,{inspection:'resources',principalKind,principalID,limit:options.limit,cursor:options.cursor});},
+    listDevices(scope,subjectUserID,options={}){return inspect(scope,{inspection:'devices',subjectUserID,limit:options.limit,cursor:options.cursor});},
     async preview(scope,draft) {
       checkScope(scope);if(pending?.prepared)fail('publication_resume_required');const c=capture(getIdentity),intent=copy(draft);
       const request=buildWholePublicationRequest({context,vaultID:scope.vaultID,draft:intent,cryptoValue}),preview=await c.checked(()=>collectWholePublicationPreview({request,transport,getIdentity,cryptoValue}));

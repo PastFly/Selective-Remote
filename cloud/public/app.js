@@ -12,6 +12,7 @@ import {
 } from "./vault-local.js";
 import {
   createAuthenticatedVaultClient,
+  loginWithDeviceConflictRetry,
   registerWithDeviceConflictRetry,
   synchronizeVault,
 } from "./vault-sync.js";
@@ -4223,6 +4224,10 @@ export function registrationAcceptedMessage() {
   return "Проверьте почту. Если для этого адреса требуется подтверждение, мы отправим дальнейшие инструкции.";
 }
 
+export function passwordResetAcceptedMessage() {
+  return "Если адрес подходит для восстановления, проверьте почту и папку «Спам». Если письмо не пришло, повторите запрос позже.";
+}
+
 // Capture the old controller before any asynchronous logout response can switch accounts.
 export async function completeBrowserSessionLogout({ client, vault, clearView, restoreView, documentValue = null,
   isCurrent = () => client.session() === null }) {
@@ -4597,7 +4602,7 @@ export async function initializeCloudAccount({
     try {
       await client.requestPasswordReset(recoveryFormAccount.elements.email.value);
       recoveryFormAccount.reset();
-      setAccountMessage("Если аккаунт существует, ссылка для смены пароля уже отправлена.", "success");
+      setAccountMessage(passwordResetAcceptedMessage(), "success");
     } catch {
       setAccountMessage("Не удалось запросить восстановление. Повторите позже.", "error");
     } finally {
@@ -4612,20 +4617,12 @@ export async function initializeCloudAccount({
     try {
       const password = form.elements.password.value;
       const email = form.elements.email.value;
-      const deviceID = await accountDevices.remember(email, await accountDevices.deviceID(email));
-      let identity = null;
-      try {
-        identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID });
-      } catch {
-        // Team keys are optional for personal-Vault login and fail independently.
-      }
-      const user = await client.login({
-        email,
-        password,
-        deviceID,
-        publicKey: identity?.publicKey ?? null,
+      const { user, identity } = await loginWithDeviceConflictRetry({
+        input: { email, password },
+        accountDevices,
+        ensureIdentity: (deviceID) => ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID }),
+        login: (input) => client.login(input),
       });
-      try { await accountDevices.accepted(email, deviceID); } catch {}
       let personalVaultReady = false;
       let personalVaultRemembered = false;
       try {
@@ -4678,6 +4675,8 @@ export async function initializeCloudAccount({
         invalid_credentials: "Неверная электронная почта или пароль.",
         email_not_verified: "Сначала подтвердите почту по ссылке из письма.",
         rate_limited: "Слишком много попыток входа. Повторите позже.",
+        device_conflict: "Сохранённое устройство связано с другим аккаунтом. Войдите в отдельном профиле браузера; сохранённые ключи не изменены.",
+        invalid_device: "Устройство отозвано или его ключ не совпадает. Войдите с доверенного устройства.",
       };
       setAccountMessage(messages[code] ?? "Не удалось войти. Проверьте соединение и повторите попытку.", "error");
     } finally {
@@ -5547,7 +5546,7 @@ export async function initializePortal({
           form.hidden = true;
           panel.classList.add("success");
           title.textContent = "Пароль изменён";
-          message.textContent = "Все прежние сессии отозваны. Теперь войдите с новым паролем.";
+          message.textContent = "Все прежние сессии отозваны. Войдите с новым паролем. Ключи существующего Personal Vault не изменены и не восстановлены.";
           home.hidden = false;
         } catch {
           panel.classList.add("error");

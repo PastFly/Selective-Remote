@@ -160,6 +160,7 @@ struct SelectiveRemoteApp: App {
     @StateObject private var appAppearance = AppAppearanceStore.shared
     @StateObject private var appLock = AppLockStore()
     private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
+    @State private var personalUploadGeneration = UUID()
     private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync.shared
     private let syncPresentation = SyncPresentationStore.shared
 
@@ -532,7 +533,12 @@ struct SelectiveRemoteApp: App {
         let syncGeneration = syncPresentation.generation
         let syncEndpoint = endpoint.absoluteString
         let syncDeviceID = deviceID.uuidString
+        let uploadGeneration = UUID()
+        personalUploadGeneration = uploadGeneration
+        syncPresentation.recordPersonalPending()
         Task {
+            guard personalUploadGeneration == uploadGeneration,
+                  syncPresentation.generation == syncGeneration else { return }
             await personalVaultAutoSync.schedule(
                 endpoint: endpoint,
                 deviceID: deviceID,
@@ -542,7 +548,8 @@ struct SelectiveRemoteApp: App {
                 sshKeys: sshKeys,
                 onFailure: { issue in
                     await MainActor.run {
-                        guard syncPresentation.generation == syncGeneration,
+                        guard personalUploadGeneration == uploadGeneration,
+                              syncPresentation.generation == syncGeneration,
                               syncPresentation.matchesAccount(
                                 endpoint: syncEndpoint, deviceID: syncDeviceID
                               ) else { return }
@@ -586,7 +593,10 @@ struct SelectiveRemoteApp: App {
             forKey: SelectiveRemotePersonalVaultSyncStatus.isSyncingKey
         )
         let syncGeneration = syncPresentation.generation
-        syncPresentation.begin(.personal)
+        let uploadGeneration = personalUploadGeneration
+        if syncPresentation.personal.pendingLocalChanges != true {
+            syncPresentation.begin(.personal)
+        }
         defer {
             UserDefaults.standard.set(
                 false,
@@ -594,51 +604,67 @@ struct SelectiveRemoteApp: App {
             )
         }
         do {
-            guard let download = try await personalVaultAutoSync.downloadIfNewer(
-                endpoint: endpoint,
-                deviceID: deviceID
-            ) else {
-                if syncPresentation.matchesAccount(
-                    endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
-                ), syncPresentation.generation == syncGeneration {
-                    syncPresentation.recordPersonalUnknown()
-                }
-                return
-            }
-            guard syncPresentation.matchesAccount(
-                endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
-            ), syncPresentation.generation == syncGeneration else { return }
-            let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
-            let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(snapshot.sshKeys)
-            try KeychainService.savePasswords(snapshot.credentials)
-            try await personalVaultAutoSync.acceptDownload(
-                download,
+            let result = try await personalVaultAutoSync.checkForChanges(
                 endpoint: endpoint,
                 deviceID: deviceID
             )
             guard syncPresentation.matchesAccount(
                 endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
-            ), syncPresentation.generation == syncGeneration else { return }
-            if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
-            if model.independentPortForwards != snapshot.forwarding {
-                model.independentPortForwards = snapshot.forwarding
+            ), syncPresentation.generation == syncGeneration,
+               personalUploadGeneration == uploadGeneration else { return }
+            let download: SelectiveRemotePersonalVaultAutoSync.Download
+            switch result {
+            case .unavailable:
+                syncPresentation.recordPersonalUnknown()
+                return
+            case let .unconfirmedUpload(issue):
+                if let issue { syncPresentation.recordPersonalFailure(issue) }
+                else { syncPresentation.recordPersonalPending() }
+                return
+            case let .current(revision):
+                SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: revision)
+                syncPresentation.recordPersonalSuccess(revision: revision, generation: syncGeneration)
+                return
+            case let .download(newer):
+                download = newer
             }
-            if model.sshKeys != restoredKeys { model.sshKeys = restoredKeys }
-            TerminalCommandHistoryStore.shared.replaceSyncedTemplates(snapshot.snippets)
-            if syncPresentation.matchesAccount(
+            let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
+            let accepted = try personalVaultAutoSync.acceptDownload(
+                download,
+                endpoint: endpoint,
+                deviceID: deviceID,
+                apply: {
+                    guard syncPresentation.matchesAccount(
+                        endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+                    ), syncPresentation.generation == syncGeneration,
+                       personalUploadGeneration == uploadGeneration else { return false }
+                    let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(snapshot.sshKeys)
+                    try KeychainService.savePasswords(snapshot.credentials)
+                    if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
+                    if model.independentPortForwards != snapshot.forwarding {
+                        model.independentPortForwards = snapshot.forwarding
+                    }
+                    if model.sshKeys != restoredKeys { model.sshKeys = restoredKeys }
+                    TerminalCommandHistoryStore.shared.replaceSyncedTemplates(snapshot.snippets)
+                    return true
+                }
+            )
+            guard syncPresentation.matchesAccount(
                 endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
-            ) {
-                syncPresentation.recordPersonalSuccess(
-                    revision: download.revision, generation: syncGeneration
-                )
-            }
+            ), syncPresentation.generation == syncGeneration,
+               personalUploadGeneration == uploadGeneration else { return }
+            guard accepted else { syncPresentation.recordPersonalUnknown(); return }
+            SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: download.revision)
+            syncPresentation.recordPersonalSuccess(
+                revision: download.revision, generation: syncGeneration
+            )
         } catch {
-            SelectiveRemotePersonalVaultSyncStatus.recordError(error)
-            if syncPresentation.matchesAccount(
+            guard personalUploadGeneration == uploadGeneration,
+                  syncPresentation.matchesAccount(
                 endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
-            ), syncPresentation.generation == syncGeneration {
-                syncPresentation.recordPersonalFailure(SyncIssue.classifyPersonal(error))
-            }
+            ), syncPresentation.generation == syncGeneration else { return }
+            SelectiveRemotePersonalVaultSyncStatus.recordError(error)
+            syncPresentation.recordPersonalFailure(SyncIssue.classifyPersonal(error))
         }
     }
 }

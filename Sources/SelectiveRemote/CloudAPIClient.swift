@@ -336,6 +336,31 @@ enum SelectiveRemoteCloudPortalURL {
     }
 }
 
+struct SelectiveRemoteCloudSessionBinding: Sendable {
+    let endpoint: URL
+    let epoch: UUID
+    fileprivate let token: String
+
+    @MainActor
+    func commitPersonalVault(
+        tokenStore: any SelectiveRemoteCloudTokenStore,
+        keyStore: any SelectiveRemotePersonalVaultKeyStore,
+        deviceID: UUID,
+        expected: SelectiveRemotePersonalVaultKeyMaterial?,
+        material: SelectiveRemotePersonalVaultKeyMaterial,
+        apply: @MainActor () throws -> Bool
+    ) throws -> Bool {
+        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: endpoint, expectedEpoch: epoch) {
+            guard !Task.isCancelled, try tokenStore.token(for: endpoint) == token,
+                  try keyStore.material(endpoint: endpoint, deviceID: deviceID) == expected
+            else { throw CancellationError() }
+            guard try apply() else { return false }
+            try keyStore.saveIfCurrent(material, endpoint: endpoint, deviceID: deviceID, token: token, replacing: expected)
+            return true
+        }
+    }
+}
+
 actor SelectiveRemoteCloudAPIClient {
     private let dataLoader: SelectiveRemoteCloudDataLoader
     let tokenStore: any SelectiveRemoteCloudTokenStore
@@ -393,6 +418,16 @@ actor SelectiveRemoteCloudAPIClient {
         password: String,
         device: SelectiveRemoteCloudDeviceRegistration
     ) async throws -> SelectiveRemoteCloudUser {
+        try await loginWithSession(endpoint: endpoint, email: email, password: password, device: device).user
+    }
+
+    func loginWithSession(
+        endpoint: URL,
+        email: String,
+        password: String,
+        device: SelectiveRemoteCloudDeviceRegistration
+    ) async throws -> (user: SelectiveRemoteCloudUser, session: SelectiveRemoteCloudSessionBinding) {
+        let loginEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedName = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedEmail.isEmpty, normalizedEmail.count <= 254,
@@ -430,10 +465,40 @@ actor SelectiveRemoteCloudAPIClient {
               result.deviceID == device.id,
               Self.validUser(result.user)
         else { throw SelectiveRemoteCloudError.invalidResponse }
-        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
-        try tokenStore.saveToken(result.token, for: endpoint)
+        let session = try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: loginEpoch) { epoch in
+            try tokenStore.saveToken(result.token, for: endpoint)
+            return SelectiveRemoteCloudSessionBinding(endpoint: endpoint, epoch: epoch, token: result.token)
+        }
         try rememberPublicationAccount(result.user.id, endpoint: endpoint, token: result.token)
-        return result.user
+        return (result.user, session)
+    }
+
+    func sessionBinding(endpoint: URL, expectedEpoch: UUID? = nil) throws -> SelectiveRemoteCloudSessionBinding {
+        let epoch = expectedEpoch ?? SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        guard let token = try storedToken(for: endpoint) else { throw SelectiveRemoteCloudError.authenticationRequired }
+        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: endpoint, expectedEpoch: epoch) {}
+        return .init(endpoint: endpoint, epoch: epoch, token: token)
+    }
+
+    func checkSession(_ session: SelectiveRemoteCloudSessionBinding) throws {
+        let token = try storedToken(for: session.endpoint)
+        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: session.endpoint, expectedEpoch: session.epoch) {
+            guard !Task.isCancelled, token == session.token else { throw CancellationError() }
+        }
+    }
+
+    func savePersonalVaultMaterial(
+        _ material: SelectiveRemotePersonalVaultKeyMaterial,
+        session: SelectiveRemoteCloudSessionBinding,
+        deviceID: UUID,
+        keyStore: any SelectiveRemotePersonalVaultKeyStore,
+        replacing expected: SelectiveRemotePersonalVaultKeyMaterial?
+    ) throws {
+        let token = try storedToken(for: session.endpoint)
+        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: session.endpoint, expectedEpoch: session.epoch) {
+            guard !Task.isCancelled, token == session.token else { throw CancellationError() }
+            try keyStore.saveIfCurrent(material, endpoint: session.endpoint, deviceID: deviceID, token: session.token, replacing: expected)
+        }
     }
 
     func registrationUsernameAvailable(endpoint: URL, username: String) async throws -> Bool {
@@ -1037,10 +1102,14 @@ actor SelectiveRemoteCloudAPIClient {
     }
 
     func logout(endpoint: URL) async throws {
-        guard let token = try storedToken(for: endpoint) else { return }
-        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
-        try tokenStore.removeToken(for: endpoint)
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        let rawToken = try tokenStore.token(for: endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+            guard try tokenStore.token(for: endpoint) == rawToken else { throw CancellationError() }
+            try tokenStore.removeToken(for: endpoint)
+        }
         await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
+        guard let token = rawToken, (32...256).contains(token.count) else { return }
         var request = JSONRequest(
             url: endpoint.appending(path: "v1/auth/logout"),
             method: "POST",
@@ -1080,10 +1149,17 @@ actor SelectiveRemoteCloudAPIClient {
         method: String = "GET",
         body: Data? = nil,
         headers: [String: String] = [:],
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        session: SelectiveRemoteCloudSessionBinding? = nil
     ) async throws -> (Data, HTTPURLResponse) {
-        guard let token = try storedToken(for: endpoint) else {
-            throw SelectiveRemoteCloudError.authenticationRequired
+        let token: String
+        if let session {
+            guard session.endpoint == endpoint else { throw CancellationError() }
+            try checkSession(session)
+            token = session.token
+        } else {
+            guard let stored = try storedToken(for: endpoint) else { throw SelectiveRemoteCloudError.authenticationRequired }
+            token = stored
         }
         var components = URLComponents(url: endpoint.appending(path: path), resolvingAgainstBaseURL: false)
         components?.queryItems = queryItems.isEmpty ? nil : queryItems
@@ -1101,10 +1177,13 @@ actor SelectiveRemoteCloudAPIClient {
         let retirement = try publicationRetirementSession(endpoint: endpoint, token: token)?.retirementSnapshot()
         let (data, response) = try await dataLoader(request)
         let http = try httpResponse(response)
-        guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == requestEpoch, try storedToken(for: endpoint) == token else { throw CancellationError() }
+        if let session { try checkSession(session) }
+        else { guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == requestEpoch, try storedToken(for: endpoint) == token else { throw CancellationError() } }
         if http.statusCode == 401 {
-            try SelectiveRemotePublicationLifecycle.loseAuthentication(endpoint: endpoint, expectedEpoch: requestEpoch)
-            try? tokenStore.removeToken(for: endpoint)
+            try SelectiveRemotePublicationLifecycle.loseAuthentication(endpoint: endpoint, expectedEpoch: requestEpoch) {
+                guard try tokenStore.token(for: endpoint) == token else { throw CancellationError() }
+                try? tokenStore.removeToken(for: endpoint)
+            }
             if let retirement {
                 // Payload deletion precedes protected receipt writes; retirement attempts every captured owner.
                 try? retirement.prepareAuthenticationLossRetirement()
@@ -1460,7 +1539,6 @@ actor SelectiveRemoteCloudAPIClient {
     private func storedToken(for endpoint: URL) throws -> String? {
         guard let token = try tokenStore.token(for: endpoint) else { return nil }
         guard (32...256).contains(token.count) else {
-            try tokenStore.removeToken(for: endpoint)
             return nil
         }
         return token

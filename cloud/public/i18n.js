@@ -65,6 +65,7 @@
     "СБРОС ПАРОЛЯ": "PASSWORD RESET",
     "Задайте новый пароль": "Set a new password",
     "Минимум 12 символов.": "At least 12 characters.",
+    "Сброс меняет только пароль входа. Он не восстанавливает ключи существующего Personal Vault: для его открытия нужны прежний пароль или сохранённые ключи. Сохраните данные с устройства, на котором Vault ещё открывается, прежде чем продолжить.": "Reset changes only your sign-in password. It does not recover existing Personal Vault keys: opening that Vault requires the previous password or saved keys. Save your data from a device that can still open the Vault before continuing.",
     "Новый пароль": "New password",
     "Повторите пароль": "Repeat password",
     "Сохранить пароль": "Save password",
@@ -478,7 +479,7 @@
     "Войдите в аккаунт, затем примите одноразовое Team-приглашение в разделе «Команды».": "Sign in, then accept the one-time Team invitation in the Teams section.",
     "Войдите в аккаунт, чтобы открыть Personal Vault на этом устройстве.": "Sign in to open Personal Vault on this device.",
     "Все актуальные авторизованные устройства уже имеют wrapper этой генерации.": "All current authorized devices already have a wrapper for this generation.",
-    "Все прежние сессии отозваны. Теперь войдите с новым паролем.": "All previous sessions were revoked. Sign in with the new password.",
+    "Все прежние сессии отозваны. Войдите с новым паролем. Ключи существующего Personal Vault не изменены и не восстановлены.": "All previous sessions were revoked. Sign in with the new password. Existing Personal Vault keys have not been changed or recovered.",
     "Вход выполнен. Сессия защищена HttpOnly cookie; пароль не сохранён.": "Signed in. The session is protected by an HttpOnly cookie; the password was not stored.",
     "Вход выполнен. Team-ключ недоступен в этом браузере; личный Vault продолжает работать.": "Signed in. The Team key is unavailable in this browser; Personal Vault remains available.",
     "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.": "Signed in. The Team area is temporarily unavailable; Personal Vault and the session remain active.",
@@ -512,7 +513,7 @@
     "Допустить устройство участника?": "Approve member device?",
     "Доступ не отозван: проверьте полномочия и правило последнего Owner.": "Access was not revoked. Check permissions and the last-Owner rule.",
     "Доступ отозван.": "Access revoked.",
-    "Если аккаунт существует, ссылка для смены пароля уже отправлена.": "If the account exists, a password reset link has been sent.",
+    "Если адрес подходит для восстановления, проверьте почту и папку «Спам». Если письмо не пришло, повторите запрос позже.": "If this address is eligible for recovery, check your email and spam folder. If no message arrives, try again later.",
     "Завершить ротацию ключа?": "Complete key rotation?",
     "Загружаем зашифрованную Team-ревизию…": "Loading the encrypted Team revision…",
     "Записей этого типа пока нет.": "There are no records of this type yet.",
@@ -561,6 +562,8 @@
     "Не удалось сохранить удаление.": "Could not save the deletion.",
     "Не удалось удалить ключ доверенного браузера. Vault оставлен открытым.": "Could not remove the trusted browser key. The Vault remains open.",
     "Неверная электронная почта или пароль.": "Incorrect email or password.",
+    "Сохранённое устройство связано с другим аккаунтом. Войдите в отдельном профиле браузера; сохранённые ключи не изменены.": "The saved device belongs to another account. Sign in using a separate browser profile; saved keys have not changed.",
+    "Устройство отозвано или его ключ не совпадает. Войдите с доверенного устройства.": "The device was revoked or its key does not match. Sign in from a trusted device.",
     "НЕОБРАТИМОЕ ДЕЙСТВИЕ": "IRREVERSIBLE ACTION",
     "Новая запись. Заполните поля и сохраните зашифрованную версию.": "New record. Complete the fields and save the encrypted version.",
     "НОВОЕ УСТРОЙСТВО": "NEW DEVICE",
@@ -862,10 +865,14 @@
 
   function mountSwitches() {
     const publicActions = document.querySelector("#public-actions");
+    const publicMenu = publicActions?.querySelector(".site-more-menu");
     const workspaceFooter = document.querySelector("#workspace-sidebar-footer");
     const workspaceLogo = document.querySelector(".workspace-logo");
     if (publicActions && !publicActions.querySelector('[data-locale-switch="public"]')) {
       publicActions.prepend(switchMarkup("public"));
+    }
+    if (publicMenu && !publicMenu.querySelector('[data-locale-switch="public-mobile"]')) {
+      publicMenu.prepend(switchMarkup("public-mobile"));
     }
     if (workspaceFooter && !workspaceFooter.querySelector('[data-locale-switch="workspace"]')) {
       workspaceFooter.prepend(switchMarkup("workspace"));

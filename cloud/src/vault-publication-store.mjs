@@ -2,6 +2,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { VaultMigrationStore } from './vault-migration-store.mjs';
 import { canonicalMigrationJSON, migrationRecipients } from './migration-policy.mjs';
+import { inspectPublication } from './publication-inspection.mjs';
+import { requireAccessMutation } from './team-policy.mjs';
 import { isUUID } from './security.mjs';
 const coherentKeys=['memberships','teams','users','groups','edges','devices','admissions','roots','certificates','directories','revocations','teamPolicy','grants','registry','pointers','rotation'];
 const subjectKeys=['accountID','deviceID','membershipID','membershipEpoch'];
@@ -53,6 +55,20 @@ export class VaultPublicationStore extends VaultMigrationStore {
   }
   async read(input,work,options) {
     return this.transaction(input,async c=>work(c,await this.selected(c,input,options)),{write:false});
+  }
+  inspection(input) {
+    return this.read(input,async(c,selected)=>{
+      requireAccessMutation(selected.snapshot.actorRole);
+      if(!isUUID(input.sessionID)||(await c.query(`SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND device_id=$3 AND revoked_at IS NULL AND expires_at>clock_timestamp()`,[input.sessionID,input.actorUserID,input.actorDeviceID])).rowCount!==1)throw Error('publication_access_denied');
+      const binding={...this.cursorBinding(input,selected.a),inspection:input.inspection,resourceID:input.resourceID??null,subjectUserID:input.subjectUserID??null,principalKind:input.principalKind??null,principalID:input.principalID??null};
+      const limit=input.limit??50;if(!Number.isSafeInteger(limit)||limit<1||limit>50)throw Error('invalid_access_page');
+      const after=input.cursor?this.openCursor(input.cursor,binding):null;
+      const deviceNames=input.inspection==='devices'?new Map((await c.query('SELECT id,name FROM devices WHERE user_id=$1',[input.subjectUserID])).rows.map(d=>[d.id,d.name])):new Map();
+      return inspectPublication(selected,input,(items,map)=>{
+        const remaining=items.sort((a,b)=>a.id.localeCompare(b.id)).filter(i=>!after||i.id>after),slice=remaining.slice(0,limit);
+        return {rows:slice.map(map).filter(Boolean),nextCursor:remaining.length>limit?this.signCursor({...binding,after:slice.at(-1).id,expires:this.clock()+300000}):null};
+      },deviceNames);
+    },{entitled:false});
   }
   header(input) {
     return this.read(input,async(c,{a,subject,row})=>({header:a.projection.header,headerHash:a.header_hash,subject,inventory:row.inventory}),{pinned:false});

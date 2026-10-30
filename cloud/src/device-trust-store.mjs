@@ -452,6 +452,7 @@ export class DeviceTrustStore {
                FROM team_memberships AS membership
                WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
                  AND vault.team_id = membership.team_id AND vault.archived_at IS NULL
+                 AND vault.format_state <> 'V2_ACTIVE'
                RETURNING vault.id, vault.key_generation
              )
              INSERT INTO shared_vault_rotation_tasks
@@ -540,6 +541,7 @@ export class DeviceTrustStore {
              FROM team_memberships AS membership
              WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
                AND vault.team_id = membership.team_id AND vault.archived_at IS NULL
+               AND vault.format_state <> 'V2_ACTIVE'
              RETURNING vault.id, vault.key_generation
            )
            INSERT INTO shared_vault_rotation_tasks

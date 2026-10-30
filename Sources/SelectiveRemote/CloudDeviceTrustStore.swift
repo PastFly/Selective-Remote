@@ -13,7 +13,18 @@ struct SelectiveRemoteDeviceTrustBootstrapBundle: Codable, Equatable {
     let checkpoint: SelectiveRemoteSignedDeviceDirectory
 }
 
-struct SelectiveRemoteDeviceTrustLocalStore: SelectiveRemoteDeviceTrustPinStore {
+protocol SelectiveRemoteDeviceTrustLocalStoring: SelectiveRemoteDeviceTrustPinStore {
+    func root(endpoint: URL, accountID: UUID) throws -> P256.Signing.PrivateKey?
+    func saveRootIfAbsent(_ root: P256.Signing.PrivateKey, endpoint: URL, accountID: UUID) throws -> P256.Signing.PrivateKey
+    func bootstrapBundle(endpoint: URL, accountID: UUID) throws -> SelectiveRemoteDeviceTrustBootstrapBundle?
+    func saveBootstrapBundleIfAbsent(_ bundle: SelectiveRemoteDeviceTrustBootstrapBundle, endpoint: URL, accountID: UUID) throws -> SelectiveRemoteDeviceTrustBootstrapBundle
+    func pendingRekey(endpoint: URL, accountID: UUID, deviceID: UUID) throws -> SelectiveRemoteTeamDeviceIdentity?
+    func savePendingRekeyIfAbsent(_ identity: SelectiveRemoteTeamDeviceIdentity, endpoint: URL, accountID: UUID) throws -> SelectiveRemoteTeamDeviceIdentity
+    func commitPendingRekey(endpoint: URL, accountID: UUID, deviceID: UUID, expectedPublicKey: SelectiveRemoteTeamDevicePublicKey) throws -> SelectiveRemoteTeamDeviceIdentity
+    func savePinIfAbsent(_ pin: SelectiveRemoteDeviceTrustPin, endpoint: URL) throws -> SelectiveRemoteDeviceTrustPin
+}
+
+struct SelectiveRemoteDeviceTrustLocalStore: SelectiveRemoteDeviceTrustLocalStoring {
     private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
 
     func root(endpoint: URL, accountID: UUID) throws -> P256.Signing.PrivateKey? {

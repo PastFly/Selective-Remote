@@ -168,6 +168,10 @@ final class SyncPresentationStore: ObservableObject {
                issue: issue, pending: personal.pendingLocalChanges)
     }
 
+    func recordPersonalPending() {
+        update(.personal, lifecycle: .pending, issue: nil, pending: true)
+    }
+
     func recordPersonalUnknown() {
         update(.personal, lifecycle: .unknown, issue: nil,
                pending: personal.pendingLocalChanges)

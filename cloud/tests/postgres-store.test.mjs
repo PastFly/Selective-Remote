@@ -26,6 +26,34 @@ function recordingStore(respond = () => ({ rows: [] })) {
   };
 }
 
+test("login classifies only a confirmed foreign device owner as device_conflict", async () => {
+  for (const [ownerID, expected] of [["other-user", "device_conflict"], ["current-user", "invalid_device"], [null, "invalid_device"]]) {
+    const fixture = recordingStore(sql => sql.includes("SELECT user_id FROM devices")
+      ? { rows: ownerID === null ? [] : [{ user_id: ownerID }] } : { rows: [] });
+    await assert.rejects(fixture.store.createSession({
+      userID: "current-user", device: { id: "device-1", name: "Synthetic", platform: "web", appVersion: "0.32", publicKey: null },
+      sessionHash: "a".repeat(64), expiresAt: new Date("2030-01-01"),
+    }), error => error.message === expected);
+    assert.equal(fixture.queries.some(({ sql }) => sql.includes("INSERT INTO sessions")), false);
+    assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
+    assert.equal(fixture.released(), true);
+  }
+});
+
+test("login does not turn arbitrary database conflicts into retryable device conflicts", async () => {
+  const failure = Object.assign(new Error("synthetic unique failure"), { code: "23505", constraint: "future_unique" });
+  const fixture = recordingStore(sql => {
+    if (sql.includes("INSERT INTO devices")) throw failure;
+    return { rows: [] };
+  });
+  await assert.rejects(fixture.store.createSession({
+    userID: "current-user", device: { id: "device-1", name: "Synthetic", platform: "web", appVersion: "0.32", publicKey: null },
+    sessionHash: "a".repeat(64), expiresAt: new Date("2030-01-01"),
+  }), error => error === failure);
+  assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
+  assert.equal(fixture.released(), true);
+});
+
 test("invitation-gated registration accepts only active email or link tokens", async () => {
   const target = { type: "email", email: "invited@example.com" };
   const fixture = recordingStore(() => ({ rows: [target] }));

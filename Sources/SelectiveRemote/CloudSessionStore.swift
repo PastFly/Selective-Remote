@@ -25,10 +25,19 @@ struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
         if let token = try envelopeStore.envelope(for: endpoint)?.sessionToken {
             return token
         }
-        guard let legacy = try legacyToken(for: endpoint) else { return nil }
-        try saveToken(legacy, for: endpoint)
-        try? removeLegacyToken(for: endpoint)
-        return legacy
+        var selected: String?
+        var migrated = false
+        try envelopeStore.update(for: endpoint) { envelope in
+            if let current = envelope.sessionToken {
+                selected = current
+            } else if let legacy = try legacyToken(for: endpoint) {
+                envelope.sessionToken = legacy
+                selected = legacy
+                migrated = true
+            }
+        }
+        if migrated { try? removeLegacyToken(for: endpoint) }
+        return selected
     }
 
     func saveToken(_ token: String, for endpoint: URL) throws {
@@ -40,9 +49,9 @@ struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
 
     func removeToken(for endpoint: URL) throws {
         try envelopeStore.update(for: endpoint) {
+            try removeLegacyToken(for: endpoint)
             $0.sessionToken = nil
         }
-        try? removeLegacyToken(for: endpoint)
     }
 
     private func legacyToken(for endpoint: URL) throws -> String? {

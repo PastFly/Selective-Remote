@@ -591,12 +591,11 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(crypto, /static func open\(/u);
   assert.match(settings, /personalVaultAutoSyncConfigured = true/u);
   assert.doesNotMatch(settings, /Background sync is disabled/u);
-  assert.match(sync, /func downloadIfNewer\(/u);
-  assert.match(sync, /remote\.revision > material\.revision/u);
+  assert.match(sync, /func checkForChanges\(/u);
+  assert.match(sync, /enum CheckResult: Sendable/u);
   assert.match(sync, /func acceptDownload\(/u);
   assert.match(sync, /func mergeConcurrent\(/u);
   assert.match(sync, /mergedKeepingNewest/u);
-  assert.match(sync, /if concurrentChange \{ return \}/u);
   assert.match(app, /runPersonalVaultInboundSyncLoop/u);
   assert.match(app, /Task\.sleep\(for: \.seconds\(15\)\)/u);
   assert.match(app, /KeychainService\.savePasswords\(snapshot\.credentials\)/u);
@@ -619,10 +618,8 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(settings, /Синхронизировать сейчас/u);
   assert.match(settings, /personalVaultSyncError/u);
   assert.match(sync, /catch SelectiveRemotePersonalVaultError\.invalidRecoveryPhrase/u);
-  assert.match(sync, /guard exported\.summary\.total > 0/u);
   assert.match(sync, /baseRevision: remote\.revision/u);
-  assert.match(sync, /legacyMigrationRequiresLocalData/u);
-  assert.match(sync, /previous ciphertext in vault_revisions/u);
+  assert.match(sync, /throw EnrollmentError\.existingVaultUnlockFailed/u);
 });
 
 test("macOS registration checks username availability and explains password strength", async () => {

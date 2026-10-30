@@ -231,3 +231,18 @@ test("accepted registration copy is privacy-safe and claims neither account crea
   assert.equal(message, "Проверьте почту. Если для этого адреса требуется подтверждение, мы отправим дальнейшие инструкции.");
   assert.doesNotMatch(message, /аккаунт создан|ссылка отправлена|@/iu);
 });
+
+test("password reset response does not promise email delivery or reveal account existence", async () => {
+  assert.equal(typeof portal.passwordResetAcceptedMessage, "function");
+  const message = portal.passwordResetAcceptedMessage();
+  assert.match(message, /проверьте почту/iu);
+  assert.match(message, /повторите запрос/iu);
+  assert.doesNotMatch(message, /уже отправлен|ссылка отправлена|@/iu);
+  const [app, translations] = await Promise.all([
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/i18n.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /setAccountMessage\(passwordResetAcceptedMessage\(\), "success"\)/u);
+  assert.ok(translations.includes(JSON.stringify(message)), "reset response must have an English translation");
+  assert.ok(translations.includes("If this address is eligible for recovery, check your email and spam folder. If no message arrives, try again later."));
+});

@@ -1,6 +1,6 @@
 # 0.32 — upcoming release copy / черновик заметок
 
-**Status: UPCOMING / НЕ ВЫПУЩЕНО. Current public download: v0.31.0.**
+**Historical editorial draft / исторический черновик.** Текущие RU/EN заметки кандидата: [releases/0.32.0-notes.md](../releases/0.32.0-notes.md). Current RU/EN candidate copy is maintained there and is used by the release workflow. The older preparation-only descriptions below predate PR A–C and must not be published as the current candidate state. Public download remains v0.31.0.
 
 Editorial baseline: merged source `d88c57d34967107614aa11fed47b72b256e1b7e9`, tree `3e4e9d1c86f302b6ab92a25bd0e119dfcfd1237e`. This document prepares copy for Owner review. It does not establish release, deployment, signing, migration or acceptance. Recheck the final candidate and gates before publication.
 
