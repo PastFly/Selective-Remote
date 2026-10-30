@@ -865,10 +865,14 @@
 
   function mountSwitches() {
     const publicActions = document.querySelector("#public-actions");
+    const publicMenu = publicActions?.querySelector(".site-more-menu");
     const workspaceFooter = document.querySelector("#workspace-sidebar-footer");
     const workspaceLogo = document.querySelector(".workspace-logo");
     if (publicActions && !publicActions.querySelector('[data-locale-switch="public"]')) {
       publicActions.prepend(switchMarkup("public"));
+    }
+    if (publicMenu && !publicMenu.querySelector('[data-locale-switch="public-mobile"]')) {
+      publicMenu.prepend(switchMarkup("public-mobile"));
     }
     if (workspaceFooter && !workspaceFooter.querySelector('[data-locale-switch="workspace"]')) {
       workspaceFooter.prepend(switchMarkup("workspace"));

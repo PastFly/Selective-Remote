@@ -894,6 +894,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .status i { flex:0 0 auto; width:6px; height:6px; border-radius:50%; background:#f1bb61; box-shadow:0 0 10px currentColor; }.status.ok i { background:var(--accent2); }.status.error i { background:#ff8f7a; }
 .site-more { position:relative; }.site-more summary { display:grid; place-items:center; min-width:42px; min-height:42px; list-style:none; border:1px solid var(--line); border-radius:11px; color:var(--ink); background:transparent; font-weight:850; }.site-more summary::-webkit-details-marker { display:none; }
 .site-more-menu { position:absolute; z-index:30; right:0; top:49px; display:grid; gap:12px; min-width:210px; padding:14px; border:1px solid var(--line); border-radius:14px; background:#091310; box-shadow:0 22px 60px #000a; }.site-more-menu a { color:var(--ink); font-size:13px; font-weight:700; text-decoration:none; }.site-more-menu .theme-control { display:grid; align-items:start; }
+.brand-actions .site-more-menu > [data-locale-switch="public-mobile"] { display:none; }
 
 .hero-ambient { z-index:0; overflow:visible; clip-path:inset(0); }
 .hero-ribbon { z-index:0; will-change:transform; }
@@ -995,6 +996,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 }
 @media (max-width:560px) {
   .shell { width:min(100% - 16px,1180px); padding-top:10px; }.brand { padding-bottom:14px; }.brand .mark { width:40px; height:40px; }.brand h1 { font-size:18px; }.brand .eyebrow { font-size:8px; }.site-nav { gap:18px; }.site-nav a { font-size:11px; }.brand-actions .locale-switch { display:none; }.brand-actions>button[data-open-auth="registration"] { font-size:12px; }.site-more summary { min-width:40px; min-height:40px; }
+  .brand-actions .site-more-menu > [data-locale-switch="public-mobile"] { display:inline-flex; justify-self:start; }
+  .brand-actions .site-more-menu > [data-locale-switch="public-mobile"] button { min-width:44px; min-height:44px; }
   .hero { padding:34px 0; }.hero-ambient { overflow:hidden; }.hero-ribbon-one { right:-390px; top:210px; }.hero-ribbon-two { right:-320px; top:430px; }.hero-glow { right:-280px; top:28%; }
   .workspace-header>div:first-child { display:none; }.workspace-global-actions { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; }.workspace-global-actions #workspace-command-open { margin:0; font-size:0; }.workspace-global-actions #workspace-command-open::after { content:"⌘K"; font-size:12px; }.workspace-global-actions #workspace-create { white-space:nowrap; }
   .workspace-team-metrics { width:100%; }.workspace-team-metrics button { min-width:0; }
