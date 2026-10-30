@@ -18,6 +18,7 @@ function fail(code){throw Error(code);}
 
 export function validateControllerSettings(s){
   if(!s||s.version!==1||!/^[a-f0-9]{40}$/.test(s.sourceSHA)||!/^sha256:[a-f0-9]{64}$/.test(s.imageDigest)
+    ||(Object.hasOwn(s,'registrationMode')&&s.registrationMode!=='production-v1')
     ||!validHash(s.controllerDigest)||!validHash(s.envDigest)||s.cloudDirectory!=='/opt/selective-remote/cloud'
     ||s.envPath!==s.cloudDirectory+'/.env'||s.network!=='cloud_private'
     ||s.fencePath!==controllerState+'/publication/journal'||!isAbsolute(s.backupDirectory??'')
@@ -56,7 +57,7 @@ function environmentMap(values){
   }
   return result;
 }
-function effectiveEnvironment(cloud,{imageEnvironment,dockerEnvironment}={}){
+function effectiveEnvironment(cloud,{imageEnvironment,dockerEnvironment}={},settings={}){
   const base=environmentMap(imageEnvironment),expected=environmentMap(dockerEnvironment),actual={...base};
   if(!cloud.environment||Array.isArray(cloud.environment)||typeof cloud.environment!=='object')fail('deployment_environment_mismatch');
   for(const [key,value] of Object.entries(cloud.environment)){
@@ -66,7 +67,13 @@ function effectiveEnvironment(cloud,{imageEnvironment,dockerEnvironment}={}){
   const overrides={PUBLICATION_FENCE_PATH:'/publication-fence/journal',ALLOW_REGISTRATION:'false',UV_THREADPOOL_SIZE:'1',NODE_OPTIONS:'--max-old-space-size=96'};
   for(const key of new Set([...Object.keys(expected),...Object.keys(actual)]))
     if(actual[key]!==expected[key]&&!(Object.hasOwn(overrides,key)&&actual[key]===overrides[key]))fail('deployment_environment_mismatch');
-  if(actual.ALLOW_REGISTRATION!=='false'){
+  if(Object.hasOwn(settings,'registrationMode')){
+    if(settings.registrationMode!=='production-v1'||actual.NODE_ENV!=='production'||actual.PUBLICATION_ENVIRONMENT!=='production'
+      ||actual.PUBLICATION_READER_ENABLED!=='false'||actual.WHOLE_PUBLICATION_ENABLED!=='false'
+      ||(actual.PUBLICATION_ALLOWED_VAULT_IDS??'')!==''||Object.hasOwn(actual,'STAGING_REGISTRATION_EMAIL_ALLOWLIST')
+      ||!['true','false'].includes(actual.ALLOW_REGISTRATION)
+      ||(actual.ALLOW_REGISTRATION==='true'&&expected.ALLOW_REGISTRATION!=='true'))fail('deployment_registration_scope');
+  } else if(actual.ALLOW_REGISTRATION!=='false'){
     if(actual.ALLOW_REGISTRATION!=='true'||expected.ALLOW_REGISTRATION!=='true')fail('deployment_registration_scope');
     try{if(!stagingRegistrationEmails(actual.STAGING_REGISTRATION_EMAIL_ALLOWLIST,actual.PUBLICATION_ENVIRONMENT))fail('deployment_registration_scope');}
     catch{fail('deployment_registration_scope');}
@@ -113,7 +120,7 @@ export function validateControllerCompose(model,settings,environment){
   if(privateNetwork?.name!==settings.network||Object.values(services).some(s=>!s.networks||Object.keys(s.networks).join(',')!=='private'))
     fail('deployment_network_mismatch');
   if(cloud.privileged||cloud.network_mode||cloud.pid||cloud.devices?.length||cloud.volumes_from?.length)fail('deployment_compose_mismatch');
-  return effectiveEnvironment(cloud,environment);
+  return effectiveEnvironment(cloud,environment,settings);
 }
 
 export async function readControllerComposeEnvironment(docker,compose,settings,environment){

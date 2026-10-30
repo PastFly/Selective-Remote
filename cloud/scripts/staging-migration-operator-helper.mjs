@@ -13,6 +13,12 @@ const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const validIdentity=value=>object(value)&&/^[a-f0-9]{40}$/.test(value.sourceSHA)&&/^sha256:[a-f0-9]{64}$/.test(value.imageDigest)&&/^[a-f0-9]{64}$/.test(value.controllerDigest);
 const sameIdentity=(a,b)=>validIdentity(a)&&validIdentity(b)&&['sourceSHA','imageDigest','controllerDigest'].every(key=>a[key]===b[key]);
+export function assertOperatorMode(settings,args){
+ if(!object(settings)||!Array.isArray(args))fail('environment');
+ if(Object.hasOwn(settings,'registrationMode')){
+  if(settings.registrationMode!=='production-v1'||args.length!==1||args[0]!=='--disable-public-registration')fail('environment');
+ }else if(args.includes('--disable-public-registration'))fail('environment');
+}
 // Command arguments are the only fault source; never accept a point in request JSON.
 export function operatorActivationFault(args,request){
  if(args.length===0)return undefined;
@@ -65,6 +71,19 @@ export function scopedEnvironment(bytes,emails){
  for(const entry of entries){const pos=entry.indexOf('=');if(pos<1||/[\r\0]/.test(entry)||Object.hasOwn(env,entry.slice(0,pos)))fail('environment');env[entry.slice(0,pos)]=entry.slice(pos+1);}
  if(env.PUBLICATION_ENVIRONMENT!=='staging'||['ALLOW_REGISTRATION','PUBLICATION_READER_ENABLED','WHOLE_PUBLICATION_ENABLED'].some(k=>env[k]!=='false')||Object.hasOwn(env,'STAGING_REGISTRATION_EMAIL_ALLOWLIST'))fail('environment');
  env.ALLOW_REGISTRATION='true';env.STAGING_REGISTRATION_EMAIL_ALLOWLIST=emails.join(',');return Object.entries(env).map(([k,v])=>k+'='+v).join('\n')+'\n';
+}
+export function disablePublicRegistration(bytes,settings,currentOverride){
+ if(typeof bytes!=='string'||!bytes.endsWith('\n')||typeof currentOverride!=='string'||settings?.registrationMode!=='production-v1'||!Array.isArray(settings.composeFiles))fail('environment');
+ const env={};for(const line of bytes.slice(0,-1).split('\n')){const i=line.indexOf('=');if(i<1||/[\r\0]/.test(line)||Object.hasOwn(env,line.slice(0,i)))fail('environment');env[line.slice(0,i)]=line.slice(i+1);}
+ if(env.ALLOW_REGISTRATION!=='true'||env.NODE_ENV!=='production'||env.PUBLICATION_ENVIRONMENT!=='production'
+  ||env.PUBLICATION_READER_ENABLED!=='false'||env.WHOLE_PUBLICATION_ENABLED!=='false'
+  ||(env.PUBLICATION_ALLOWED_VAULT_IDS??'')!==''||Object.hasOwn(env,'STAGING_REGISTRATION_EMAIL_ALLOWLIST'))fail('environment');
+ const path=operator+'/registration-compose.json',files=settings.composeFiles.filter(f=>f.path===path);
+ const expected=JSON.stringify({services:{cloud:{environment:{ALLOW_REGISTRATION:'true'}}}});
+ if(files.length!==1||currentOverride!==expected||files[0].sha256!==digest(currentOverride))fail('environment');
+ const content=JSON.stringify({services:{cloud:{environment:{ALLOW_REGISTRATION:'false'}}}});
+ const nextEnv=bytes.replace(/(^|\n)ALLOW_REGISTRATION=true\n/,'$1ALLOW_REGISTRATION=false\n');
+ return {nextEnv,pendingCompose:{path,content},nextSettings:{...settings,composeFiles:settings.composeFiles.map(f=>f.path===path?{...f,sha256:digest(content)}:f)}};
 }
 export function validateEnrollment(scope,runID,baseline,row,emails){
  canonicalEmails(emails);
@@ -127,6 +146,13 @@ async function provision(args,request,settings,identity){
   const image=JSON.parse((await execute('/usr/bin/docker',['image','inspect','--format','{{json .}}',identity.imageDigest],{encoding:'utf8'})).stdout);
   const source=(await execute('/usr/bin/git',['-C','/opt/selective-remote','rev-parse','HEAD'],{encoding:'utf8'})).stdout.trim();
   if(source!==identity.sourceSHA||image.Id!==identity.imageDigest||image.Config?.Labels?.['org.opencontainers.image.revision']!==source)fail('identity');
+  if(args[0]==='--disable-public-registration'){
+   if(args.length!==1||!object(request)||Object.keys(request).length)fail('request');
+   const before=(await protectedBytes(settings.envPath,false)).toString(),override=(await protectedBytes(operator+'/registration-compose.json')).toString();
+   const {nextEnv,pendingCompose,nextSettings}=disablePublicRegistration(before,settings,override);
+   await applyReviewedConfiguration({settings,nextSettings,nextEnv,pendingCompose});
+   process.stdout.write('{"registrationDisabled":true}\n');return;
+  }
   const evidence=await backupEvidence(settings,identity),path=operator+'/operator-context.json';
   if(['--enable-scoped','--enable-publication','--disable-registration'].includes(args[0])){
    if(args.length!==1)fail('request');
@@ -176,12 +202,13 @@ async function main(){
  if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==root)fail('owner');
  const args=process.argv.slice(2);
  const activationFault=args[0]==='--activation-fault'?operatorActivationFault(args):undefined;
- if(args.length&&activationFault===undefined&&!['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration'].includes(args[0]))fail('arguments');
+ if(args.length&&activationFault===undefined&&!['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration','--disable-public-registration'].includes(args[0]))fail('arguments');
  const settings=JSON.parse(await protectedBytes(root+'/settings.json')),identity=JSON.parse(await protectedBytes(operator+'/controller-identity.json'));
  if(!sameIdentity(settings,identity)||digest(await readFile(root+'/bundle.sha256'))!==identity.controllerDigest)fail('identity');
+ assertOperatorMode(settings,args);
  const request=await input();
  if(activationFault!==undefined)operatorActivationFault(args,request);
- if(['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration'].includes(args[0]))return provision(args,request,settings,identity);
+ if(['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration','--disable-public-registration'].includes(args[0]))return provision(args,request,settings,identity);
  const contextPath=operator+'/operator-context.json',context=JSON.parse(await protectedBytes(contextPath));
  validateContext(context,identity);
  const scoped=validateOperatorRequest(context,request,identity);

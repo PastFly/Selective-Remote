@@ -203,6 +203,44 @@ test('effective environment preserves image defaults, binds secrets and allows o
  assert.throws(()=>validateControllerCompose(broaden,s,environmentEvidence),/deployment_environment_mismatch/);
 });
 
+test('explicit protected production V1 registration mode requires V2 off and supports emergency closure',()=>{
+ const s={...settings(),registrationMode:'production-v1'},model=compose(s);
+ const values={ALLOW_REGISTRATION:'true',PUBLICATION_ENVIRONMENT:'production',PUBLICATION_READER_ENABLED:'false',WHOLE_PUBLICATION_ENABLED:'false'};
+ Object.assign(model.services.cloud.environment,values);
+ const evidence={...environmentEvidence,dockerEnvironment:[...dockerEnvironment,...Object.entries(values).map(([k,v])=>k+'='+v)]};
+ assert.equal(validateControllerSettings(s),s);
+ assert.equal(validateControllerCompose(model,s,evidence).ALLOW_REGISTRATION,'true');
+ const closed=structuredClone(model);closed.services.cloud.environment.ALLOW_REGISTRATION='false';
+ assert.equal(validateControllerCompose(closed,s,evidence).ALLOW_REGISTRATION,'false');
+ // The prior staging controller must still reject this exact broad registration.
+ assert.throws(()=>validateControllerCompose(model,settings(),evidence),/deployment_registration_scope/);
+});
+
+test('production V1 mode fails closed for V2, test allowlist, ambiguous mode or environment drift',()=>{
+ for(const mode of ['production','public','Production-v1',null])assert.throws(()=>validateControllerSettings({...settings(),registrationMode:mode}),/invalid_deployment_settings/);
+ const s={...settings(),registrationMode:'production-v1'};
+ const base={ALLOW_REGISTRATION:'true',PUBLICATION_ENVIRONMENT:'production',PUBLICATION_READER_ENABLED:'false',WHOLE_PUBLICATION_ENABLED:'false'};
+ for(const changed of [
+  {PUBLICATION_ENVIRONMENT:'staging'}, {NODE_ENV:'development'},
+  {PUBLICATION_READER_ENABLED:'true'}, {WHOLE_PUBLICATION_ENABLED:'true'},
+  {PUBLICATION_ALLOWED_VAULT_IDS:randomUUID()}, {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test,two@example.test'},
+  {ALLOW_REGISTRATION:'TRUE'},
+ ]){
+  const values={...base,...changed},m=compose(s);Object.assign(m.services.cloud.environment,values);
+  const inherited=imageEnvironment.filter(v=>!Object.hasOwn(changed,v.split('=')[0]));
+  const evidence={...environmentEvidence,imageEnvironment:inherited,dockerEnvironment:[...inherited,...dockerEnvironment.filter(v=>!v.startsWith('NODE_ENV=')&&!v.startsWith('PATH=')),...Object.entries(values).map(([k,v])=>k+'='+v)]};
+  assert.throws(()=>validateControllerCompose(m,s,evidence),/deployment_registration_scope/);
+ }
+ const m=compose(s);Object.assign(m.services.cloud.environment,{...base,ALLOW_REGISTRATION:'false',PUBLICATION_READER_ENABLED:'true'});
+ const evidence={...environmentEvidence,dockerEnvironment:[...dockerEnvironment,...Object.entries({...base,PUBLICATION_READER_ENABLED:'true'}).map(([k,v])=>k+'='+v)]};
+ assert.throws(()=>validateControllerCompose(m,s,evidence),/deployment_registration_scope/);
+ for(const missing of ['PUBLICATION_ENVIRONMENT','PUBLICATION_READER_ENABLED','WHOLE_PUBLICATION_ENABLED']){
+  const values={...base};delete values[missing];const model=compose(s);Object.assign(model.services.cloud.environment,values);
+  const pinned={...environmentEvidence,dockerEnvironment:[...dockerEnvironment,...Object.entries(values).map(([k,v])=>k+'='+v)]};
+  assert.throws(()=>validateControllerCompose(model,s,pinned),/deployment_registration_scope/);
+ }
+});
+
 test('additional env-file dependencies are rejected even when their present values match',()=>{
  const s=settings(),model=compose(s);
  for(const envFiles of [undefined,[],[{path:s.envPath,required:true},{path:'/opt/unpinned.env',required:true}], [{path:s.envPath,format:'raw'}]])
