@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
@@ -65,4 +66,17 @@ test("dynamic authentication, synchronization, and Team errors have English mess
     "Editor",
     "Viewer",
   ]) assert.match(i18n, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+});
+
+
+test("partial and unconfirmed Team device admissions are understandable in English", () => {
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(i18n, browser);
+  const t = browser.window.SelectiveRemoteI18n.t;
+  assert.equal(t("Не удалось подтвердить результат допуска. Обновите список устройств и проверьте доступ."),
+    "Could not confirm the admission result. Refresh the device list and check access.");
+  assert.equal(t("Допущено устройств: 2. Проверьте синхронизацию и выдачу ключей."),
+    "Devices approved: 2. Check synchronization and key delivery.");
 });

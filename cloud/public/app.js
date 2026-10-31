@@ -1588,6 +1588,12 @@ export function teamRoleLabel(role, locale = activeInterfaceLocale()) {
   return labels[activeInterfaceLocale(locale)][role] ?? String(role ?? "");
 }
 
+export function teamDeviceAdmissionErrorMessage(admitted) {
+  return admitted > 0
+    ? `Допущено устройств: ${admitted}. Проверьте синхронизацию и выдачу ключей.`
+    : "Не удалось подтвердить результат допуска. Обновите список устройств и проверьте доступ.";
+}
+
 export function teamArchiveErrorMessage(error, remotelyArchived = false) {
   if (remotelyArchived) return "Team архивирована, но локальную очистку или обновление списка не удалось завершить.";
   const code = String(error?.message ?? "");
@@ -2585,13 +2591,13 @@ export function initializeTeamWorkspace({
         const activeTeam = selectedTeam;
         if (!activeTeam) return;
         admitDevices.disabled = true;
+        let admitted = 0;
         try {
           const memberDevices = await client.listTeamMembershipDevices({
             teamID: activeTeam.id,
             membershipID: member.id,
           });
           const pending = memberDevices.filter((device) => !device.accountKeyApproved && !device.admitted);
-          let admitted = 0;
           let wrappersGranted = 0;
           for (const device of pending) {
             const fingerprint = await teamDevicePublicKeyFingerprint(device.publicKey);
@@ -2626,7 +2632,7 @@ export function initializeTeamWorkspace({
             setText(message, "Допуск устройств отменён; ключи и wrappers не изменены.");
           }
         } catch {
-          setText(message, "Устройства не допущены: проверьте полномочия, отпечаток и доступность Team Vault key.");
+          setText(message, teamDeviceAdmissionErrorMessage(admitted));
         } finally {
           admitDevices.disabled = !editableByActor || self;
         }

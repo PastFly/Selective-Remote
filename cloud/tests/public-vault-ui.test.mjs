@@ -52,6 +52,18 @@ test("Team role labels follow the active RU and EN locale", () => {
   );
 });
 
+test("Team admission failures distinguish committed devices from an unconfirmed result", async () => {
+  const { teamDeviceAdmissionErrorMessage } = await import("../public/app.js");
+  assert.equal(typeof teamDeviceAdmissionErrorMessage, "function");
+  const committed = teamDeviceAdmissionErrorMessage(1);
+  assert.match(committed, /Допущено устройств: 1/u);
+  assert.match(committed, /синхронизац|ключ/u);
+  assert.doesNotMatch(committed, /не допущены/u);
+  const unknown = teamDeviceAdmissionErrorMessage(0);
+  assert.match(unknown, /не удалось подтвердить/iu);
+  assert.doesNotMatch(unknown, /не допущены/u);
+});
+
 test("Team archive failures provide specific actionable feedback", () => {
   assert.equal(
     teamArchiveErrorMessage(new Error("invalid_credentials")),
