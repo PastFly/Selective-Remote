@@ -52,6 +52,17 @@ test("Team role labels follow the active RU and EN locale", () => {
   );
 });
 
+test("Team sync reports an up-to-date Vault without requiring conflict details", async () => {
+  const { teamSyncOutcomeMessage } = await import("../public/app.js");
+  assert.equal(typeof teamSyncOutcomeMessage, "function");
+  assert.equal(teamSyncOutcomeMessage({ status: "up_to_date", revision: 5 }),
+    "Shared Vault синхронизирован · ревизия 5.");
+  assert.equal(teamSyncOutcomeMessage({ status: "downloaded", revision: 6 }),
+    "Team-ревизия 6 загружена и объединена локально.");
+  assert.equal(teamSyncOutcomeMessage({ status: "conflict", conflicts: [{}, {}] }),
+    "Обнаружено конфликтов: 2. Выберите версии явно.");
+});
+
 test("Team admission failures distinguish committed devices from an unconfirmed result", async () => {
   const { teamDeviceAdmissionErrorMessage } = await import("../public/app.js");
   assert.equal(typeof teamDeviceAdmissionErrorMessage, "function");

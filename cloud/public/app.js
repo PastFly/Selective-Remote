@@ -1588,6 +1588,20 @@ export function teamRoleLabel(role, locale = activeInterfaceLocale()) {
   return labels[activeInterfaceLocale(locale)][role] ?? String(role ?? "");
 }
 
+export function teamSyncOutcomeMessage(result) {
+  const messages = {
+    initialized: `Shared Vault инициализирован · ревизия ${result.revision}.`,
+    uploaded: `Зашифрованная Team-ревизия ${result.revision} загружена.`,
+    uploaded_with_new_local_changes: `Ревизия ${result.revision} загружена; новые локальные изменения останутся для следующего цикла.`,
+    downloaded: `Team-ревизия ${result.revision} загружена и объединена локально.`,
+    up_to_date: `Shared Vault синхронизирован · ревизия ${result.revision}.`,
+    remote_changed: `Team Vault изменился до ревизии ${result.remoteRevision}. Следующий цикл повторит синхронизацию.`,
+    conflict: result.status === "conflict"
+      ? `Обнаружено конфликтов: ${result.conflicts.length}. Выберите версии явно.` : null,
+  };
+  return messages[result.status] ?? "Синхронизация завершена.";
+}
+
 export function teamDeviceAdmissionErrorMessage(admitted) {
   return admitted > 0
     ? `Допущено устройств: ${admitted}. Проверьте синхронизацию и выдачу ключей.`
@@ -3050,16 +3064,7 @@ export function initializeTeamWorkspace({
       && !wrapperProvisioningFailed && (wrapperProvisioning?.granted ?? 0) === 0) {
       return;
     }
-    const messages = {
-      initialized: `Shared Vault инициализирован · ревизия ${result.revision}.`,
-      uploaded: `Зашифрованная Team-ревизия ${result.revision} загружена.`,
-      uploaded_with_new_local_changes: `Ревизия ${result.revision} загружена; новые локальные изменения останутся для следующего цикла.`,
-      downloaded: `Team-ревизия ${result.revision} загружена и объединена локально.`,
-      up_to_date: `Shared Vault синхронизирован · ревизия ${result.revision}.`,
-      remote_changed: `Team Vault изменился до ревизии ${result.remoteRevision}. Следующий цикл повторит синхронизацию.`,
-      conflict: `Обнаружено конфликтов: ${result.conflicts.length}. Выберите версии явно.`,
-    };
-    let status = messages[result.status] ?? "Синхронизация завершена.";
+    let status = teamSyncOutcomeMessage(result);
     if (wrapperProvisioningFailed) {
       status += " Автоматическая выдача wrappers не подтверждена и будет безопасно повторена.";
     } else if ((wrapperProvisioning?.granted ?? 0) > 0) {
