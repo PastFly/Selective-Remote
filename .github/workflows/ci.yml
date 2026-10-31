@@ -94,7 +94,7 @@ jobs:
 
   test:
     name: Swift tests on macOS
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
@@ -148,7 +148,7 @@ jobs:
 
   release-build:
     name: Release build on macOS
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
