@@ -1202,7 +1202,8 @@ struct ContentView: View {
                             identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
                             navigationScope: "personal-\(surface.rawValue)",
                             previewTitle: item.friendlyName,
-                            select: { openProfile(item.id) }
+                            select: { openProfile(item.id) },
+                            activate: { openProfile(item.id); model.connect() }
                         ) {
                             ProfileRow(
                                 profile: item,
@@ -1286,7 +1287,8 @@ struct ContentView: View {
                                         identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
                                         navigationScope: "personal-\(surface.rawValue)",
                                         previewTitle: item.friendlyName,
-                                        select: { openProfile(item.id) }
+                                        select: { openProfile(item.id) },
+                                        activate: { openProfile(item.id); model.connect() }
                                     ) {
                                         ProfileGridCard(
                                             profile: item,
@@ -1544,7 +1546,8 @@ struct ContentView: View {
                                             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
                                             navigationScope: "team-sidebar",
                                             previewTitle: host.profile.friendlyName,
-                                            select: { openTeamHostCard(host) }
+                                            select: { openTeamHostCard(host) },
+                                            activate: { requestTeamHostAction(.connect, for: host) }
                                         ) {
                                             teamHostSidebarGridCard(host)
                                         }
@@ -1600,7 +1603,8 @@ struct ContentView: View {
             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
             navigationScope: "team-sidebar",
             previewTitle: host.profile.friendlyName,
-            select: { openTeamHostCard(host) }
+            select: { openTeamHostCard(host) },
+            activate: { requestTeamHostAction(.connect, for: host) }
         ) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {

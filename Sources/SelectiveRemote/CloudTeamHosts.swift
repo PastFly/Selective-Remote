@@ -1051,6 +1051,7 @@ struct SelectiveRemoteTeamVaultFilterControl<Vault: SelectiveRemoteTeamVaultFilt
 }
 
 enum SelectiveRemoteTeamHostRequestedAction: Equatable {
+    case connect
     case create
     case createFolder
     case duplicate
@@ -1841,7 +1842,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                     previewTitle: host.profile.friendlyName,
                                     select: {
                                         if selectedHostID != host.id { selectedHostID = host.id }
-                                    }
+                                    },
+                                    activate: { selectedHostID = host.id; resetConnectionFields(); connect(host) }
                                 ) {
                                     hostRow(host)
                                 }
@@ -1919,7 +1921,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                             previewTitle: host.profile.friendlyName,
                                             select: {
                                                 if selectedHostID != host.id { selectedHostID = host.id }
-                                            }
+                                            },
+                                            activate: { selectedHostID = host.id; resetConnectionFields(); connect(host) }
                                         ) {
                                             teamHostGridCard(host)
                                         }
@@ -2064,6 +2067,9 @@ struct SelectiveRemoteTeamHostsView: View {
         selectedHostID = host.id
         hostDetailVisible = true
         switch request.action {
+        case .connect:
+            resetConnectionFields()
+            connect(host)
         case .create:
             if let context = context(for: host),
                SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
