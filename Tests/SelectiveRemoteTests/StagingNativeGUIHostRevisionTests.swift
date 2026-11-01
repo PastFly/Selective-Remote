@@ -6,6 +6,25 @@ import Testing
 
 @Suite("native host review regressions")
 struct StagingNativeGUIHostRevisionTests {
+    @Test("screenshot output rejects existing files and symbolic links")
+    func screenshotOutputIsExclusive() throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appending(path: "sr-screenshot-test-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let victim = root.appending(path: "victim")
+        let link = root.appending(path: "capture.png")
+        let original = Data("synthetic original".utf8), replacement = Data("synthetic image".utf8)
+        try original.write(to: victim)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: victim)
+        #expect(throws: StagingRealProbeError.permissions) { try StagingNativeProtectedFile.writeNew(replacement, to: link) }
+        #expect(try Data(contentsOf: victim) == original)
+        let clean = root.appending(path: "new.png")
+        try StagingNativeProtectedFile.writeNew(replacement, to: clean)
+        #expect(throws: StagingRealProbeError.permissions) { try StagingNativeProtectedFile.writeNew(original, to: clean) }
+        #expect(try Data(contentsOf: clean) == replacement)
+    }
     @Test("approved ordinary email accepted; outside runtime allowlist denied")
     func approvedEmail() throws {
         let fixture = try NativeRevisionFixture(); defer { fixture.remove() }

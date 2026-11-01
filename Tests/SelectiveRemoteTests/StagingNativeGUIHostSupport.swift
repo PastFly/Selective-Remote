@@ -311,6 +311,24 @@ struct StagingNativeLoadedManifest {
 }
 
 enum StagingNativeProtectedFile {
+    static func writeNew(_ data: Data, to url: URL) throws {
+        let directory = url.deletingLastPathComponent().standardizedFileURL
+        guard url.isFileURL, url.standardizedFileURL.path == url.path,
+              !["", ".", ".."].contains(url.lastPathComponent) else { throw StagingRealProbeError.permissions }
+        let directoryFD = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryFD >= 0 else { throw StagingRealProbeError.permissions }
+        defer { close(directoryFD) }
+        var info = stat()
+        guard fstat(directoryFD, &info) == 0, info.st_uid == getuid(),
+              info.st_mode & S_IFMT == S_IFDIR, info.st_mode & 0o777 == 0o700
+        else { throw StagingRealProbeError.permissions }
+        let fd = openat(directoryFD, url.lastPathComponent, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw StagingRealProbeError.permissions }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do { try handle.write(contentsOf: data); try handle.synchronize(); try handle.close() }
+        catch { try? handle.close(); throw StagingRealProbeError.permissions }
+    }
+
     static func read(_ path: String, limit: Int = 65_536) throws -> Data {
         let url = URL(fileURLWithPath: path)
         guard path.hasPrefix("/"), url.standardizedFileURL.path == path,

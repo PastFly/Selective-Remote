@@ -11,6 +11,11 @@ struct NotificationBellButtonRenderedTests {
     @available(macOS, deprecated: 14)
     func focusedBell() throws {
         guard let output = ProcessInfo.processInfo.environment["SR_CAPTURE_BELL_FOCUS"] else { return }
+        let directory = URL(fileURLWithPath: output, isDirectory: true).standardizedFileURL
+            .appending(path: "bell-capture-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        print("BELL_FOCUS_CAPTURE_DIRECTORY \(directory.path)")
         let app = NSApplication.shared
         let previousPolicy = app.activationPolicy()
         app.setActivationPolicy(.regular)
@@ -46,8 +51,8 @@ struct NotificationBellButtonRenderedTests {
                 ))
                 let bitmap = NSBitmapImageRep(cgImage: captured)
                 let name = "bell-\(focused ? "focused" : "unfocused")-\(dark ? "graphite" : "light").png"
-                try #require(bitmap.representation(using: .png, properties: [:]))
-                    .write(to: URL(fileURLWithPath: output).appending(path: name))
+                let image = try #require(bitmap.representation(using: .png, properties: [:]))
+                try StagingNativeProtectedFile.writeNew(image, to: directory.appending(path: name))
                 window.orderOut(nil)
             }
         }

@@ -50,7 +50,15 @@ final class StagingNativeGUIHostTests: XCTestCase {
         if let pixels = CGWindowListCreateImage(.null, .optionIncludingWindow,
             CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]) {
             let bitmap = NSBitmapImageRep(cgImage: pixels)
-            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/native-gui-local-smoke.png"))
+            if let image = bitmap.representation(using: .png, properties: [:]) {
+                let directory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+                    .appending(path: "sr-native-gui-smoke-\(UUID())", directoryHint: .isDirectory)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                        attributes: [.posixPermissions: 0o700])
+                let output = directory.appending(path: "native-gui-local-smoke.png")
+                try StagingNativeProtectedFile.writeNew(image, to: output)
+                print("NATIVE_GUI_LOCAL_SMOKE_IMAGE \(output.path)")
+            }
         }
         window.orderOut(nil)
         XCTAssertTrue(eventLoop)
