@@ -176,7 +176,7 @@ test("authenticated account deletion clears the in-memory session", async () => 
     calls.push([path, options]);
     if (path === "/v1/auth/login") return new Response(JSON.stringify({
       token: "t".repeat(43), user: { id: deviceID, email: "owner@example.com", username: "owner", displayName: "Owner" }, deviceID,
-    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }), { status: 200, headers: { "Content-Type": "application/json", "X-Selective-Session-Binding": deviceID } });
     if (path === "/v1/me" && options.method === "DELETE") {
       return new Response(JSON.stringify({ deleted: true }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -195,7 +195,7 @@ test("authenticated account settings check and update username and password", as
     calls.push([path, options]);
     if (path === "/v1/auth/login") return new Response(JSON.stringify({
       token: "t".repeat(43), user: { id: deviceID, email: "owner@example.com", username: "owner", displayName: "Owner" }, deviceID,
-    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }), { status: 200, headers: { "Content-Type": "application/json", "X-Selective-Session-Binding": deviceID } });
     if (path.startsWith("/v1/account/username-availability")) return new Response(JSON.stringify({ username: "new.owner", available: true }), { status: 200 });
     if (path === "/v1/account/username") return new Response(JSON.stringify({ username: "new.owner" }), { status: 200 });
     if (path === "/v1/account/password") return new Response(JSON.stringify({ changed: true }), { status: 200 });

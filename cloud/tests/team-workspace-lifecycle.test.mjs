@@ -183,7 +183,8 @@ test("a first 401 from background Team refresh closes the actual browser session
   const deviceID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const accountID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   const response = (status, value) => new Response(JSON.stringify(value), {
-    status, headers: { "Content-Type": "application/json" },
+    status, headers: { "Content-Type": "application/json",
+      ...(status === 200 && value.token && value.user && value.deviceID ? { "X-Selective-Session-Binding": deviceID } : {}) },
   });
   const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path) => (
     path === "/v1/auth/login"

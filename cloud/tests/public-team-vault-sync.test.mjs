@@ -1086,7 +1086,8 @@ for (const status of [403, 404, 503]) {
     await controller.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
     const before = structuredClone(repository.inspect());
     const client = createAuthenticatedVaultClient({ fetchValue: async path => path === "/v1/auth/login"
-      ? Response.json({ token: "a".repeat(43), user: { id: membershipA, email: "a@example.invalid" }, deviceID: deviceA })
+      ? Response.json({ token: "a".repeat(43), user: { id: membershipA, email: "a@example.invalid" }, deviceID: deviceA },
+        { headers: { "X-Selective-Session-Binding": deviceA } })
       : Response.json({ error: "team_not_found" }, { status }) });
     await client.login({ email: "a@example.invalid", password: "synthetic password", deviceID: deviceA });
     await assert.rejects(synchronizeTeamVault({ client, controller, role: "owner" }),

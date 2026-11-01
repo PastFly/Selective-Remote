@@ -40,7 +40,7 @@ test("a retired session clears its Personal conflict data before the next login"
   const fetchValue = async (path, options = {}) => {
     if (path === "/v1/me") return Response.json({ error: "unauthorized" }, { status: 401 });
     if (path === "/v1/auth/login") return Response.json({ token: "a".repeat(43),
-      user: { id: accountA, email: "a@example.invalid", username: "a" }, deviceID: device });
+      user: { id: accountA, email: "a@example.invalid", username: "a" }, deviceID: device }, { headers: { "X-Selective-Session-Binding": device } });
     if (path === "/v1/vault" && ++reads === 1) return Response.json({
       id: "99999999-9999-4999-8999-999999999999", revision: 2, envelopeVersion: 1,
       wrappedKey: {}, ciphertext: "aaa", nonce: "aaa", authTag: "aaa", contentHash: "aaa", updatedAt: null });
@@ -87,7 +87,7 @@ test("an obsolete manual sync cannot sign out the newer session presentation", a
     if (path === "/v1/auth/login") {
       const email = JSON.parse(options.body).email, isA = email.startsWith("a");
       return Response.json({ token: (isA ? "a" : "b").repeat(43),
-        user: { id: isA ? accountA : accountB, email, username: isA ? "a" : "b" }, deviceID: device });
+        user: { id: isA ? accountA : accountB, email, username: isA ? "a" : "b" }, deviceID: device }, { headers: { "X-Selective-Session-Binding": device } });
     }
     if (path === "/v1/vault") {
       entered(); await held;
@@ -164,7 +164,7 @@ test("an obsolete reauthentication cannot mark the newer session failed or retai
       const email = JSON.parse(options.body).email, isA = email.startsWith("a");
       if (isA && ++requestsA === 2) { entered(); await held; }
       return Response.json({ token: (isA ? "a" : "b").repeat(43),
-        user: { id: isA ? accountA : accountB, email, username: isA ? "a" : "b" }, deviceID: device });
+        user: { id: isA ? accountA : accountB, email, username: isA ? "a" : "b" }, deviceID: device }, { headers: { "X-Selective-Session-Binding": device } });
     }
     throw Error("unexpected_test_request");
   };
@@ -201,7 +201,7 @@ test("reauthentication returns to sign-in when its own session is invalidated", 
   const fetchValue = async path => {
     if (path === "/v1/me" || path === "/v1/vault") return Response.json({ error: "unauthorized" }, { status: 401 });
     if (path === "/v1/auth/login") return Response.json({ token: "a".repeat(43),
-      user: { id: accountA, email: "a@example.invalid", username: "a" }, deviceID: device });
+      user: { id: accountA, email: "a@example.invalid", username: "a" }, deviceID: device }, { headers: { "X-Selective-Session-Binding": device } });
     throw Error("unexpected_test_request");
   };
   const repository = createIndexedDBVaultRepository(), changes = [];

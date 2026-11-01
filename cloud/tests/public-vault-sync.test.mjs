@@ -93,7 +93,8 @@ function localVault(repository, ids, nowValue = "2026-09-04T00:00:00.000Z") {
 function jsonResponse(status, value) {
   return new Response(value === null ? null : JSON.stringify(value), {
     status,
-    headers: value === null ? {} : { "Content-Type": "application/json" },
+    headers: value === null ? {} : { "Content-Type": "application/json",
+      ...(status === 200 && value.token && value.user && value.deviceID ? { "X-Selective-Session-Binding": deviceA } : {}) },
   });
 }
 
@@ -448,11 +449,31 @@ test("a cookie replaced by another tab cannot authorize the old tab's Vault writ
   assert.equal(client.session(), null);
 });
 
-test("cookie session restore fails closed when the server cannot bind the browser session", async () => {
+test("login refuses a legacy server without a verifiable browser session binding", async () => {
+  for (const binding of [null, "invalid-binding"]) {
+    const calls = [];
+    const storage = new Map();
+    const client = createAuthenticatedVaultClient({
+      sessionStorageValue: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+      fetchValue: async (path, options) => {
+        calls.push({ path, method: options.method });
+        const headers = { "Content-Type": "application/json" };
+        if (binding !== null) headers["X-Selective-Session-Binding"] = binding;
+        return new Response(JSON.stringify({ token: "a".repeat(43), user: { id: userID }, deviceID: deviceA }), { status: 200, headers });
+      },
+    });
+    await assert.rejects(client.login({ email: "synthetic@example.invalid", password: "synthetic-password", deviceID: deviceA }), /cloud_upgrade_required/u);
+    assert.equal(client.session(), null);
+    assert.equal(storage.size, 0);
+    assert.deepEqual(calls, [{ path: "/v1/auth/login", method: "POST" }]);
+  }
+});
+
+test("cookie session restore reports an unsupported server and remains locked", async () => {
   const client = createAuthenticatedVaultClient({ fetchValue: async () => jsonResponse(200, {
     id: userID, deviceID: deviceA, email: "user@example.invalid",
   }) });
-  await assert.rejects(client.restoreSession(), /authentication_required/);
+  await assert.rejects(client.restoreSession(), /cloud_upgrade_required/);
   assert.equal(client.session(), null);
 });
 

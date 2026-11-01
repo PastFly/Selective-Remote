@@ -507,6 +507,7 @@
     "Все актуальные авторизованные устройства уже имеют wrapper этой генерации.": "All current authorized devices already have a wrapper for this generation.",
     "Все прежние сессии отозваны. Войдите с новым паролем. Ключи существующего Personal Vault не изменены и не восстановлены.": "All previous sessions were revoked. Sign in with the new password. Existing Personal Vault keys have not been changed or recovered.",
     "Вход выполнен. Сессия защищена HttpOnly cookie; пароль не сохранён.": "Signed in. The session is protected by an HttpOnly cookie; the password was not stored.",
+    "Эта версия Cloud не поддерживает безопасную сессию. Обновите Cloud, затем войдите снова. Сохранённые данные не изменены.": "This Cloud version does not support a secure session. Update Cloud, then sign in again. Your saved data has not been changed.",
     "Вход выполнен. Team-ключ недоступен в этом браузере; личный Vault продолжает работать.": "Signed in. The Team key is unavailable in this browser; Personal Vault remains available.",
     "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.": "Signed in. The Team area is temporarily unavailable; Personal Vault and the session remain active.",
     "Выбранный участник станет Owner, а ваша роль изменится на Admin.": "The selected member will become Owner and your role will change to Admin.",

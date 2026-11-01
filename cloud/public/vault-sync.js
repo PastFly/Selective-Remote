@@ -695,10 +695,11 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
         throw new Error("login_failed");
       }
       if (String(result.deviceID ?? "").toLowerCase() !== normalizedDeviceID) throw new Error("login_failed");
+      const loginBinding = response.headers.get("X-Selective-Session-Binding");
+      if (!uuidPattern.test(String(loginBinding ?? ""))) throw new Error("cloud_upgrade_required");
       token = result.token;
       cookieSessionBinding = null;
-      const loginBinding = response.headers.get("X-Selective-Session-Binding");
-      writeStoredBinding(uuidPattern.test(String(loginBinding ?? "")) ? String(loginBinding).toLowerCase() : null);
+      writeStoredBinding(String(loginBinding).toLowerCase());
       currentDeviceID = normalizedDeviceID;
       user = {
         id: String(result.user.id).toLowerCase(),
@@ -717,8 +718,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       if (!response.ok) throw new Error("authentication_required");
       const result = await responseJSON(response, "authentication_required");
       const binding = response.headers.get("X-Selective-Session-Binding");
-      if (restoreEpoch !== sessionEpoch || (!token && (!uuidPattern.test(String(binding ?? ""))
-          || String(readStoredBinding() ?? "").toLowerCase() !== String(binding).toLowerCase()))) {
+      if (restoreEpoch !== sessionEpoch) throw new Error("authentication_required");
+      if (!token && !uuidPattern.test(String(binding ?? ""))) throw new Error("cloud_upgrade_required");
+      if (!token && String(readStoredBinding() ?? "").toLowerCase() !== String(binding).toLowerCase()) {
         throw new Error("authentication_required");
       }
       if (!uuidPattern.test(String(result.id ?? "")) || !uuidPattern.test(String(result.deviceID ?? ""))) {

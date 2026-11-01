@@ -714,6 +714,12 @@ export function vaultStorageCompatibilityMessage(code) {
   return "Сначала сохраните изменения в других вкладках Selective Remote Cloud, закройте их и обновите эту страницу. Сохранённые данные не изменены.";
 }
 
+export function cloudCompatibilityMessage(code) {
+  return code === "cloud_upgrade_required"
+    ? "Эта версия Cloud не поддерживает безопасную сессию. Обновите Cloud, затем войдите снова. Сохранённые данные не изменены."
+    : null;
+}
+
 export async function prepareVaultStorageForPortal({
   indexedDBValue = globalThis.indexedDB,
   requestApproval,
@@ -5351,6 +5357,7 @@ export async function initializeCloudAccount({
   });
   globalThis.addEventListener?.("online", () => { void backgroundPersonalVaultSync(); });
 
+  let startupCompatibilityMessage = null;
   function setAuthMode(mode) {
     const registrationAvailable = metadata?.registrationEnabled === true || Boolean(initialTeamInvitationToken);
     form.hidden = mode !== "login";
@@ -5371,7 +5378,9 @@ export async function initializeCloudAccount({
     } else if (mode === "recovery") {
       setAccountMessage("Мы отправим одноразовую ссылку для смены пароля, если аккаунт существует.");
     } else {
-      setAccountMessage("Сессия восстанавливается защищённой HttpOnly cookie; пароль в браузере не сохраняется.");
+      setAccountMessage(startupCompatibilityMessage
+        ?? "Сессия восстанавливается защищённой HttpOnly cookie; пароль в браузере не сохраняется.",
+        startupCompatibilityMessage ? "error" : null);
     }
   }
 
@@ -5528,6 +5537,7 @@ export async function initializeCloudAccount({
     }
     const button = form.querySelector("button");
     const attempt = ++loginAttempt, inputRevision = loginInputRevision;
+    startupCompatibilityMessage = null;
     let operationGeneration = client.sessionGeneration(), authenticatedAccountID = null;
     const isCurrent = () => attempt === loginAttempt && client.sessionGeneration() === operationGeneration
       && (authenticatedAccountID === null || client.session()?.id === authenticatedAccountID);
@@ -5625,8 +5635,13 @@ export async function initializeCloudAccount({
         return;
       }
       const code = String(error?.message ?? "");
+      if (code === "cloud_upgrade_required") {
+        startupCompatibilityMessage = cloudCompatibilityMessage(code);
+        if (loginInputRevision === inputRevision) form.elements.password.value = "";
+      }
       const messages = {
         vault_storage_upgrade_blocked: vaultStorageCompatibilityMessage(code),
+        cloud_upgrade_required: cloudCompatibilityMessage(code),
         invalid_credentials: "Неверная электронная почта или пароль.",
         email_not_verified: "Сначала подтвердите почту по ссылке из письма.",
         rate_limited: "Слишком много попыток входа. Повторите позже.",
@@ -6072,6 +6087,11 @@ export async function initializeCloudAccount({
         ?? "Сессия активна, но состояние Personal Vault не удалось проверить.");
     } else {
       showSession(null);
+      const compatibilityMessage = cloudCompatibilityMessage(String(error?.message ?? ""));
+      if (compatibilityMessage) {
+        startupCompatibilityMessage = compatibilityMessage;
+        setAccountMessage(compatibilityMessage, "error");
+      }
     }
   }
   return {

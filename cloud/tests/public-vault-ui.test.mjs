@@ -45,6 +45,16 @@ import {
   workspaceCommands,
 } from "../public/app.js";
 
+test("unsupported Cloud sessions present an upgrade message in both languages", async () => {
+  const message = application.cloudCompatibilityMessage("cloud_upgrade_required");
+  assert.match(message, /Обновите Cloud/u);
+  assert.match(message, /Сохранённые данные не изменены/u);
+  assert.equal(application.cloudCompatibilityMessage("authentication_required"), null);
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.ok(i18n.includes(JSON.stringify(message)));
+  assert.match(i18n, /Update Cloud, then sign in again\. Your saved data has not been changed\./u);
+});
+
 test("Team role labels follow the active RU and EN locale", () => {
   assert.deepEqual(
     ["owner", "admin", "editor", "viewer"].map((role) => teamRoleLabel(role, "ru")),
@@ -267,7 +277,7 @@ for (const failed of [false, true]) test(`a late password update ${failed ? "err
   assert.deepEqual({ applied, errors }, { applied: 0, errors: 0 });
 });
 
-async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccepted = async () => {} }) {
+async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccepted = async () => {}, legacyServer = false, onLoginResponse = async () => {} }) {
   const { createAuthenticatedVaultClient, loginWithDeviceConflictRetry } = await import("../public/vault-sync.js");
   const { runInNewContext } = await import("node:vm");
   const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -276,7 +286,10 @@ async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccept
     if (path === "/v1/auth/login") {
       const email = JSON.parse(options.body).email;
       const id = email.startsWith("b@") ? accountB : accountA;
-      return new Response(JSON.stringify({ token: "a".repeat(43), user: { id, email, username: "synthetic" }, deviceID }), { status: 200 });
+      await onLoginResponse();
+      return new Response(JSON.stringify({ token: "a".repeat(43), user: { id, email, username: "synthetic" }, deviceID }), {
+        status: 200, headers: legacyServer ? {} : { "X-Selective-Session-Binding": deviceID },
+      });
     }
     if (path === "/v1/vault") return onVaultRequest();
     throw new Error(`unexpected_synthetic_request:${path}`);
@@ -289,6 +302,7 @@ async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccept
   const accountDevices = { deviceID: async () => deviceID, remember: async (_email, id) => id,
     accepted: onAccepted, replaceAfterConflict: async () => null };
   const context = { form, client, accountDevices, loginWithDeviceConflictRetry, crypto: webcrypto, storageUnavailableCode: null,
+    startupCompatibilityMessage: null,
     loginAttempt: 0, loginInputRevision: 0, completeInteractivePersonalVaultLogin: application.completeInteractivePersonalVaultLogin,
     ensureTeamDeviceIdentity: async () => identity, teamDeviceRepository: {},
     activateAccountVault: async () => ({ vault: { rememberSession: async () => true } }),
@@ -299,6 +313,7 @@ async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccept
     message: {}, vaultMessage: {}, setText(element, value) { element.textContent = value; calls.text.push(value); },
     setAccountMessage(value) { calls.accountMessages.push(value); },
     hideConflicts() {},
+    cloudCompatibilityMessage: application.cloudCompatibilityMessage,
     vaultStorageCompatibilityMessage: application.vaultStorageCompatibilityMessage,
     personalVaultRecoveryMessage: application.personalVaultRecoveryMessage,
     personalVaultOwnershipError: () => false, personalVaultLegacyUnverifiedMessage: () => "legacy",
@@ -315,6 +330,31 @@ async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccept
   runInNewContext(source.slice(start, end), context);
   return { client, calls, context, submit: () => submit({ preventDefault() {} }), accountB, deviceID, password };
 }
+
+test("login to a legacy server shows the upgrade requirement before touching the Vault", async () => {
+  const fixture = await loginLifecycleFixture({ legacyServer: true, onVaultRequest: async () => { throw Error("unexpected_vault_request"); } });
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.match(fixture.calls.accountMessages.at(-1), /Обновите Cloud/u);
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.equal(fixture.calls.team, 0);
+  assert.equal(fixture.context.form.elements.password.value, "");
+});
+
+test("a delayed legacy-server rejection does not clear a newer password entry", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await loginLifecycleFixture({ legacyServer: true, onLoginResponse: async () => { entered(); await held; },
+    onVaultRequest: async () => { throw Error("unexpected_vault_request"); } });
+  const pending = fixture.submit();
+  await started;
+  fixture.context.form.elements.password.value = "newer synthetic entry";
+  fixture.context.loginInputRevision += 1;
+  release();
+  await pending;
+  assert.equal(fixture.context.form.elements.password.value, "newer synthetic entry");
+  assert.equal(fixture.client.session(), null);
+});
 
 test("a 401 during Personal Vault login leaves the expired session signed out", async () => {
   const fixture = await loginLifecycleFixture({ onVaultRequest: async () => new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 }) });
@@ -443,7 +483,7 @@ test("session presentation clears the previous Team before displaying another ac
   assert.equal(observations.at(-1).teamOwner, "account-b");
 });
 
-async function startupLifecycleFixture({ requestVault, failRestore = false, onRestore = null, storageUnavailableCode = null }) {
+async function startupLifecycleFixture({ requestVault, failRestore = false, onRestore = null, storageUnavailableCode = null, unsupportedServer = false }) {
   const { runInNewContext } = await import("node:vm");
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
   const start = source.indexOf('  setAuthMode("login");\n  let startupSession');
@@ -456,25 +496,46 @@ async function startupLifecycleFixture({ requestVault, failRestore = false, onRe
     async restoreSession() {
       generation = "1";
       if (onRestore) await onRestore();
+      if (unsupportedServer) throw new Error("cloud_upgrade_required");
       if (failRestore) { generation = "2"; throw error(); }
       session = { id: "a" }; return session;
     },
     async getVault() { return requestVault({ expire() { session = null; generation = "2"; return error(); } }); } };
   const context = { client, storageUnavailableCode, setAuthMode() {}, showSession(user) { calls.sessions.push(user?.id ?? null); },
+    startupCompatibilityMessage: null,
     capturePersonalVaultSession() { const id = session.id, prior = generation;
       return { requireCurrent() { if (session?.id !== id || generation !== prior) throw new Error("authentication_required"); } }; },
     async activateAccountVault() { return { restored: false, legacyOwnershipUnverified: false }; },
     vault: { async status() { return "locked"; }, async restoreRememberedSession() { return false; }, lock() { calls.locks++; } },
     vaultUI: { mode(value) { calls.modes.push(value); }, render() {} }, vaultMessage: {}, setText() {},
     setAccountMessage(value) { calls.accountMessages.push(value); }, hideConflicts() {}, sessionRetiredByError: application.sessionRetiredByError,
+    cloudCompatibilityMessage: application.cloudCompatibilityMessage,
     retiredSessionGeneration: null };
   const retireStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
   const retireEnd = source.indexOf("\n  const teamWorkspace = ", retireStart);
   assert.ok(retireStart >= 0 && retireEnd > retireStart);
   runInNewContext(source.slice(retireStart, retireEnd), context);
   const pending = runInNewContext(`(async () => {${source.slice(start, end)}\n})()`, context);
-  return { pending, calls, client, replaceSession() { session = { id: "b" }; generation = "2"; } };
+  return { pending, calls, client, context, source, replaceSession() { session = { id: "b" }; generation = "2"; } };
 }
+
+test("startup on a legacy server explains the upgrade and leaves the Vault closed", async () => {
+  const fixture = await startupLifecycleFixture({ unsupportedServer: true, requestVault: async () => { throw Error("unexpected_vault_request"); } });
+  await fixture.pending;
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.match(fixture.calls.accountMessages.at(-1), /Обновите Cloud/u);
+  // Initial navigation calls setAuthMode after startup and must not erase the warning.
+  const { runInNewContext } = await import("node:vm");
+  Object.assign(fixture.context, { metadata: { registrationEnabled: false }, initialTeamInvitationToken: null,
+    form: {}, registrationForm: { querySelectorAll: () => [] }, recoveryFormAccount: {}, registrationSuccess: {},
+    loginTab: { setAttribute() {} }, registrationTab: { setAttribute() {} } });
+  const start = fixture.source.indexOf("  function setAuthMode(mode)");
+  const end = fixture.source.indexOf("\n  function hideConflicts", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(fixture.source.slice(start, end) + "\nglobalThis.navigateToLogin = setAuthMode;", fixture.context);
+  fixture.context.navigateToLogin("login");
+  assert.match(fixture.calls.accountMessages.at(-1), /Обновите Cloud/u);
+});
 
 test("deferred storage does not restore a session or touch account Vault state", async () => {
   let restores = 0;

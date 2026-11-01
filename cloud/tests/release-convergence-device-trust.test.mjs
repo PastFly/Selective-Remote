@@ -14,14 +14,14 @@ async function oldBackendClient(body = JSON.stringify({ error: "not_found" })) {
     if (path === "/v1/auth/login") return new Response(JSON.stringify({
       token: "s".repeat(32), deviceID,
       user: { id: userID, email: "test@release.invalid", username: "release", displayName: "Release test" },
-    }));
+    }), { headers: { "X-Selective-Session-Binding": deviceID } });
     return new Response(body, { status: 404 });
   } });
   await client.login({ email: "test@release.invalid", password: "synthetic-only", deviceID });
   return { client, calls };
 }
 
-test("old backend trust collection routes report unsupported capability without a success fallback", async () => {
+test("a bound-session backend without trust routes reports unsupported capability without a success fallback", async () => {
   for (const body of [JSON.stringify({ error: "not_found" }), "<html>Not Found</html>"]) {
     const { client, calls } = await oldBackendClient(body);
     await assert.rejects(client.deviceTrustSnapshot(), /^Error: device_trust_unsupported$/);

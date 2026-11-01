@@ -20,7 +20,8 @@ const scope = { type: "team", teamID, vaultID };
 function jsonResponse(status, value) {
   return new Response(value === null ? null : JSON.stringify(value), {
     status,
-    headers: value === null ? {} : { "Content-Type": "application/json" },
+    headers: value === null ? {} : { "Content-Type": "application/json",
+      ...(status === 200 && value.token && value.user && value.deviceID ? { "X-Selective-Session-Binding": deviceID } : {}) },
   });
 }
 

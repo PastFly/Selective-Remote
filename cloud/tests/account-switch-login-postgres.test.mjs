@@ -79,7 +79,13 @@ async function fixture(t) {
         const input = JSON.parse(body);
         attempts.push({ email: input.email, deviceID: input.device.id });
         const result = await service.login(input);
-        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
+        const session = await service.authenticate(result.token);
+        assert.equal(session?.user_id, result.user?.id);
+        assert.equal(session?.device_id, result.deviceID);
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "X-Selective-Session-Binding": session.session_id,
+        }).end(JSON.stringify(result));
       } else if (request.url === "/v1/auth/logout") {
         const session = await service.authenticate(String(request.headers.authorization ?? "").replace(/^Bearer /u, ""));
         if (session) await store.revokeSession(session.session_id);

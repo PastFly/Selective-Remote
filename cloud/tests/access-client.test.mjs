@@ -28,7 +28,7 @@ test("authenticated adapter owns bearer binding and invalidates 401", async () =
               }
             : { rows: [], nextCursor: null },
         ),
-        { status },
+        { status, headers: path === "/v1/auth/login" ? { "X-Selective-Session-Binding": deviceID } : {} },
       );
     },
   });

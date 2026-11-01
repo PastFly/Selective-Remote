@@ -531,7 +531,7 @@ test("authenticated publication adapter uses no-store routes and opaque epoch ch
             ? { user: { id: accountID }, deviceID, token: "t".repeat(43) }
             : { headerHash: "a".repeat(64) },
         ),
-        { status: 200 },
+        { status: 200, headers: path === "/v1/auth/login" ? { "X-Selective-Session-Binding": deviceID } : {} },
       );
     },
   });
@@ -862,7 +862,7 @@ test("logout synchronously removes identity before subscribers and keeps only th
             deviceID,
             token: "t".repeat(43),
           }),
-          { status: 200 },
+          { status: 200, headers: { "X-Selective-Session-Binding": deviceID } },
         );
       if (path === "/v1/auth/logout") {
         logoutHeaders = options.headers;
@@ -909,7 +909,7 @@ test("real authenticated 401 clears identity before subscribers and invalidates 
             deviceID: f.reader.deviceID,
             token: "t".repeat(43),
           }),
-          { status: 200 },
+          { status: 200, headers: { "X-Selective-Session-Binding": f.reader.deviceID } },
         );
       return new Response(
         JSON.stringify(
@@ -953,7 +953,7 @@ test("a delayed old-session 401 cannot erase a newly authenticated identity", as
             deviceID,
             token: "t".repeat(43),
           }),
-          { status: 200 },
+          { status: 200, headers: { "X-Selective-Session-Binding": deviceID } },
         );
       return new Promise((resolve) => {
         finishRequest = () =>
@@ -1074,7 +1074,8 @@ test("browser logout locks local data and reports an unconfirmed server session"
   const { completeBrowserSessionLogout } = await import("../public/app.js");
   const token = "t".repeat(43), calls = [], deviceID = uuid();
   const client = createAuthenticatedVaultClient({ fetchValue: async (path) => {
-    if (path === "/v1/auth/login") return Response.json({ user: { id: uuid() }, deviceID, token });
+    if (path === "/v1/auth/login") return Response.json({ user: { id: uuid() }, deviceID, token },
+      { headers: { "X-Selective-Session-Binding": deviceID } });
     if (path === "/v1/auth/logout") return Response.json({ error: "publication_guard_unavailable" }, { status: 503 });
     throw new Error("unexpected_request");
   } });
@@ -1098,7 +1099,7 @@ async function authenticatedPublicationFixture() {
     fetchValue: async (path) => {
       if (path === "/v1/auth/login") return Response.json({
         user: { id: f.reader.accountID }, deviceID: f.reader.deviceID, token: "t".repeat(43),
-      });
+      }, { headers: { "X-Selective-Session-Binding": f.reader.deviceID } });
       if (path === "/v1/auth/logout") return new Response(null, { status: 204 });
       const url = new URL(path, f.reader.endpoint), q = Object.fromEntries(url.searchParams);
       if (intercept) {
