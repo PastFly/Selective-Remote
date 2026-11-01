@@ -554,10 +554,11 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
   let cookieSessionBinding = null;
   let sessionEpoch = 0;
   const identityListeners = new Set();
-  function invalidateIdentity() { sessionEpoch++; for (const listener of identityListeners) listener(); }
+  function invalidateIdentity(cause = undefined) { sessionEpoch++; for (const listener of identityListeners) listener(cause); }
 
   async function authorizedRequest(path, options = {}, { reauthenticationErrors = [] } = {}) {
     const requestEpoch = sessionEpoch;
+    const requestHadUser = Boolean(user?.id);
     const response = await fetchValue(path, {
       ...options,
       headers: {
@@ -579,11 +580,12 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       if (requestEpoch === sessionEpoch) {
         // Local receipt identifies the request that actually retired authentication.
         error.invalidatedSessionEpoch = String(requestEpoch);
+        error.retiredAuthenticatedSession = requestHadUser;
         token = null;
         user = null;
         currentDeviceID = null;
         cookieSessionBinding = null;
-        invalidateIdentity();
+        invalidateIdentity(error);
       }
       throw error;
     }

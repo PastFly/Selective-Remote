@@ -150,10 +150,8 @@ test("Team workspace wires folder state cleanup, read-only navigation and encryp
   const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
   const browser = await readFile(new URL("../public/team-snippet-browser.js", import.meta.url), "utf8");
   const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(application, /function lockCurrentVault\(\) \{\s*stopBackgroundSync\(\);\s*resetRecordEditor\(\);\s*resetSnippetBrowser\(\{ lock: true \}\);/u);
   assert.match(application, /\.record-actions button, \[data-snippet-create-child\]/u);
   assert.match(application, /teamSnippetRecordData\(\{ title: recordTitle.value, body: recordSecret.value, folder: snippetFolder.value \}, existingRecord\?\.data\)/u);
-  assert.match(application, /if \(controller !== editingController\) return;/u);
   assert.match(application, /snippetFilteredCollapsedFolders.clear\(\); renderRecords\(\);/u);
   assert.match(html, /id="team-snippet-group-create"/u);
   assert.match(html, /id="team-snippet-group-parent"/u);

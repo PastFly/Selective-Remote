@@ -52,7 +52,7 @@ const syncIssueCodes = new Set([
   "team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required",
   "network_unavailable", "remote_revision_regressed", "team_vault_generation_changed",
   "invalid_remote_revision", "invalid_local_team_vault", "team_vault_storage_failed",
-  "wrapper_provisioning_failed", "team_vault_legacy_conflict", "local_vault_owner_unverified",
+  "wrapper_provisioning_failed", "team_vault_legacy_conflict", "team_vault_stale_snapshot", "team_vault_operation_in_progress", "local_vault_owner_unverified",
   "legacy_vault_owner_unverified", "remote_wrapped_key_changed",
 ]);
 
@@ -93,6 +93,13 @@ export function publishSyncObservation(documentValue, observation) {
 export function teamSyncTargetMatches(captured, current) {
   return !!captured?.controller && captured.controller === current?.controller
     && captured.teamID === current.teamID && captured.vaultID === current.vaultID;
+}
+
+export function teamVaultEditTargetMatches(captured, current) {
+  return Boolean(captured?.sessionID) && captured.sessionID === current?.sessionID
+    && typeof captured.sessionGeneration === "string" && captured.sessionGeneration === current?.sessionGeneration
+    && captured.lockEpoch === current?.lockEpoch
+    && teamSyncTargetMatches(captured, current);
 }
 
 export function captureTeamWorkspaceContext({ client, identity, activationEpoch }) {
@@ -592,6 +599,56 @@ export function parseTeamHostConnection(data) {
   };
 }
 
+function teamLinkedCredentials(records, hostID) {
+  return records.filter((value) => value.type === "credential"
+    && value.data?.sourceID === hostID && ["ssh", "rdp"].includes(value.data?.kind));
+}
+
+export function captureTeamRecordEditorSnapshot(records, record) {
+  const credentials = record.type === "host" ? teamLinkedCredentials(records, record.id) : [];
+  const value = { record, credentials: [...credentials].sort((a, b) => a.id.localeCompare(b.id)) };
+  return globalThis.structuredClone ? globalThis.structuredClone(value) : JSON.parse(JSON.stringify(value));
+}
+
+export function teamRecordEditorMatches(snapshot, records) {
+  if (!snapshot?.record) return false;
+  const record = records.find(value => value.id === snapshot.record.id);
+  if (!record) return false;
+  const current = captureTeamRecordEditorSnapshot(records, record);
+  return JSON.stringify(current) === JSON.stringify(snapshot);
+}
+
+export function teamVaultRecordOperations({ records, record, credential = null }) {
+  const operations = [{ op: "upsert", record }];
+  if (record.type !== "host" || !credential) return operations;
+  const existing = teamLinkedCredentials(records, record.id);
+  if (credential.remove) {
+    operations.push(...existing.map((value) => ({ op: "delete", id: value.id })));
+  } else if (credential.record) {
+    operations.push({ op: "upsert", record: { ...credential.record, id: existing[0]?.id ?? credential.record.id } });
+    operations.push(...existing.slice(1).map((value) => ({ op: "delete", id: value.id })));
+  }
+  return operations;
+}
+
+export function teamVaultDeleteOperations(records, ids) {
+  const present = new Set(records.map((value) => value.id));
+  if (ids.some((id) => !present.has(id))) throw new Error("record_changed");
+  const deleted = new Set();
+  const operations = [];
+  const add = (id) => {
+    if (!deleted.has(id)) {
+      deleted.add(id);
+      operations.push({ op: "delete", id });
+    }
+  };
+  for (const id of ids) {
+    for (const credential of teamLinkedCredentials(records, id)) add(credential.id);
+    add(id);
+  }
+  return operations;
+}
+
 export function localVaultRecordSummary(record) {
   const data = record?.data ?? {};
   let summary = "";
@@ -636,9 +693,38 @@ export function teamVaultSynchronizationErrorMessage(code) {
     invalid_local_team_vault: "Локальная зашифрованная копия несовместима или повреждена; серверная версия не перезаписана.",
     team_vault_storage_failed: "Браузер не смог сохранить локальную зашифрованную копию.",
     team_vault_legacy_conflict: "Найдены две локальные копии Team Vault. Синхронизация остановлена; обе копии сохранены. Не очищайте данные браузера до восстановления.",
+    team_vault_stale_snapshot: "Локальная копия Team Vault изменилась в другой вкладке или во время фоновой операции. Нажмите «Заблокировать», затем «Синхронизировать». Если редактор открыт, сначала закройте его: несохранённые поля сбросятся и их придётся ввести повторно.",
+    team_vault_operation_in_progress: "Другая операция Team Vault ещё выполняется. Дождитесь её завершения и повторите действие.",
+    team_vault_editor_changed: "Открытая запись или связанный Credential изменились во время редактирования. Чтобы избежать перезаписи, закройте редактор и откройте запись снова; несохранённые поля сбросятся и их придётся ввести повторно.",
   };
   return messages[code]
     ?? "Локальная зашифрованная копия сохранена. Синхронизация продолжится автоматически.";
+}
+
+export function showTeamVaultRecordSaveError({ documentValue, form, status, error, beforeSave = false }) {
+  const code = String(error?.message ?? "");
+  const recoverable = ["team_vault_stale_snapshot", "team_vault_legacy_conflict", "team_vault_operation_in_progress", "team_vault_editor_changed"].includes(code);
+  const validationMessages = {
+    invalid_team_host_connection: "Проверьте протокол, адрес Host, порт и имя пользователя. Запись не сохранена; исправьте поля и повторите.",
+    invalid_team_host_organization: "Проверьте папку, теги и описание Host. Запись не сохранена; исправьте поля и повторите.",
+    advanced_team_host_requires_native_editor: "Основные параметры этого Host можно изменить только в приложении Mac. Запись не сохранена.",
+    invalid_local_record: "Проверьте обязательные поля и их длину. Запись не сохранена; исправьте поля и повторите.",
+    invalid_snippet_title: "Проверьте название, текст и папку Snippet. Запись не сохранена; исправьте поля и повторите.",
+    invalid_snippet_body: "Проверьте название, текст и папку Snippet. Запись не сохранена; исправьте поля и повторите.",
+    invalid_snippet_folder: "Проверьте название, текст и папку Snippet. Запись не сохранена; исправьте поля и повторите.",
+  };
+  const message = recoverable ? teamVaultSynchronizationErrorMessage(code)
+    : beforeSave && validationMessages[code] ? validationMessages[code]
+    : "Не удалось подтвердить сохранение. Запись могла сохраниться. Чтобы проверить её, сначала закройте редактор; несохранённые поля сбросятся и их придётся ввести повторно.";
+  setText(status, message);
+  let alert = form.querySelector("[data-team-vault-record-error]");
+  if (!alert) {
+    alert = documentValue.createElement("p");
+    alert.dataset.teamVaultRecordError = "";
+    alert.setAttribute("role", "alert");
+    form.prepend(alert);
+  }
+  setText(alert, message);
 }
 
 function setText(element, value) {
@@ -1581,13 +1667,22 @@ export async function preprovisionTeamInvitationWrappers({
   repositoryFactory = createIndexedDBTeamVaultRepository,
   controllerFactory = createTeamVaultController,
   synchronize = synchronizeTeamVault,
+  isCurrent = () => true,
 } = {}) {
   const plan = invitation?.preprovisioning;
   if (!client || !identity || !team?.id || !team?.role || !invitation?.id || !plan) {
     throw new Error("invalid_team_invitation_preprovisioning");
   }
+  const captured = captureTeamWorkspaceContext({ client, identity, activationEpoch: 0 });
+  const requireCurrent = () => {
+    if (!isCurrent() || !teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: 0 })) {
+      throw new Error("authentication_required");
+    }
+  };
+  requireCurrent();
   const wrappers = [];
   for (const plannedVault of plan.vaults) {
+    requireCurrent();
     const scope = { type: "team", teamID: team.id, vaultID: plannedVault.vaultID };
     const temporaryController = controllerFactory({
       repository: repositoryFactory(scope),
@@ -1596,22 +1691,26 @@ export async function preprovisionTeamInvitationWrappers({
     });
     try {
       const outcome = await synchronize({ client, controller: temporaryController, role: team.role });
+      requireCurrent();
       if (["conflict", "remote_changed"].includes(outcome.status)) {
         throw new Error("team_invitation_wrapper_preprovision_failed");
       }
       const state = await temporaryController.syncState();
+      requireCurrent();
       if (state.keyGeneration !== plannedVault.keyGeneration) {
         throw new Error("team_invitation_wrapper_preprovision_failed");
       }
       for (const device of plan.devices) {
+        const wrapper = await temporaryController.prepareWrapper({
+          ...device,
+          membershipID: plan.membershipID,
+          membershipEpoch: plan.membershipEpoch,
+        });
+        requireCurrent();
         wrappers.push({
           vaultID: plannedVault.vaultID,
           keyGeneration: plannedVault.keyGeneration,
-          wrapper: await temporaryController.prepareWrapper({
-            ...device,
-            membershipID: plan.membershipID,
-            membershipEpoch: plan.membershipEpoch,
-          }),
+          wrapper,
         });
       }
     } finally {
@@ -1621,11 +1720,14 @@ export async function preprovisionTeamInvitationWrappers({
   if (wrappers.length !== plan.devices.length * plan.vaults.length) {
     throw new Error("team_invitation_wrapper_preprovision_failed");
   }
-  return client.preprovisionTeamInvitationWrappers({
+  requireCurrent();
+  const result = await client.preprovisionTeamInvitationWrappers({
     teamID: team.id,
     invitationID: invitation.id,
     wrappers,
   });
+  requireCurrent();
+  return result;
 }
 
 export function teamRoleLabel(role, locale = activeInterfaceLocale()) {
@@ -1681,6 +1783,7 @@ export function initializeTeamWorkspace({
   workspaceRefreshIntervalMilliseconds = 10_000,
   accessResolveLabel = () => null,
   onAccessCommitted = () => {},
+  onSessionRetired = () => {},
 } = {}) {
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
@@ -1815,7 +1918,8 @@ export function initializeTeamWorkspace({
   let memberTotal = 0;
   let memberSearchTimer = null;
   let memberRequestGeneration = 0;
-  let teamActivationEpoch = 0, teamListRequestGeneration = 0, selectedTeamRequestGeneration = 0;
+  let teamActivationEpoch = 0, teamVaultLockEpoch = 0, teamListRequestGeneration = 0, selectedTeamRequestGeneration = 0;
+  let teamVaultManuallyLocked = false;
   let teamInvitations = [];
   let accountInvitations = [];
   let notificationSourceSequence = 0;
@@ -1852,9 +1956,14 @@ export function initializeTeamWorkspace({
   let workspaceRefreshTimer = null;
   let workspaceRefreshOperation = null;
   let backgroundMaintenanceOperation = null;
+  const transientTeamControllers = new Set();
   let vaultOperation = null;
   let editingRecordID = null;
-  let recordSavePending = false;
+  let editingRecordSnapshot = null;
+  let draftRecordID = null;
+  let draftCredentialID = null;
+  let recordSavePending = false, recordSaveOperation = null;
+  let inviteOperationGeneration = 0;
   let detailedHostID = null;
 
   function captureWorkspaceContext() {
@@ -1953,7 +2062,12 @@ export function initializeTeamWorkspace({
   }
 
   function canEdit() {
-    return !publicationClient && ["owner", "admin", "editor"].includes(selectedTeam?.role);
+    return !teamVaultManuallyLocked && !publicationClient && ["owner", "admin", "editor"].includes(selectedTeam?.role);
+  }
+
+  function currentEditTarget() {
+    return { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id, sessionID: client.session()?.id,
+      sessionGeneration: client.sessionGeneration(), lockEpoch: teamVaultLockEpoch };
   }
 
   function renderDeviceAdmissionPolicy() {
@@ -2002,6 +2116,7 @@ export function initializeTeamWorkspace({
   }
 
   function setWorkspaceControls(disabled) {
+    disabled = disabled || teamVaultManuallyLocked;
     const publishedEdit = editingPublication?.driver === publicationAccessDriver
       && editingPublication?.selection === publicationSelection
       && publicationAccessDriver?.enabled === true && !publicationAccessDriver.pendingOperationID;
@@ -2054,6 +2169,10 @@ export function initializeTeamWorkspace({
   function resetRecordEditor() {
     editingPublication = null;
     editingRecordID = null;
+    editingRecordSnapshot = null;
+    draftRecordID = null;
+    draftCredentialID = null;
+    recordForm.querySelector("[data-team-vault-record-error]")?.remove();
     recordForm.reset();
     recordTitle.disabled = false;
     recordTarget.disabled = false;
@@ -2084,6 +2203,7 @@ export function initializeTeamWorkspace({
     setWorkspaceControls(false);
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
+    editingRecordSnapshot = editingPublication ? null : captureTeamRecordEditorSnapshot(controller.document().records, record);
     recordType.value = record.type;
     recordType.disabled = true;
     recordTitle.value = values.title;
@@ -2127,8 +2247,7 @@ export function initializeTeamWorkspace({
   }
 
   function hostCredentials(hostID) {
-    return controller?.document().records.filter((value) => value.type === "credential"
-      && value.data?.sourceID === hostID && ["ssh", "rdp"].includes(value.data?.kind)) ?? [];
+    return teamLinkedCredentials(controller?.document().records ?? [], hostID);
   }
 
   function detailConnectionURL(protocol) {
@@ -2218,7 +2337,7 @@ export function initializeTeamWorkspace({
   function renderRecords() {
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     records.replaceChildren();
-    if (!controller) return;
+    if (!controller || teamVaultManuallyLocked) return;
     if (publicationClient) {
       const renderingClient = publicationClient;
       renderPublishedVault({documentValue,container:records,client:renderingClient,filter:activeRecordFilter,
@@ -2316,21 +2435,28 @@ export function initializeTeamWorkspace({
       edit.addEventListener("click", (event) => { event.stopPropagation(); beginRecordEdit(record); });
       remove.addEventListener("click", async (event) => {
         event.stopPropagation();
+        const target = currentEditTarget();
+        if (!teamVaultEditTargetMatches(target, target) || !canEdit() || activeConflicts || selectedVault?.rotationRequired) return;
+        const before = target.controller.document();
         if (!await requestConfirmation({
           title: "Удалить запись?",
           message: `«${heading.textContent}» будет удалена из Team Vault у всех участников.`,
           confirmLabel: "Удалить",
           danger: true,
         })) return;
+        if (!teamVaultEditTargetMatches(target, currentEditTarget()) || !canEdit() || activeConflicts || selectedVault?.rotationRequired) return;
         remove.disabled = true;
         try {
-          for (const credential of hostCredentials(record.id)) await controller.delete(credential.id);
-          await controller.delete(record.id);
+          const current = target.controller.document();
+          if (JSON.stringify(current) !== JSON.stringify(before)) throw new Error("record_changed");
+          await target.controller.applyBatch(teamVaultDeleteOperations(current.records, [record.id]));
+          if (!teamVaultEditTargetMatches(target, currentEditTarget())) return;
           clearConflicts();
           renderRecords();
           setText(workspaceStatus, "Удаление зашифровано локально и будет синхронизировано автоматически.");
         } catch {
-          setText(workspaceStatus, "Не удалось сохранить удаление.");
+          if (!teamVaultEditTargetMatches(target, currentEditTarget())) return;
+          setText(workspaceStatus, "Не удалось подтвердить удаление. Проверьте запись перед повтором.");
           remove.disabled = !canEdit();
         }
       });
@@ -3033,7 +3159,7 @@ export function initializeTeamWorkspace({
 
   function startBackgroundSync() {
     stopBackgroundSync();
-    if (!identity || !selectedTeam || vaults.length === 0
+    if (teamVaultManuallyLocked || !identity || !selectedTeam || vaults.length === 0
       || !Number.isFinite(backgroundSyncIntervalMilliseconds)
       || backgroundSyncIntervalMilliseconds <= 0) {
       return;
@@ -3055,11 +3181,28 @@ export function initializeTeamWorkspace({
     }
   }
 
+  function createTrackedTeamVaultController(options) {
+    const temporary = createTeamVaultController(options);
+    const lock = temporary.lock.bind(temporary);
+    transientTeamControllers.add(temporary);
+    temporary.lock = () => {
+      transientTeamControllers.delete(temporary);
+      return lock();
+    };
+    return temporary;
+  }
+
+  function lockTransientTeamControllers() {
+    for (const temporary of [...transientTeamControllers]) temporary.lock();
+  }
+
   async function maintainSelectedTeamVaults() {
     const captured = captureWorkspaceContext(), activeTeam = selectedTeam;
     const selectionGeneration = selectedTeamRequestGeneration;
+    const lockEpoch = teamVaultLockEpoch;
     const isCurrent = () => workspaceContextCurrent(captured) && selectedTeam === activeTeam
-      && selectedTeamRequestGeneration === selectionGeneration;
+      && selectedTeamRequestGeneration === selectionGeneration && teamVaultLockEpoch === lockEpoch
+      && !teamVaultManuallyLocked;
     if (!isCurrent() || !activeTeam || vaults.length === 0) {
       return null;
     }
@@ -3073,6 +3216,7 @@ export function initializeTeamWorkspace({
       identity,
       team: activeTeam,
       vaults: availableVaults,
+      controllerFactory: createTrackedTeamVaultController,
       isCurrent,
     });
     const operation = { promise: pending, isCurrent };
@@ -3104,21 +3248,47 @@ export function initializeTeamWorkspace({
     activeController = controller,
     activeTeam = selectedTeam,
     activeVault = selectedVault,
+    { explicitUnlock = false } = {},
   ) {
-    if (!activeController || !activeTeam || !activeVault) return null;
+    if ((teamVaultManuallyLocked && !explicitUnlock) || !activeController || !activeTeam || !activeVault) return null;
     if (publicationClient) throw new Error("publication_required");
-    if (await resolveTeamVaultFormat(client,{teamID:activeTeam.id,vaultID:activeVault.id}) !== "V1_ACTIVE") throw new Error("publication_required");
-    const recipient = client.session()?.id;
+    const captured = captureWorkspaceContext();
+    const lockEpoch = teamVaultLockEpoch;
+    const unlockAttempt = teamVaultManuallyLocked && explicitUnlock;
     const target = { controller: activeController, teamID: activeTeam.id, vaultID: activeVault.id };
     const currentTarget = () => ({ controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id });
+    const isCurrent = () => workspaceContextCurrent(captured) && teamVaultLockEpoch === lockEpoch
+      && teamSyncTargetMatches(target, currentTarget());
+    if (!isCurrent()) return null;
+    let format;
+    try { format = await resolveTeamVaultFormat(client, { teamID: activeTeam.id, vaultID: activeVault.id }); }
+    catch (error) {
+      if (sessionRetiredByError(client, error, captured?.generation)) {
+        onSessionRetired(error, captured.generation);
+        return null;
+      }
+      if (!isCurrent()) return null;
+      throw error;
+    }
+    if (!isCurrent()) return null;
+    if (format !== "V1_ACTIVE") throw new Error("publication_required");
+    const recipient = captured.accountID;
     publishSyncObservation(documentValue, { scope: "team", type: "start", vaultID: activeVault.id, recipient });
     return exclusiveVaultOperation(async () => {
+      if (!isCurrent()) return null;
+      try {
       const result = await synchronizeTeamVault({
         client,
         controller: activeController,
         role: activeTeam.role,
       });
-      if (!teamSyncTargetMatches(target, currentTarget())) return null;
+      if (!isCurrent()) return null;
+      if (unlockAttempt) {
+        const status = await activeController.status();
+        if (!isCurrent()) return null;
+        if (status !== "unlocked") throw new Error("team_vault_locked");
+        teamVaultManuallyLocked = false;
+      }
       let wrapperProvisioning = null;
       let wrapperProvisioningFailed = false;
       if (!["conflict", "remote_changed"].includes(result.status) && !activeVault.rotationRequired) {
@@ -3127,14 +3297,19 @@ export function initializeTeamWorkspace({
             client,
             controller: activeController,
           });
-        } catch {
+        } catch (error) {
+          if (sessionRetiredByError(client, error, captured?.generation)) {
+            onSessionRetired(error, captured.generation);
+            return null;
+          }
+          if (!isCurrent()) return null;
           wrapperProvisioningFailed = true;
         }
       }
-      if (!teamSyncTargetMatches(target, currentTarget())) return null;
+      if (!isCurrent()) return null;
       if (!["conflict", "remote_changed"].includes(result.status)) {
         const state = await activeController.syncState();
-        if (!teamSyncTargetMatches(target, currentTarget())) return null;
+        if (!isCurrent()) return null;
         selectedVault = {
           ...selectedVault,
           revision: result.revision ?? selectedVault.revision,
@@ -3145,6 +3320,14 @@ export function initializeTeamWorkspace({
         vaultSelect.value = selectedVault.id;
       }
       return { result, wrapperProvisioning, wrapperProvisioningFailed, recipient, target };
+      } catch (error) {
+        if (sessionRetiredByError(client, error, captured?.generation)) {
+          onSessionRetired(error, captured.generation);
+          return null;
+        }
+        if (!isCurrent()) return null;
+        throw error;
+      }
     });
   }
 
@@ -3183,7 +3366,7 @@ export function initializeTeamWorkspace({
   }
 
   async function runBackgroundTeamVaultSync() {
-    if (activeConflicts || vaultOperation || !identity || !selectedTeam) return;
+    if (teamVaultManuallyLocked || activeConflicts || vaultOperation || !identity || !selectedTeam) return;
     if (publicationClient) {
       const active = publicationClient;
       try { const view = await active.load(); if (publicationClient === active) { renderRecords(); setText(workspaceStatus,publicationCopy(documentValue,view.stale ? "stale" : "readonly")); } }
@@ -3214,15 +3397,28 @@ export function initializeTeamWorkspace({
           setText(workspaceStatus, "Ожидаем, пока устройство с текущим Team Vault key автоматически выдаст wrapper этому браузеру.");
         } else {
           setRecoveryControls(teamVaultRecoveryMode({ errorCode: code || "team_vault_sync_failed" }));
-          setText(workspaceStatus, teamVaultSynchronizationErrorMessage(code));
+          if (recordEditor?.open && ["team_vault_stale_snapshot", "team_vault_legacy_conflict"].includes(code)) {
+            showTeamVaultRecordSaveError({ documentValue, form: recordForm, status: workspaceStatus, error });
+          } else setText(workspaceStatus, teamVaultSynchronizationErrorMessage(code));
         }
       }
     }
-    await maintainSelectedTeamVaults();
+    if (!teamVaultManuallyLocked) await maintainSelectedTeamVaults();
   }
 
   function lockCurrentVault() {
+    teamVaultLockEpoch += 1;
+    teamVaultManuallyLocked = false;
+    inviteOperationGeneration += 1;
+    const inviteButton = inviteForm?.querySelector("button");
+    if (inviteButton) inviteButton.disabled = false;
+    recordSavePending = false;
+    recordSaveOperation = null;
+    const recordSubmit = recordForm?.querySelector('button[type="submit"]');
+    if (recordSubmit) recordSubmit.disabled = false;
+    lockTransientTeamControllers();
     stopBackgroundSync();
+    vaultOperation = null;
     resetRecordEditor();
     resetSnippetBrowser({ lock: true });
     publicationSelection++;
@@ -3236,6 +3432,7 @@ export function initializeTeamWorkspace({
     selectedVault = null;
     workspace.hidden = true;
     recordCreate.hidden = true;
+    lockButton.disabled = false;
     rotateButton.hidden = true;
     rotateButton.disabled = true;
     setRecoveryControls("none");
@@ -3294,14 +3491,14 @@ export function initializeTeamWorkspace({
     if (teamSummary) teamSummary.hidden = activeView === "hosts";
     workspace.hidden = activeView !== "hosts" || !controller;
     recordCreate.hidden = activeView !== "hosts" || !controller;
-    recordCreate.disabled = !controller || !canEdit();
+    recordCreate.disabled = teamVaultManuallyLocked || !controller || !canEdit();
     if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     updateRecordLabels();
-    if (controller) {
+    if (controller && !teamVaultManuallyLocked) {
       clearConflicts();
       renderRecords();
       setWorkspaceControls(false);
-    } else if (activeView === "hosts" && vaults.length > 0) {
+    } else if (!teamVaultManuallyLocked && activeView === "hosts" && vaults.length > 0) {
       void openSelectedVault();
     }
     updateTeamMessage();
@@ -3316,14 +3513,21 @@ export function initializeTeamWorkspace({
     if (!recipient) return;
     const priorIdentity = client.publicationIdentity?.();
     lockCurrentVault();
+    const openingLockEpoch = teamVaultLockEpoch;
     selectedVault = vault;
     const scope = { type: "team", teamID: selectedTeam.id, vaultID: vault.id };
     const selection = publicationSelection;
     const repository = createIndexedDBPublicationRepository();
     const priorCacheScope = priorIdentity ? {endpoint:priorIdentity.endpoint,accountID:priorIdentity.accountID,
       deviceID:priorIdentity.deviceID,teamID:scope.teamID,vaultID:scope.vaultID} : null;
+    function retireOpenSession(error) {
+      if (!sessionRetiredByError(client, error, captured?.generation)) return false;
+      onSessionRetired(error, captured.generation);
+      return true;
+    }
     function ownsSelection(error = null) {
-      if (selection !== publicationSelection || selectedVault?.id !== vault.id || selectedTeam?.id !== scope.teamID || !priorIdentity) return false;
+      if (teamVaultManuallyLocked || openingLockEpoch !== teamVaultLockEpoch || selection !== publicationSelection
+        || selectedVault?.id !== vault.id || selectedTeam?.id !== scope.teamID || !priorIdentity) return false;
       const now = client.publicationIdentity?.();
       return now ? ["endpoint","accountID","deviceID","sessionEpoch"].every(key=>now[key] === priorIdentity[key]) :
         error?.invalidatedSessionEpoch === priorIdentity.sessionEpoch;
@@ -3370,7 +3574,10 @@ export function initializeTeamWorkspace({
         renderRecords();setWorkspaceControls(false);
         setText(workspaceStatus,publicationAccessFailure && publicationAccessFailure.message!=='publication_unavailable' ? accessErrorCopy(publicationAccessFailure,activeInterfaceLocale(documentValue.documentElement?.lang)) : publicationCopy(documentValue,active.view()?.stale ? "stale" : publicationAccessDriver?.enabled && !publicationAccessDriver.pendingOperationID ? 'editable' : "readonly"));
         if(!staleOnly)startBackgroundSync();
-      } catch(error) { if(publicationClient === active) { records.replaceChildren();setText(workspaceStatus,error.message === "publication_repair_required" ? publicationCopy(documentValue,"repair") : publicationCopy(documentValue,"unverified")); } }
+      } catch(error) {
+        if (retireOpenSession(error)) return;
+        if(publicationClient === active && ownsSelection(error)) { records.replaceChildren();setText(workspaceStatus,error.message === "publication_repair_required" ? publicationCopy(documentValue,"repair") : publicationCopy(documentValue,"unverified")); }
+      }
     }
     // A READY operation can block normal reader/context routes. Recover its scoped
     // public operation metadata before requesting either route after a reload.
@@ -3379,11 +3586,12 @@ export function initializeTeamWorkspace({
         const saved=await createIndexedDBWholePublicationRepository().discover({...priorIdentity,teamID:scope.teamID},()=>{if(!ownsSelection())throw Error('publication_context_changed');});
         if(saved.length){const driver=publicationDriverFor(scope,{recovery:true});await driver.getContext(scope);if(!ownsSelection())return;
           if(driver.pendingOperationID){accessManager.setContext({...scope,role:selectedTeam.role,deviceID:client.deviceID()});setView('access');await accessManager.refresh();return;}}
-      }catch(error){if(ownsSelection())setText(workspaceStatus,accessErrorCopy(error,activeInterfaceLocale(documentValue.documentElement?.lang)));return;}
+      }catch(error){if(retireOpenSession(error))return;if(ownsSelection())setText(workspaceStatus,accessErrorCopy(error,activeInterfaceLocale(documentValue.documentElement?.lang)));return;}
     }
     let format;
     try { format = await resolveTeamVaultFormat(client,scope); }
     catch(error) {
+      if (retireOpenSession(error)) return;
       if(isPublicationOfflineError(error))await openPublication({staleOnly:true});
       else { await clearLostPublication(error);if(ownsSelection(error))setText(workspaceStatus,publicationCopy(documentValue,"formatFailed")); }
       return;
@@ -3396,6 +3604,7 @@ export function initializeTeamWorkspace({
       let deviceKeyVersion;
       try { deviceKeyVersion = await resolvePublicationDeviceKeyVersion({client,repository:deviceTrustRepository,identity,sessionIdentity:priorIdentity}); }
       catch(error) {
+        if (retireOpenSession(error)) return;
         if(isPublicationOfflineError(error))await openPublication({staleOnly:true});
         else { await clearLostPublication(error);if(ownsSelection(error))setText(workspaceStatus,publicationCopy(documentValue,"localKeyFailed")); }
         return;
@@ -3421,11 +3630,11 @@ export function initializeTeamWorkspace({
     setText(workspaceStatus, "Загружаем зашифрованную Team-ревизию…");
     try {
       const outcome = await synchronizeAndProvision();
-      if (!workspaceContextCurrent(captured) || !teamSyncTargetMatches(target,
+      if (openingLockEpoch !== teamVaultLockEpoch || !workspaceContextCurrent(captured) || !teamSyncTargetMatches(target,
         { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
       applySynchronizationOutcome(outcome);
     } catch (error) {
-      if (!workspaceContextCurrent(captured) || !teamSyncTargetMatches(target,
+      if (openingLockEpoch !== teamVaultLockEpoch || !workspaceContextCurrent(captured) || !teamSyncTargetMatches(target,
         { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
       const code = String(error?.message ?? "");
       publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: vault.id, recipient });
@@ -3439,7 +3648,7 @@ export function initializeTeamWorkspace({
           ? "Для этого устройства пока нет wrapper ключа. Ожидаем автоматическую выдачу от любого активного участника с текущим ключом."
           : teamVaultSynchronizationErrorMessage(code));
     } finally {
-      if (workspaceContextCurrent(captured) && teamSyncTargetMatches(target,
+      if (openingLockEpoch === teamVaultLockEpoch && workspaceContextCurrent(captured) && teamSyncTargetMatches(target,
         { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) {
         startBackgroundSync();
         if (selectedVault?.rotationRequired) void runBackgroundTeamVaultSync();
@@ -3642,6 +3851,19 @@ export function initializeTeamWorkspace({
   inviteForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!selectedTeam || !canManage()) return;
+    if (teamVaultManuallyLocked) {
+      setText(message, "Сначала откройте Team Vault снова, чтобы подготовить доступ к папкам.");
+      return;
+    }
+    const captured = captureWorkspaceContext(), activeTeam = selectedTeam;
+    let selectionGeneration = selectedTeamRequestGeneration;
+    let lockEpoch = teamVaultLockEpoch;
+    const isCurrent = () => workspaceContextCurrent(captured) && selectedTeam?.id === activeTeam.id
+      && selectedTeamRequestGeneration === selectionGeneration && teamVaultLockEpoch === lockEpoch
+      && !teamVaultManuallyLocked;
+    if (!isCurrent()) return;
+    const username = inviteForm.elements.username.value, role = inviteForm.elements.role.value;
+    const operation = ++inviteOperationGeneration;
     const button = inviteForm.querySelector("button");
     button.disabled = true;
     try {
@@ -3649,17 +3871,26 @@ export function initializeTeamWorkspace({
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           invitation = await client.inviteTeamMember({
-            teamID: selectedTeam.id,
-            username: inviteForm.elements.username.value,
+            teamID: activeTeam.id,
+            username,
             type: "username",
-            role: inviteForm.elements.role.value,
+            role,
           });
+          if (!isCurrent()) return;
           break;
         } catch (error) {
+          if (sessionRetiredByError(client, error, captured?.generation)) {
+            onSessionRetired(error, captured.generation);
+            return;
+          }
+          if (!isCurrent()) return;
           if (attempt > 0 || String(error?.message ?? "") !== "team_vault_rotation_required") throw error;
           setText(message, "Автоматически обновляем ключи командных папок перед приглашением…");
           await maintainSelectedTeamVaults();
-          vaults = await client.listSharedVaults(selectedTeam.id);
+          if (!isCurrent()) return;
+          const refreshed = await client.listSharedVaults(activeTeam.id);
+          if (!isCurrent()) return;
+          vaults = refreshed;
           populateVaults();
         }
       }
@@ -3669,26 +3900,44 @@ export function initializeTeamWorkspace({
           const prepared = await exclusiveVaultOperation(() => preprovisionTeamInvitationWrappers({
             client,
             identity,
-            team: selectedTeam,
+            team: activeTeam,
             invitation,
+            controllerFactory: createTrackedTeamVaultController,
+            isCurrent,
           }));
+          if (!isCurrent()) return;
           if (!prepared?.ready) throw new Error("team_invitation_wrapper_preprovision_failed");
         } catch (error) {
+          if (sessionRetiredByError(client, error, captured?.generation)) {
+            onSessionRetired(error, captured.generation);
+            return;
+          }
+          if (!isCurrent()) return;
           await client.cancelTeamInvitation({
-            teamID: selectedTeam.id,
+            teamID: activeTeam.id,
             invitationID: invitation.id,
           }).catch(() => {});
+          if (!isCurrent()) return;
           throw error;
         }
       }
       inviteForm.reset();
       inviteLinkResult.hidden = true;
       inviteLinkValue.value = "";
-      await loadSelectedTeam();
+      const refresh = loadSelectedTeam();
+      selectionGeneration = selectedTeamRequestGeneration;
+      lockEpoch = teamVaultLockEpoch;
+      await refresh;
+      if (!isCurrent()) return;
       setText(message, invitation.preprovisioning
         ? "Приглашение создано. Доступ к текущим Team Vault подготовлен заранее — приглашающий может выйти."
         : "Приглашение по @username создано на 48 часов.");
     } catch (error) {
+      if (sessionRetiredByError(client, error, captured?.generation)) {
+        onSessionRetired(error, captured.generation);
+        return;
+      }
+      if (!isCurrent()) return;
       const code = String(error?.message ?? "");
       setText(message, code === "team_vault_rotation_required"
         ? "Ключи командных папок ещё обновляются. Приглашение будет доступно автоматически после завершения; повторите через несколько секунд."
@@ -3698,7 +3947,7 @@ export function initializeTeamWorkspace({
             ? "Этот пользователь уже состоит в команде."
             : "Приглашение не создано. Проверьте @username, роль и полномочия.");
     } finally {
-      button.disabled = false;
+      if (operation === inviteOperationGeneration) button.disabled = false;
     }
   });
 
@@ -3903,18 +4152,26 @@ export function initializeTeamWorkspace({
   });
   rotateButton.addEventListener("click", async () => {
     if (!controller || !selectedVault || !canManage() || vaultOperation) return;
+    const captured = captureWorkspaceContext();
+    const lockEpoch = teamVaultLockEpoch;
+    const target = { controller, teamID: selectedTeam?.id, vaultID: selectedVault.id };
+    const isCurrent = () => workspaceContextCurrent(captured) && teamVaultLockEpoch === lockEpoch && teamSyncTargetMatches(target,
+      { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id });
+    if (!isCurrent()) return;
     if (!await requestConfirmation({
       title: "Завершить ротацию ключа?",
       message: "Полная текущая Team-ревизия будет зашифрована новым ключом, а wrappers получат только актуальные авторизованные устройства.",
       confirmLabel: "Завершить ротацию",
     })) return;
+    if (!isCurrent() || !canManage() || vaultOperation) return;
     stopBackgroundSync();
     rotateButton.disabled = true;
     lockButton.disabled = true;
     setRecoveryControls("none");
     setWorkspaceControls(true);
     try {
-      const result = await rotateTeamVault({ client, controller, role: selectedTeam.role });
+      const result = await rotateTeamVault({ client, controller: target.controller, role: selectedTeam.role });
+      if (!isCurrent()) return;
       if (result.status === "conflict") {
         renderConflicts(result);
         setText(workspaceStatus, `Перед ротацией разрешите конфликтов: ${result.conflicts.length}. Секреты не отображаются.`);
@@ -3932,13 +4189,20 @@ export function initializeTeamWorkspace({
         setWorkspaceControls(false);
         setText(workspaceStatus, `Ротация завершена атомарно · ревизия ${result.revision} · поколение ключа ${result.keyGeneration}.`);
       }
-    } catch {
+    } catch (error) {
+      if (sessionRetiredByError(client, error, captured?.generation)) {
+        onSessionRetired(error, captured.generation);
+        return;
+      }
+      if (!isCurrent()) return;
       setText(workspaceStatus, "Ротация не подтверждена. Локальный snapshot не заменён; безопасно повторите операцию.");
     } finally {
-      lockButton.disabled = false;
-      rotateButton.disabled = rotateButton.hidden || !canManage() || Boolean(activeConflicts);
-      setRecoveryControls("none");
-      startBackgroundSync();
+      if (isCurrent()) {
+        lockButton.disabled = false;
+        rotateButton.disabled = rotateButton.hidden || !canManage() || Boolean(activeConflicts);
+        setRecoveryControls("none");
+        startBackgroundSync();
+      }
     }
   });
   grantWrappersButton.addEventListener("click", async () => {
@@ -4006,7 +4270,10 @@ export function initializeTeamWorkspace({
     event.preventDefault();
     if(editingPublication) {
       const edited=editingPublication,button=recordForm.querySelector('button[type="submit"]');if(recordSavePending||!edited.driver.enabled||edited.selection!==publicationSelection)return;
-      recordSavePending=true;button.disabled=true;
+      const captured = captureWorkspaceContext(), operation = {};
+      const isCurrent = () => workspaceContextCurrent(captured) && edited.selection === publicationSelection;
+      if (!isCurrent()) return;
+      recordSaveOperation=operation;recordSavePending=true;button.disabled=true;
       try {
         const before=edited.record,connection=before.type==='host'&&!before.data.profile?teamHostConnectionData({protocol:hostProtocol.value,host:recordTarget.value,port:hostPort.value,username:hostUsername.value}):null;
         const data=before.type==='host'?teamHostRecordData({title:recordTitle.value,target:connection?.target??recordTarget.value,folder:hostFolder.value,tags:hostTags.value,description:hostDescription.value,baseData:before.data})
@@ -4015,22 +4282,29 @@ export function initializeTeamWorkspace({
         const version=typeof before.version==='number'?before.version+1:{...before.version,[client.deviceID()]:Number(before.version?.[client.deviceID()]??0)+1};
         setView('access');
         await accessManager.previewPublishedEdit(edited.reference,{...before,data,version,modifiedAt:Date.now()});
-        if(edited.selection!==publicationSelection)return;resetRecordEditor();setText(workspaceStatus,activeInterfaceLocale(documentValue.documentElement?.lang)==='en'?'Review the impact and confirm the secure update.':'Проверьте последствия и подтвердите защищённое изменение.');
-      }catch(error){setText(workspaceStatus,accessErrorCopy(error,activeInterfaceLocale(documentValue.documentElement?.lang)));}
-      finally{recordSavePending=false;button.disabled=false;}
+        if(!isCurrent())return;resetRecordEditor();setText(workspaceStatus,activeInterfaceLocale(documentValue.documentElement?.lang)==='en'?'Review the impact and confirm the secure update.':'Проверьте последствия и подтвердите защищённое изменение.');
+      }catch(error){if(isCurrent())setText(workspaceStatus,accessErrorCopy(error,activeInterfaceLocale(documentValue.documentElement?.lang)));}
+      finally{if(recordSaveOperation===operation){recordSaveOperation=null;recordSavePending=false;if(isCurrent())button.disabled=false;}}
       return;
     }
     if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
-    const editingController = controller;
+    const target = currentEditTarget();
+    if (!teamVaultEditTargetMatches(target, target)) return;
+    const editingController = target.controller;
     const submittedType = recordType.value;
+    const operation = {};
+    recordSaveOperation = operation;
     recordSavePending = true;
     const button = recordForm.querySelector('button[type="submit"]');
     button.disabled = true;
+    let saveStarted = false;
     try {
+      const records = editingController.document().records;
       const existingRecord = editingRecordID
-        ? controller.document().records.find((value) => value.id === editingRecordID)
+        ? records.find((value) => value.id === editingRecordID)
         : null;
-      if (editingRecordID && (!existingRecord || existingRecord.type !== recordType.value)) throw new Error("record_changed");
+      if (editingRecordID && (!existingRecord || existingRecord.type !== recordType.value
+        || !teamRecordEditorMatches(editingRecordSnapshot, records))) throw new Error("team_vault_editor_changed");
       const existingHost = existingRecord?.type === "host" ? existingRecord : null;
       const connection = recordType.value === "host" && !existingHost?.data?.profile
         ? teamHostConnectionData({
@@ -4038,8 +4312,9 @@ export function initializeTeamWorkspace({
             port: hostPort.value, username: hostUsername.value,
           })
         : null;
-      const recordID = await controller.upsert({
-        ...(editingRecordID ? { id: editingRecordID } : {}),
+      const recordID = editingRecordID ?? (draftRecordID ??= globalThis.crypto.randomUUID());
+      const record = {
+        id: recordID,
         type: recordType.value,
         data: recordType.value === "host"
           ? teamHostRecordData({
@@ -4053,36 +4328,42 @@ export function initializeTeamWorkspace({
                 { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
                 existingRecord?.data,
               ),
-      });
-      if (controller !== editingController) return;
+      };
+      let credential = null;
       if (submittedType === "host") {
-        const credentials = hostCredentials(recordID);
         if (hostRemovePassword.checked) {
-          for (const credential of credentials) await controller.delete(credential.id);
+          credential = { remove: true };
         } else if (hostPassword.value) {
           const connectionValue = connection ?? parseTeamHostConnection(existingHost?.data);
-          const retained = credentials[0];
-          await controller.upsert({
-            ...(retained ? { id: retained.id } : {}), type: "credential",
+          credential = { record: {
+            id: draftCredentialID ??= globalThis.crypto.randomUUID(), type: "credential",
             data: {
               title: `${recordTitle.value.trim()} · ${connectionValue.protocol}`,
               username: connectionValue.username, secret: hostPassword.value,
               kind: connectionValue.protocol, sourceID: recordID,
             },
-          });
-          for (const duplicate of credentials.slice(1)) await controller.delete(duplicate.id);
+          } };
         }
       }
+      const operations = teamVaultRecordOperations({ records, record, credential });
+      saveStarted = true;
+      await editingController.applyBatch(operations);
+      if (!teamVaultEditTargetMatches(target, currentEditTarget())) return;
       resetRecordEditor();
       clearConflicts();
       rotateButton.disabled = !selectedVault?.rotationRequired || !canManage();
       renderRecords();
       setText(workspaceStatus, "Изменение зашифровано локально и будет синхронизировано автоматически.");
-    } catch {
-      setText(workspaceStatus, "Запись не сохранена. Проверьте поля и роль.");
+    } catch (error) {
+      if (teamVaultEditTargetMatches(target, currentEditTarget())) {
+        showTeamVaultRecordSaveError({ documentValue, form: recordForm, status: workspaceStatus, error, beforeSave: !saveStarted });
+      }
     } finally {
-      recordSavePending = false;
-      button.disabled = !canEdit();
+      if (recordSaveOperation === operation) {
+        recordSaveOperation = null;
+        recordSavePending = false;
+        if (teamVaultEditTargetMatches(target, currentEditTarget())) button.disabled = !canEdit();
+      }
     }
   });
 
@@ -4097,7 +4378,7 @@ export function initializeTeamWorkspace({
     const recipient = client.session()?.id;
     const target = { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id };
     try {
-      applySynchronizationOutcome(await synchronizeAndProvision());
+      applySynchronizationOutcome(await synchronizeAndProvision(undefined, undefined, undefined, { explicitUnlock: true }));
     } catch (error) {
       if (!teamSyncTargetMatches(target,
         { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
@@ -4115,7 +4396,13 @@ export function initializeTeamWorkspace({
   });
 
   lockButton.addEventListener("click", () => {
+    teamVaultLockEpoch += 1;
+    teamVaultManuallyLocked = true;
+    recordSavePending = false;
+    recordSaveOperation = null;
+    lockTransientTeamControllers();
     stopBackgroundSync();
+    vaultOperation = null;
     controller?.lock();
     publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id,
       recipient: client.session()?.id });
@@ -4172,22 +4459,43 @@ export function initializeTeamWorkspace({
     selectedRecordIDs.clear(); renderRecords();
   });
   bulkActions?.querySelector("[data-bulk-favorite]")?.addEventListener("click", async () => {
-    if (!canEdit()) return;
-    const chosen = controller?.document().records.filter((record) => selectedRecordIDs.has(record.id)) ?? [];
-    for (const record of chosen) await controller.upsert({ id: record.id, type: record.type, data: { ...record.data, favorite: true } });
-    selectedRecordIDs.clear(); renderRecords();
-    setText(workspaceStatus, `Добавлено в избранное: ${chosen.length}. Изменения синхронизируются автоматически.`);
+    const target = currentEditTarget();
+    if (!teamVaultEditTargetMatches(target, target) || !canEdit() || activeConflicts || selectedVault?.rotationRequired) return;
+    try {
+      const chosen = target.controller.document().records.filter((record) => selectedRecordIDs.has(record.id));
+      if (!chosen.length || chosen.length !== selectedRecordIDs.size) throw new Error("record_changed");
+      await target.controller.applyBatch(chosen.map((record) => ({ op: "upsert",
+        record: { id: record.id, type: record.type, data: { ...record.data, favorite: true } } })));
+      if (!teamVaultEditTargetMatches(target, currentEditTarget())) return;
+      selectedRecordIDs.clear(); renderRecords();
+      setText(workspaceStatus, `Добавлено в избранное: ${chosen.length}. Изменения синхронизируются автоматически.`);
+    } catch {
+      if (teamVaultEditTargetMatches(target, currentEditTarget())) {
+        setText(workspaceStatus, "Не удалось подтвердить изменение избранного. Проверьте записи перед повтором.");
+      }
+    }
   });
   bulkActions?.querySelector("[data-bulk-delete]")?.addEventListener("click", async () => {
-    if (!canEdit() || !selectedRecordIDs.size || !await requestConfirmation({
+    const target = currentEditTarget();
+    if (!teamVaultEditTargetMatches(target, target) || !canEdit() || activeConflicts || selectedVault?.rotationRequired || !selectedRecordIDs.size) return;
+    const ids = [...selectedRecordIDs];
+    const before = target.controller.document();
+    if (!await requestConfirmation({
       title: "Удалить выбранные записи?", message: `Будет удалено записей: ${selectedRecordIDs.size}.`, confirmLabel: "Удалить", danger: true,
     })) return;
-    for (const id of [...selectedRecordIDs]) {
-      for (const credential of hostCredentials(id)) await controller.delete(credential.id);
-      await controller.delete(id);
+    if (!teamVaultEditTargetMatches(target, currentEditTarget()) || !canEdit() || activeConflicts || selectedVault?.rotationRequired) return;
+    try {
+      const current = target.controller.document();
+      if (JSON.stringify(current) !== JSON.stringify(before)) throw new Error("record_changed");
+      await target.controller.applyBatch(teamVaultDeleteOperations(current.records, ids));
+      if (!teamVaultEditTargetMatches(target, currentEditTarget())) return;
+      selectedRecordIDs.clear(); clearConflicts(); renderRecords();
+      setText(workspaceStatus, "Выбранные записи удалены и будут синхронизированы автоматически.");
+    } catch {
+      if (teamVaultEditTargetMatches(target, currentEditTarget())) {
+        setText(workspaceStatus, "Не удалось подтвердить удаление. Проверьте запись перед повтором.");
+      }
     }
-    selectedRecordIDs.clear(); clearConflicts(); renderRecords();
-    setText(workspaceStatus, "Выбранные записи удалены и будут синхронизированы автоматически.");
   });
   activityRefresh?.addEventListener("click", () => loadActivity().catch(() => setText(message, "Не удалось обновить журнал активности.")));
   activityMore?.addEventListener("click", () => loadActivity({ append: true }).catch(() => setText(message, "Не удалось загрузить следующую страницу журнала.")));
@@ -4601,9 +4909,19 @@ export async function initializeCloudAccount({
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   const deviceTrustRepository = globalThis.indexedDB?.open
     ? createIndexedDBDeviceTrustRepository() : null;
+  let retiredSessionGeneration = null;
+  function retireCurrentTeamSession(error, generation) {
+    if (!sessionRetiredByError(client, error, generation) || retiredSessionGeneration === generation) return;
+    retiredSessionGeneration = generation;
+    vault.lock();
+    vaultUI.mode("waiting");
+    showSession(null);
+    setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+  }
   const teamWorkspace = initializeTeamWorkspace({ documentValue, client,
     deviceTrustRepository, teamIdentityRepository: teamDeviceRepository,
     initialInvitationToken: initialTeamInvitationToken,
+    onSessionRetired: retireCurrentTeamSession,
     onAccessCommitted(result, scope) {
       const recipient = client.session()?.id;
       const EventType = documentValue.defaultView?.CustomEvent;
@@ -4614,6 +4932,12 @@ export async function initializeCloudAccount({
         }));
       }
     },
+  });
+  client.subscribePublicationIdentity((cause) => {
+    if (cause?.message === "authentication_required" && cause.retiredAuthenticatedSession === true
+      && typeof cause.invalidatedSessionEpoch === "string") {
+      retireCurrentTeamSession(cause, cause.invalidatedSessionEpoch);
+    }
   });
   const accountDevices = createAccountDeviceCoordinator({
     repository: createIndexedDBVaultRepository(),
@@ -4726,9 +5050,7 @@ export async function initializeCloudAccount({
     } catch (error) {
       const code = String(error?.message ?? "");
       if (sessionRetiredByError(client, error, identity?.sessionEpoch) && vault === targetVault) {
-        targetVault.lock();
-        showSession(null);
-        setAccountMessage("Сеанс Cloud изменился в другой вкладке. Войдите снова; локальные данные сохранены.", "error");
+        retireCurrentTeamSession(error, identity.sessionEpoch);
         return;
       }
       try { session.requireCurrent(); } catch { return; }
@@ -5068,11 +5390,7 @@ export async function initializeCloudAccount({
       const retiredCurrent = sessionRetiredByError(client, error, operationGeneration);
       if (client.sessionGeneration() !== operationGeneration && !retiredCurrent) return;
       if (retiredCurrent) {
-        vault.lock();
-        teamWorkspace?.deactivate();
-        vaultUI.mode("waiting");
-        showSession(null);
-        setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+        retireCurrentTeamSession(error, operationGeneration);
         return;
       }
       const code = String(error?.message ?? "");
@@ -5140,9 +5458,7 @@ export async function initializeCloudAccount({
       const retiredCurrent = sessionRetiredByError(client, error, operationGeneration);
       if (client.sessionGeneration() !== operationGeneration && !retiredCurrent) return;
       if (retiredCurrent) {
-        vault.lock();
-        showSession(null);
-        setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+        retireCurrentTeamSession(error, operationGeneration);
         return;
       }
       if (!client.session()) {
@@ -5386,8 +5702,7 @@ export async function initializeCloudAccount({
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
       else if (code === "authentication_required") {
         if (retiredCurrent) {
-          targetVault.lock();
-          showSession(null);
+          retireCurrentTeamSession(error, identity.sessionEpoch);
           setText(vaultMessage, "Сессия истекла. Войдите снова.");
         } else setText(vaultMessage, "Не удалось подтвердить сессию. Повторите синхронизацию позже.");
       } else if (code === "recovery_passphrase_required") {
@@ -5486,9 +5801,7 @@ export async function initializeCloudAccount({
     let stale = startupGeneration !== null && client.sessionGeneration() !== startupGeneration && !retiredCurrent;
     try { startupSession?.requireCurrent(); } catch { stale = true; }
     if (retiredCurrent && startupSession) {
-      vault.lock();
-      showSession(null);
-      setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+      retireCurrentTeamSession(error, startupGeneration);
     } else if (stale) {
       // The newer session, or its own authentication-loss handler, owns the UI.
     } else if (client.session()) {

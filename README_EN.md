@@ -52,7 +52,7 @@ Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are part of t
 
 **Sync Center** separates Personal and Team Vault state. Notifications lead to device, invitation, or error review; reading a notification does not resolve its source. Copying a Personal Host to a Team Vault preserves the original.
 
-The candidate implements resource mapping, publication of a complete encrypted Vault generation, and authorized resource reading on Mac and in the browser. Migration and the V2 access model remain limited to isolated test Vaults; they are not enabled for ordinary Vaults. Real migration, decryption on a second device, and old-client compatibility still require acceptance before release. Access policy and a selected device's ability to decrypt remain separate.
+The candidate implements resource mapping, publication of a complete encrypted Vault generation, and authorized resource reading on Mac and in the browser. Migration and the V2 access model are intended only for isolated test Vaults; actual V2 activation has not yet been confirmed and ordinary Vaults remain on V1. Real migration, decryption on a second device, and old-client compatibility require acceptance before a V2 launch. Access policy and a selected device's ability to decrypt remain separate.
 
 Account password changes are temporarily unavailable to preserve access to encrypted Personal Vault data. Trust-root recovery is planned **after 0.32**.
 

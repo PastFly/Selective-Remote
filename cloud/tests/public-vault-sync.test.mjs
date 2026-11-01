@@ -611,6 +611,55 @@ test("a 401 response clears the in-memory browser session", async () => {
   assert.equal(request, 2);
 });
 
+test("a current authenticated 401 notifies identity listeners with the retired session receipt", async () => {
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path) => path === "/v1/auth/login"
+      ? jsonResponse(200, { token: "t".repeat(43), deviceID: deviceA,
+        user: { id: userID, email: "synthetic@example.invalid", username: "synthetic" } })
+      : jsonResponse(401, { error: "unauthorized" }),
+  });
+  await client.login({ email: "synthetic@example.invalid", password: "synthetic-password", deviceID: deviceA });
+  const before = client.sessionGeneration();
+  const notifications = [];
+  client.subscribePublicationIdentity((cause) => {
+    notifications.push({ cause, current: client.session(), generation: client.sessionGeneration() });
+  });
+  await assert.rejects(client.getVault(), /authentication_required/u);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].cause?.message, "authentication_required");
+  assert.equal(notifications[0].cause?.invalidatedSessionEpoch, before);
+  assert.equal(notifications[0].cause?.retiredAuthenticatedSession, true);
+  assert.equal(notifications[0].current, null);
+  assert.equal(notifications[0].generation, String(Number(before) + 1));
+});
+
+test("a delayed 401 from an older request does not emit retirement for a newer session", async () => {
+  const nextUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  let enter, release;
+  const started = new Promise((resolve) => { enter = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      const first = JSON.parse(options.body).email === "first@example.invalid";
+      return jsonResponse(200, { token: (first ? "a" : "b").repeat(43), deviceID: deviceA,
+        user: { id: first ? userID : nextUser, email: first ? "first@example.invalid" : "next@example.invalid" } });
+    }
+    enter();
+    await held;
+    return jsonResponse(401, { error: "unauthorized" });
+  } });
+  await client.login({ email: "first@example.invalid", password: "synthetic-password", deviceID: deviceA });
+  const causes = [];
+  client.subscribePublicationIdentity((cause) => { if (cause) causes.push(cause); });
+  const pending = client.getVault();
+  await started;
+  await client.login({ email: "next@example.invalid", password: "synthetic-password", deviceID: deviceA });
+  release();
+  await assert.rejects(pending, /authentication_required/u);
+  assert.equal(client.session()?.id, nextUser);
+  assert.deepEqual(causes, []);
+});
+
 test("local encrypted changes upload against the last observed server revision", async () => {
   const repository = memoryRepository();
   const vault = localVault(repository, [deviceA, recordA]);

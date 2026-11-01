@@ -53,6 +53,61 @@ test("Team role labels follow the active RU and EN locale", () => {
   );
 });
 
+test("Team Host edit batches its credential update and duplicate cleanup", () => {
+  assert.equal(typeof application.teamVaultRecordOperations, "function");
+  const host = { id: "host", type: "host", data: { title: "Synthetic host" } };
+  const credentials = ["first", "duplicate"].map(id => ({ id, type: "credential", data: { sourceID: "host", kind: "ssh" } }));
+  const other = { id: "other", type: "credential", data: { sourceID: "other-host", kind: "ssh" } };
+  const replacement = { id: "fresh", type: "credential", data: { sourceID: "host", kind: "ssh", secret: "synthetic" } };
+  assert.deepEqual(application.teamVaultRecordOperations({
+    records: [host, ...credentials, other], record: host, credential: { record: replacement },
+  }), [
+    { op: "upsert", record: host },
+    { op: "upsert", record: { ...replacement, id: "first" } },
+    { op: "delete", id: "duplicate" },
+  ]);
+  assert.deepEqual(application.teamVaultRecordOperations({
+    records: [host, ...credentials, other], record: host, credential: { remove: true },
+  }), [{ op: "upsert", record: host }, { op: "delete", id: "first" }, { op: "delete", id: "duplicate" }]);
+});
+
+test("Team editor detects changed record values and linked credentials without rejecting unrelated changes", () => {
+  assert.equal(typeof application.captureTeamRecordEditorSnapshot, "function");
+  assert.equal(typeof application.teamRecordEditorMatches, "function");
+  const host = { id: "host", type: "host", version: { a: 1 }, data: { title: "Synthetic", address: "old.invalid" } };
+  const credential = { id: "credential", type: "credential", version: { a: 1 }, data: { sourceID: "host", kind: "ssh", secret: "synthetic" } };
+  const unrelated = { id: "other", type: "snippet", data: { title: "Before" } };
+  const snapshot = application.captureTeamRecordEditorSnapshot([host, credential, unrelated], host);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [host, credential, { ...unrelated, data: { title: "After" } }]), true);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [{ ...host, data: { ...host.data, address: "new.invalid" } }, credential]), false);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [host, { ...credential, version: { a: 2 } }]), false);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [host]), false);
+});
+
+test("Team bulk deletion batches linked credentials exactly once and rejects missing selections", () => {
+  assert.equal(typeof application.teamVaultDeleteOperations, "function");
+  const records = [
+    { id: "host", type: "host", data: {} },
+    { id: "credential", type: "credential", data: { sourceID: "host", kind: "ssh" } },
+    { id: "other", type: "snippet", data: {} },
+  ];
+  assert.deepEqual(application.teamVaultDeleteOperations(records, ["credential", "host", "other"]), [
+    { op: "delete", id: "credential" }, { op: "delete", id: "host" }, { op: "delete", id: "other" },
+  ]);
+  assert.throws(() => application.teamVaultDeleteOperations(records, ["host", "missing"]), /record_changed/u);
+});
+
+test("a Team editing target requires the same active account and Vault", () => {
+  assert.equal(typeof application.teamVaultEditTargetMatches, "function");
+  const target = { controller: {}, teamID: "team", vaultID: "vault", sessionID: "account-a", sessionGeneration: "old" };
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target }), true);
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target, sessionID: "account-b" }), false);
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target, sessionGeneration: "new" }), false);
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target, vaultID: "other" }), false);
+  assert.equal(application.teamVaultEditTargetMatches({ ...target, sessionID: null }, { ...target, sessionID: null }), false);
+  assert.equal(application.teamVaultEditTargetMatches({ ...target, lockEpoch: 1 }, { ...target, lockEpoch: 2 }), false);
+});
+
 test("Personal Vault lock drops in-memory access before uncertain remembered-key cleanup finishes", async () => {
   assert.equal(typeof application.lockPersonalVault, "function");
   let release, locked = false, viewLocked = false;
@@ -210,13 +265,18 @@ async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccept
     activateAccountVault: async () => ({ vault: { rememberSession: async () => true } }),
     unlockAndSyncPersonalVault: async () => { calls.personal++; return client.getVault(); },
     vaultUI: { mode(value) { calls.modes.push(value); } }, vault: { lock() { calls.locks++; } },
-    showSession(user) { calls.sessions.push(user); calls.ownerWhenShown.push(calls.teamOwner); },
+    showSession(user) { if (!user) context.teamWorkspace.deactivate(); calls.sessions.push(user); calls.ownerWhenShown.push(calls.teamOwner); },
     teamWorkspace: { async activate() { calls.team++; }, deactivate() { calls.deactivations++; calls.teamOwner = null; } },
     message: {}, vaultMessage: {}, setText(element, value) { element.textContent = value; calls.text.push(value); },
     setAccountMessage(value) { calls.accountMessages.push(value); },
     personalVaultOwnershipError: () => false, personalVaultLegacyUnverifiedMessage: () => "legacy",
-    personalVaultKeyMismatchMessage: () => "mismatch", sessionRetiredByError: application.sessionRetiredByError };
+    personalVaultKeyMismatchMessage: () => "mismatch", sessionRetiredByError: application.sessionRetiredByError,
+    retiredSessionGeneration: null };
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const retireStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
+  const retireEnd = source.indexOf("\n  const teamWorkspace = initializeTeamWorkspace", retireStart);
+  assert.ok(retireStart >= 0 && retireEnd > retireStart);
+  runInNewContext(source.slice(retireStart, retireEnd), context);
   const start = source.indexOf('  form.addEventListener("submit", async (event) => {', source.indexOf("export async function initializeCloudAccount"));
   const end = source.indexOf("\n  let reauthenticationAttempt", start);
   assert.ok(start >= 0 && end > start);
@@ -354,7 +414,12 @@ async function startupLifecycleFixture({ requestVault, failRestore = false, onRe
     async activateAccountVault() { return { restored: false, legacyOwnershipUnverified: false }; },
     vault: { async status() { return "locked"; }, async restoreRememberedSession() { return false; }, lock() { calls.locks++; } },
     vaultUI: { mode(value) { calls.modes.push(value); }, render() {} }, vaultMessage: {}, setText() {},
-    setAccountMessage(value) { calls.accountMessages.push(value); }, sessionRetiredByError: application.sessionRetiredByError };
+    setAccountMessage(value) { calls.accountMessages.push(value); }, sessionRetiredByError: application.sessionRetiredByError,
+    retiredSessionGeneration: null };
+  const retireStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
+  const retireEnd = source.indexOf("\n  const teamWorkspace = initializeTeamWorkspace", retireStart);
+  assert.ok(retireStart >= 0 && retireEnd > retireStart);
+  runInNewContext(source.slice(retireStart, retireEnd), context);
   const pending = runInNewContext(`(async () => {${source.slice(start, end)}\n})()`, context);
   return { pending, calls, client, replaceSession() { session = { id: "b" }; generation = "2"; } };
 }
@@ -653,7 +718,8 @@ test("a previous Team maintenance promise is not reused by a newer session", asy
   const calls = [];
   const teamA = { id: "shared-team", role: "owner", account: "a" }, teamB = { ...teamA, account: "b" };
   const context = { activeSession: "a", identity: {}, selectedTeam: teamA, selectedVault: null,
-    selectedTeamRequestGeneration: 1, vaults: [{ id: "vault-a", rotationRequired: true }], vaultSelect: {},
+    selectedTeamRequestGeneration: 1, teamVaultLockEpoch: 0, teamVaultManuallyLocked: false,
+    createTrackedTeamVaultController() {}, vaults: [{ id: "vault-a", rotationRequired: true }], vaultSelect: {},
     backgroundMaintenanceOperation: null, captureWorkspaceContext() { return context.activeSession; },
     workspaceContextCurrent: captured => captured === context.activeSession,
     async maintainAccessibleTeamVaultWrappers({ team }) {
@@ -1426,6 +1492,193 @@ test("a conflicting older browser copy is reported without promising automatic s
   assert.doesNotMatch(message, /продолжится автоматически/u);
 });
 
+test("a stale Team snapshot explains recovery without claiming two copies", () => {
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_stale_snapshot");
+  assert.match(message, /другой вкладке/iu);
+  assert.match(message, /заблокир.*синхрониз/iu);
+  assert.match(message, /несохранённ.*сбросят.*повторно/iu);
+  assert.doesNotMatch(message, /две локальные копии|буфер обмена/iu);
+  const state = application.reduceSyncPresentationState(application.createSyncPresentationState(), {
+    scope: "team", type: "error", code: "team_vault_stale_snapshot",
+  });
+  assert.equal(state.team.issue, "team_vault_stale_snapshot");
+});
+
+test("a stale Team record save reports inside the editor without resetting its fields", () => {
+  assert.equal(typeof application.showTeamVaultRecordSaveError, "function");
+  let inline = null, resets = 0;
+  const form = {
+    draft: "synthetic draft",
+    querySelector() { return inline; },
+    prepend(element) { inline = element; },
+    reset() { resets += 1; this.draft = ""; },
+  };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute(name, value) { this[name] = value; },
+  }; } };
+  const status = { textContent: "" };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status, error: new Error("team_vault_stale_snapshot") });
+  assert.equal(resets, 0);
+  assert.equal(form.draft, "synthetic draft");
+  assert.equal(inline.role, "alert");
+  assert.match(inline.textContent, /сбросят.*повторно/iu);
+  assert.equal(status.textContent, inline.textContent);
+});
+
+test("an invalid Team Host address is reported before saving without discarding the draft", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  recordForm.addEventListener("submit", async (event) => {', source.indexOf("export function initializeTeamWorkspace"));
+  const end = source.indexOf("\n  recordCreate.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  let submit, inline = null, saves = 0, resets = 0;
+  const button = { disabled: false }, value = (text) => ({ value: text, disabled: false });
+  const recordForm = {
+    addEventListener(_event, handler) { submit = handler; },
+    querySelector(selector) { return selector === 'button[type="submit"]' ? button : inline; },
+    prepend(element) { inline = element; },
+  };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute(name, value) { this[name] = value; },
+  }; } };
+  const controller = { document: () => ({ records: [] }), async applyBatch() { saves++; } };
+  const target = { controller, teamID: "synthetic-team", vaultID: "synthetic-vault",
+    sessionID: "synthetic-account", sessionGeneration: "1" };
+  const status = { textContent: "" };
+  const context = { recordForm, controller, editingPublication: null, canEdit: () => true, activeConflicts: null,
+    selectedVault: { rotationRequired: false }, recordSavePending: false, currentEditTarget: () => target,
+    teamVaultEditTargetMatches: application.teamVaultEditTargetMatches,
+    teamVaultRecordOperations: application.teamVaultRecordOperations, teamRecordEditorMatches: application.teamRecordEditorMatches,
+    teamHostConnectionData: application.teamHostConnectionData, teamHostRecordData: application.teamHostRecordData,
+    recordType: value("host"), recordTitle: value("Synthetic host"), recordTarget: value("bad host"),
+    hostProtocol: value("ssh"), hostPort: value("22"), hostUsername: value("test"), hostFolder: value(""),
+    hostTags: value(""), hostDescription: value(""), hostRemovePassword: { checked: false }, hostPassword: value(""),
+    editingRecordID: null, editingRecordSnapshot: null, draftRecordID: null, draftCredentialID: null,
+    resetRecordEditor() { resets++; }, clearConflicts() {}, rotateButton: {}, canManage: () => true, renderRecords() {},
+    setText() {}, workspaceStatus: status, documentValue,
+    showTeamVaultRecordSaveError: application.showTeamVaultRecordSaveError, crypto: webcrypto };
+  runInNewContext(source.slice(start, end), context);
+  await submit({ preventDefault() {} });
+  assert.equal(saves, 0);
+  assert.equal(resets, 0);
+  assert.equal(context.recordTarget.value, "bad host");
+  assert.match(inline.textContent, /проверьте.*адрес.*порт/iu);
+  assert.doesNotMatch(inline.textContent, /могла сохраниться|закройте редактор/iu);
+  assert.equal(status.textContent, inline.textContent);
+});
+
+test("a save-stage error never claims that an invalid Team record was not saved", () => {
+  let inline = null;
+  const form = { querySelector() { return inline; }, prepend(element) { inline = element; } };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute() {},
+  }; } };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status: {},
+    error: new Error("invalid_team_host_connection"), beforeSave: false });
+  assert.match(inline.textContent, /могла сохраниться/iu);
+  assert.doesNotMatch(inline.textContent, /запись не сохранена/iu);
+});
+
+test("Team input validation errors have English translations", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(source, browser);
+  for (const code of ["invalid_team_host_connection", "invalid_team_host_organization",
+    "advanced_team_host_requires_native_editor", "invalid_local_record", "invalid_snippet_title",
+    "invalid_snippet_body", "invalid_snippet_folder"]) {
+    let inline = null;
+    const form = { querySelector() { return inline; }, prepend(element) { inline = element; } };
+    const documentValue = { createElement() { return { dataset: {}, textContent: "", setAttribute() {} }; } };
+    application.showTeamVaultRecordSaveError({ documentValue, form, status: {}, error: new Error(code), beforeSave: true });
+    const translated = browser.window.SelectiveRemoteI18n.t(inline.textContent);
+    assert.notEqual(translated, inline.textContent, code);
+    assert.match(translated, /not saved/u);
+  }
+});
+
+test("a completed Team save cannot reset an editor from a newer session", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  recordForm.addEventListener("submit", async (event) => {', source.indexOf("export function initializeTeamWorkspace"));
+  const end = source.indexOf("\n  recordCreate.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  let submit, enter, release, resets = 0, renders = 0;
+  const started = new Promise((resolve) => { enter = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const controller = { document: () => ({ records: [] }), async applyBatch() { enter(); await held; } };
+  let target = { controller, teamID: "synthetic-team", vaultID: "synthetic-vault",
+    sessionID: "synthetic-account", sessionGeneration: "1" };
+  const button = { disabled: false }, value = (text) => ({ value: text, disabled: false });
+  const recordForm = { addEventListener(_event, handler) { submit = handler; }, querySelector() { return button; } };
+  const context = { recordForm, controller, editingPublication: null, canEdit: () => true, activeConflicts: null,
+    selectedVault: { rotationRequired: false }, recordSavePending: false, currentEditTarget: () => target,
+    teamVaultEditTargetMatches: application.teamVaultEditTargetMatches,
+    teamVaultRecordOperations: application.teamVaultRecordOperations, teamRecordEditorMatches: application.teamRecordEditorMatches,
+    teamHostConnectionData: application.teamHostConnectionData, teamHostRecordData: application.teamHostRecordData,
+    recordType: value("host"), recordTitle: value("Old draft"), recordTarget: value("synthetic.invalid"),
+    hostProtocol: value("ssh"), hostPort: value("22"), hostUsername: value("test"), hostFolder: value(""),
+    hostTags: value(""), hostDescription: value(""), hostRemovePassword: { checked: false }, hostPassword: value(""),
+    editingRecordID: null, editingRecordSnapshot: null, draftRecordID: null, draftCredentialID: null,
+    resetRecordEditor() { resets++; }, clearConflicts() {}, rotateButton: {}, canManage: () => true,
+    renderRecords() { renders++; }, setText() {}, workspaceStatus: {}, documentValue: {},
+    showTeamVaultRecordSaveError() { throw new Error("unexpected_save_failure"); }, crypto: webcrypto };
+  runInNewContext(source.slice(start, end), context);
+  const pending = submit({ preventDefault() {} });
+  await started;
+  target = { ...target, sessionGeneration: "2" };
+  context.recordTitle.value = "New draft";
+  release();
+  await pending;
+  assert.equal(resets, 0);
+  assert.equal(renders, 0);
+  assert.equal(context.recordTitle.value, "New draft");
+});
+
+test("a changed Team record explains that reopening clears the unfinished editor", () => {
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_editor_changed");
+  assert.match(message, /запись.*credential.*изменились/iu);
+  assert.match(message, /закройте редактор.*сбросятся.*повторно/iu);
+  assert.doesNotMatch(message, /буфер обмена|две локальные копии/iu);
+});
+
+test("an unconfirmed Team save remains visible in the editor without claiming it failed", () => {
+  let inline = null, resets = 0;
+  const form = { draft: "synthetic draft", querySelector() { return inline; }, prepend(element) { inline = element; },
+    reset() { resets += 1; this.draft = ""; } };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute(name, value) { this[name] = value; },
+  }; } };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status: {}, error: new Error("storage_failed") });
+  assert.equal(resets, 0);
+  assert.equal(form.draft, "synthetic draft");
+  assert.ok(inline);
+  assert.equal(inline.role, "alert");
+  assert.match(inline.textContent, /не удалось подтвердить.*могла сохраниться/iu);
+  assert.doesNotMatch(inline.textContent, /запись не сохранена/iu);
+});
+
+test("a stale Team snapshot recovery warning is translated to English", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(source, browser);
+  const message = browser.window.SelectiveRemoteI18n.t(application.teamVaultSynchronizationErrorMessage("team_vault_stale_snapshot"));
+  assert.match(message, /another tab.*Lock.*Synchronize/iu);
+  assert.match(message, /unsaved fields.*cleared.*entered again/iu);
+  assert.doesNotMatch(message, /clipboard|two local Team Vault copies/iu);
+});
+
+test("an overlapping Team operation asks the user to retry", () => {
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_operation_in_progress");
+  assert.match(message, /дождитесь.*повторите/iu);
+  assert.doesNotMatch(message, /продолжится автоматически/u);
+});
+
 test("trusted browser automatically rotates and maintains accessible Team Vaults outside the active view", async () => {
   const scopes = [];
   const locked = [];
@@ -1490,6 +1743,9 @@ test("username invitation preprovisioning wraps every snapshotted Vault and devi
   };
   const result = await preprovisionTeamInvitationWrappers({
     client: {
+      session: () => ({ id: "account-1" }),
+      deviceID: () => "device-1",
+      sessionGeneration: () => "1",
       async preprovisionTeamInvitationWrappers(value) { uploaded = value; return { ready: true, wrappers: 2 }; },
     },
     identity: { deviceID: "device-1" },
