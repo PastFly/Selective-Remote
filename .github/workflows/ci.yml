@@ -36,7 +36,8 @@ jobs:
   cloud-postgres:
     name: Team storage on PostgreSQL 16
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The 1,000-resource migration and publication benchmarks can take 20 minutes.
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
