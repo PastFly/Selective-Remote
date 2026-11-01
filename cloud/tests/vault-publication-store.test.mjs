@@ -19,6 +19,52 @@ const directory=fileURLToPath(new URL('../migrations/',import.meta.url));
 const database=process.env.TEST_DATABASE_URL;
 const resource=()=>({id:uuid(),kind:'HOST',parentFolderID:null,sourceOrdinal:0});
 
+// These concurrency tests deliberately leave statements waiting at barriers.
+// Keep the checked-out clients so cleanup can destroy them even on failure.
+function boundedPublicationTestPool(connectionString){
+ const rawPool=new pg.Pool({connectionString,max:8,connectionTimeoutMillis:5000,statement_timeout:12000,query_timeout:15000});
+ const active=new Set(),streams=new Set();let closing=false;
+ rawPool.on('connect',client=>{
+  const stream=client.connection.stream;
+  if(closing){stream.destroy();return;}
+  streams.add(stream);stream.once('close',()=>streams.delete(stream));
+ });
+ const connect=async()=>{
+  const client=await rawPool.connect();
+  if(closing){const stream=client.connection.stream;client.release(true);stream.destroy();throw Error('test_pool_closed');}
+  let released=false;
+  const handle={processID:client.processID,query:(...args)=>client.query(...args),release:(destroy=false)=>{
+   if(released)return;released=true;active.delete(handle);client.release(destroy);
+  }};
+  active.add(handle);return handle;
+ };
+ const pool={connect,query:async(...args)=>{
+  const client=await connect();
+  try{return await client.query(...args);}catch(error){client.release(true);throw error;}finally{client.release();}
+ }};
+ return {pool,connect,onConnect:callback=>rawPool.on('connect',callback),close:async()=>{
+  closing=true;
+  for(const client of [...active])client.release(true);
+  const ended=rawPool.end();
+  // pool.end() may only half-close idle connections. This is a test-only
+  // teardown: force-close even if a synthetic or broken peer never responds.
+  for(const stream of streams)stream.destroy();
+  await ended;
+ }};
+}
+async function boundedPublicationWait(promise,label){
+ let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{
+  timer=setTimeout(()=>reject(Error(`test_wait_timeout:${label}`)),8000);
+ })]);}finally{clearTimeout(timer);}
+}
+async function waitForBlockedPublisher(pool,pid){
+ for(let n=0;n<400;n++){
+  const pending=(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1 AND datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'",[pid])).rows[0].n;
+  if(pending)return true;await new Promise(r=>setTimeout(r,10));
+ }
+ return false;
+}
+
 test('reader schema20 remains present in latest schema22',async()=>{
  const versions=(await loadMigrations(directory)).map(m=>m.version);assert.ok(versions.includes(20));assert.equal(versions.at(-1),22);
 });
@@ -305,8 +351,79 @@ test('repeatable read begun before revoke finishes coherently while the next rea
   await c.query('COMMIT');await assert.rejects(f.reader.header(f.input),/publication_access_denied/);
  }finally{await c.query('ROLLBACK');c.release();await pool.end();}
 });
-test('publisher/account deletion deadlock retries identical atomic deletion without duplicate rotation or audit',{skip:!database},async()=>{
- const pool=new pg.Pool({connectionString:database,max:8});let release;
+test('concurrency test cleanup forcibly closes active and idle nonresponding peers',{timeout:15000},async()=>{
+ const peers=[],sockets=[];let queryObserved;
+ const queryStarted=new Promise(resolve=>{queryObserved=resolve;});
+ const server=createServer({allowHalfOpen:true},peer=>{
+  peers.push(peer);
+  peer.once('data',()=>{
+   peer.write(Buffer.from('5200000008000000005a0000000549','hex'));
+   peer.once('data',queryObserved);
+  });
+ });
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const scoped=boundedPublicationTestPool(`postgres://synthetic@127.0.0.1:${server.address().port}/synthetic`);
+ scoped.onConnect(client=>sockets.push(client.connection.stream));
+ let closed=false;
+ try{
+  const active=await scoped.connect();
+  const waiting=active.query('SELECT 1').then(()=>null,error=>error);
+  await boundedPublicationWait(queryStarted,'synthetic active query');
+  const idle=await scoped.pool.connect();idle.release();
+  closed=true;await boundedPublicationWait(scoped.close(),'nonresponding pool close');
+  assert.match((await boundedPublicationWait(waiting,'synthetic query disconnect'))?.message??'',/connection terminated/i);
+  assert.equal(sockets.length,2);assert.ok(sockets.every(socket=>socket.destroyed));
+ }finally{
+  if(!closed)await scoped.close();
+  for(const peer of peers)peer.destroy();
+  await new Promise(resolve=>server.close(resolve));
+ }
+});
+for(const operation of ['connect','query'])test(`concurrency test cleanup rejects late pool ${operation}`,{timeout:15000},async()=>{
+ let peer,started;const received=new Promise(resolve=>{started=resolve;});
+ const server=createServer({allowHalfOpen:true},socket=>{peer=socket;socket.once('data',started);});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const scoped=boundedPublicationTestPool(`postgres://synthetic@127.0.0.1:${server.address().port}/synthetic`);
+ let socket;scoped.onConnect(client=>{socket=client.connection.stream;});
+ let closing=false;
+ try{
+  const opening=(operation==='connect'?scoped.pool.connect():scoped.pool.query('SELECT 1')).then(()=>null,error=>error);
+  await boundedPublicationWait(received,'pending connect');
+  closing=true;const ended=scoped.close();
+  peer.write(Buffer.from('5200000008000000005a0000000549','hex'));
+  assert.ok(await boundedPublicationWait(opening,'late connect rejected'));
+  await boundedPublicationWait(ended,'late connection pool close');
+  assert.equal(socket?.destroyed,true);
+ }finally{
+  peer?.destroy();
+  if(!closing)await scoped.close();
+  await new Promise(resolve=>server.close(resolve));
+ }
+});
+test('concurrency test cleanup terminates a blocked database client',{skip:!database,timeout:30000},async()=>{
+ const scoped=boundedPublicationTestPool(database),{pool}=scoped;let owner;
+ try{
+  const key=uuid();owner=await scoped.connect();const blocked=await scoped.connect();
+  await owner.query('SELECT pg_advisory_lock(hashtext($1))',[key]);
+  const waiting=blocked.query('SELECT pg_advisory_lock(hashtext($1))',[key]).then(()=>null,error=>error);
+  let isWaiting=false;for(let n=0;n<400;n++){
+   isWaiting=(await pool.query("SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",[blocked.processID])).rows[0]?.waiting===true;
+   if(isWaiting)break;await new Promise(r=>setTimeout(r,10));
+  }
+  assert.equal(isWaiting,true);
+  blocked.release(true);
+  const error=await boundedPublicationWait(waiting,'destroyed blocked client');
+  assert.match(error?.message??'',/connection terminated/i);
+  owner.release(true); // Let PostgreSQL leave the lock wait and observe the disconnect.
+  let gone=false;for(let n=0;n<400;n++){
+   gone=(await pool.query('SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1',[blocked.processID])).rows[0].n===0;
+   if(gone)break;await new Promise(r=>setTimeout(r,10));
+  }
+  assert.equal(gone,true);
+ }finally{owner?.release(true);await scoped.close();}
+});
+test('publisher/account deletion deadlock retries identical atomic deletion without duplicate rotation or audit',{skip:!database,timeout:30000},async()=>{
+ const scoped=boundedPublicationTestPool(database),{pool}=scoped;let release,publisherPID;
  try{
   const f=await seedMigration(pool),g=await addMember(pool,f);
   await pool.query('UPDATE team_memberships SET revoked_at=now() WHERE team_id=$1 AND user_id=$2',[g.input.teamID,g.accountID]);
@@ -314,7 +431,7 @@ test('publisher/account deletion deadlock retries identical atomic deletion with
   let reached;const paused=new Promise(r=>{reached=r;}),resume=new Promise(r=>{release=r;});
   let stopped=false;const errors=[];
   const instrumented={connect:async()=>{
-   const c=await pool.connect();await c.query("SET deadlock_timeout='50ms'");
+   const c=await scoped.connect();await c.query("SET deadlock_timeout='50ms'");
    return {release:()=>c.release(),query:async(sql,values)=>{
     try{const result=await c.query(sql,values);
      if(!stopped&&sql.includes('UPDATE team_memberships SET revoked_at')){stopped=true;reached();await resume;}return result;
@@ -322,14 +439,13 @@ test('publisher/account deletion deadlock retries identical atomic deletion with
    }};
   }};
   const deletion=new PostgresStore(null,instrumented).deleteAccount(g.accountID).then(value=>({value}),error=>({error}));
-  await paused;
-  const migration=new VaultMigrationStore(pool,f.config).start({...f.input,resources:[resource()]}).then(value=>({value}),error=>({error}));
-  let blocked=false;for(let n=0;n<200;n++){
-   const pending=(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'")).rows[0].n;
-   if(pending){blocked=true;break;}await new Promise(r=>setTimeout(r,5));
-  }
-  assert.equal(blocked,true);release();
-  const [deleted,prepared]=await Promise.all([deletion,migration]);
+  await boundedPublicationWait(paused,'first deletion attempt');
+  let publisherStarted;const publisherReady=new Promise(r=>{publisherStarted=r;});
+  const publisherPool={connect:async()=>{const c=await scoped.connect();publisherPID??=c.processID;publisherStarted();return c;}};
+  const migration=new VaultMigrationStore(publisherPool,f.config).start({...f.input,resources:[resource()]}).then(value=>({value}),error=>({error}));
+  await boundedPublicationWait(publisherReady,'publisher connection');
+  assert.equal(await waitForBlockedPublisher(pool,publisherPID),true);release();
+  const [deleted,prepared]=await boundedPublicationWait(Promise.all([deletion,migration]),'deadlock transactions');
   assert.ok(errors.length>=1);console.log('PUBLICATION_DELETION_DEADLOCK '+JSON.stringify(errors));
   assert.deepEqual(deleted,{value:{deleted:true}});
   // Either preparation wins before deletion, or deletion marks the source for
@@ -342,10 +458,10 @@ test('publisher/account deletion deadlock retries identical atomic deletion with
   assert.equal((await pool.query('SELECT count(*)::int n FROM users WHERE id=$1',[g.accountID])).rows[0].n,0);
   assert.equal((await pool.query("SELECT count(*)::int n FROM team_audit_events WHERE team_id=$1 AND action='team.member_account_deleted' AND target_membership_id=$2",[f.input.teamID,g.membershipID])).rows[0].n,1);
   assert.equal((await pool.query('SELECT count(*)::int n FROM shared_vault_rotation_tasks WHERE vault_id=$1 AND removed_membership_id=$2',[f.input.vaultID,g.membershipID])).rows[0].n,1);
- }finally{release?.();await pool.end();}
+ }finally{release?.();await scoped.close();}
 });
-test('publication retry fails closed when deletion wins after injected transaction conflicts',{skip:!database,timeout:15000},async()=>{
- const pool=new pg.Pool({connectionString:database,max:8});let resumeFirst,resumeSecond,secondPaused,deletionFinished;
+test('publication retry fails closed when deletion wins after injected transaction conflicts',{skip:!database,timeout:30000},async()=>{
+ const scoped=boundedPublicationTestPool(database),{pool}=scoped;let resumeFirst,resumeSecond,secondPaused,deletionFinished,publisherPID;
  try{
   const f=await seedMigration(pool),g=await addMember(pool,f);
   await pool.query('UPDATE team_memberships SET revoked_at=now() WHERE team_id=$1 AND user_id=$2',[g.input.teamID,g.accountID]);
@@ -354,13 +470,11 @@ test('publication retry fails closed when deletion wins after injected transacti
   const first=new Promise(r=>{firstPaused=r;}),second=new Promise(r=>{secondPaused=r;});
   const deletionDone=new Promise(r=>{deletionFinished=r;});
   const resumeFirstPromise=new Promise(r=>{resumeFirst=r;}),resumeSecondPromise=new Promise(r=>{resumeSecond=r;});
-  const bounded=async(p,label)=>{let timer;try{return await Promise.race([p,new Promise((_,reject)=>{
-   timer=setTimeout(()=>reject(Error(`test_wait_timeout:${label}`)),5000);
-  })]);}finally{clearTimeout(timer);}};
+  const bounded=boundedPublicationWait;
   let deletionAttempts=0,migrationAttempts=0,injectedDeletion=false,injectedPublisher=false;
   const conflict=()=>Object.assign(new Error('synthetic_transaction_conflict'),{code:'40P01'});
   const deletePool={connect:async()=>{
-   const c=await pool.connect(),attempt=++deletionAttempts;
+   const c=await scoped.connect(),attempt=++deletionAttempts;
    await c.query(`SET deadlock_timeout='${attempt===1?'50ms':'5s'}'`);
    return {release:()=>c.release(),query:async(sql,values)=>{
     const result=await c.query(sql,values);
@@ -372,7 +486,8 @@ test('publication retry fails closed when deletion wins after injected transacti
    }};
   }};
   const migrationPool={connect:async()=>{
-   const c=await pool.connect(),attempt=++migrationAttempts;
+   const c=await scoped.connect(),attempt=++migrationAttempts;
+   if(attempt===1){publisherPID=c.processID;publisherStarted();}
    return {release:()=>c.release(),query:async(sql,values)=>{
     if(attempt>1&&sql.startsWith('LOCK TABLE '))await bounded(deletionDone,'deletion');
     const result=await c.query(sql,values);
@@ -382,25 +497,25 @@ test('publication retry fails closed when deletion wins after injected transacti
     return result;
    }};
   }};
+  let publisherStarted;const publisherReady=new Promise(r=>{publisherStarted=r;});
   const deletion=new PostgresStore(null,deletePool).deleteAccount(g.accountID).then(
    value=>{deletionFinished();return {value};},error=>{deletionFinished();return {error};});
   await bounded(first,'first attempt');
   const migration=new VaultMigrationStore(migrationPool,f.config).start({...f.input,resources:[resource()]}).then(value=>({value}),error=>({error}));
-  let blocked=false;for(let n=0;n<200;n++){
-   const pending=(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'")).rows[0].n;
-   if(pending){blocked=true;break;}await new Promise(r=>setTimeout(r,5));
-  }
-  assert.equal(blocked,true);resumeFirst();
+  await bounded(publisherReady,'publisher connection');
+  assert.equal(await waitForBlockedPublisher(pool,publisherPID),true);resumeFirst();
   const [deleted,prepared]=await bounded(Promise.all([deletion,migration]),'transactions');
   assert.equal(injectedDeletion,true);assert.equal(injectedPublisher,true);
   assert.deepEqual(deleted,{value:{deleted:true}});
+  assert.equal((await pool.query('SELECT count(*)::int n FROM users WHERE id=$1',[g.accountID])).rows[0].n,0);
+  assert.equal((await pool.query('SELECT count(*)::int n FROM users WHERE id=$1',[f.accountID])).rows[0].n,1);
   assert.equal(prepared.error?.message,'migration_source_not_ready',prepared.error?.stack);
   assert.equal((await pool.query('SELECT count(*)::int n FROM vault_migration_attempts WHERE id=$1',[f.input.attemptID])).rows[0].n,0);
   assert.deepEqual((await pool.query('SELECT format_state,rotation_required FROM shared_vaults WHERE id=$1',[f.input.vaultID])).rows[0],
    {format_state:'V1_ACTIVE',rotation_required:true});
   assert.equal((await pool.query("SELECT count(*)::int n FROM team_audit_events WHERE team_id=$1 AND action='team.member_account_deleted' AND target_membership_id=$2",[f.input.teamID,g.membershipID])).rows[0].n,1);
   assert.equal((await pool.query('SELECT count(*)::int n FROM shared_vault_rotation_tasks WHERE vault_id=$1 AND removed_membership_id=$2',[f.input.vaultID,g.membershipID])).rows[0].n,1);
- }finally{resumeFirst?.();resumeSecond?.();secondPaused?.();deletionFinished?.();await pool.end();}
+ }finally{resumeFirst?.();resumeSecond?.();secondPaused?.();deletionFinished?.();await scoped.close();}
 });
 test('real HTTP viewer metadata, admin inspection, outsider, device and membership revocation matrix',{skip:!database},async()=>{
  const isolated=await isolatedPublicationDatabase(database),pool=isolated.pool;let runtime,viewer,admin;

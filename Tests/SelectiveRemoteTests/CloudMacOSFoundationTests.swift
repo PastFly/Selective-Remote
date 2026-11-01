@@ -1454,13 +1454,25 @@ struct CloudMacOSFoundationTests {
         }
         #expect(try Data(contentsOf: scopeCurrent) == foreignBytes)
 
-        // A blocked write for another Vault or directory must not block this one.
+        // Independent Vaults share an endpoint directory in production.
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
-        let blocking = try SelectiveRemoteTeamVaultFileSnapshotStore(root: directory.appending(path: "unrelated-a"), beforeCommit: {
+        let unrelatedRoot = directory.appending(path: "unrelated-vaults")
+        let blocking = try SelectiveRemoteTeamVaultFileSnapshotStore(root: unrelatedRoot, beforeCommit: {
             entered.signal()
             guard release.wait(timeout: .now() + 45) == .success else { throw CocoaError(.fileWriteUnknown) }
         })
-        let otherStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: directory.appending(path: "unrelated-b"))
+        let otherStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: unrelatedRoot)
+        let otherVaultID = UUID()
+        let otherKey = try fixture.keyWrap.vaultKey.base64URLData
+        let otherWrapper = try SelectiveRemoteTeamVaultCrypto.wrapVaultKey(otherKey, for: identity.publicKey,
+            context: .init(teamID: teamID, vaultID: otherVaultID, keyGeneration: fixture.payload.keyGeneration,
+                           membershipID: try fixture.wrapper.membershipID.uuid, membershipEpoch: fixture.wrapper.membershipEpoch,
+                           deviceID: deviceID))
+        let otherEnvelope = try SelectiveRemoteTeamVaultCrypto.encryptPayload(Data("other Vault".utf8), vaultKey: otherKey,
+            teamID: teamID, vaultID: otherVaultID, keyGeneration: fixture.payload.keyGeneration, baseRevision: 0)
+        let otherSnapshot = try SelectiveRemoteTeamVaultSnapshot(teamID: teamID, vaultID: otherVaultID, deviceID: deviceID,
+            keyGeneration: fixture.payload.keyGeneration, localRevision: 1, serverRevision: 0, syncedLocalRevision: 0,
+            envelope: otherEnvelope, wrapper: otherWrapper)
         let pending = Task {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -1472,11 +1484,21 @@ struct CloudMacOSFoundationTests {
         let reached = await withCheckedContinuation { continuation in
             DispatchQueue.global().async { continuation.resume(returning: entered.wait(timeout: .now() + 45) == .success) }
         }
-        guard reached else { release.signal(); Issue.record("The synthetic writer did not start"); return }
-        defer { release.signal() }
-        try otherStore.save(initial.snapshot, endpoint: endpoint)
+        guard reached else {
+            release.signal()
+            _ = await pending.result
+            Issue.record("The synthetic writer did not start")
+            return
+        }
+        do { try otherStore.save(otherSnapshot, endpoint: endpoint) }
+        catch {
+            release.signal()
+            _ = await pending.result
+            throw error
+        }
         release.signal()
         try await pending.value
+        #expect(try otherStore.load(endpoint: endpoint, teamID: teamID, vaultID: otherVaultID) == otherSnapshot)
     }
 
     @Test("A delayed Team stage cannot overwrite a new account's local edit", .timeLimit(.minutes(1)))
