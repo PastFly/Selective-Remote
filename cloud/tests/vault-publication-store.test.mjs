@@ -23,7 +23,7 @@ const resource=()=>({id:uuid(),kind:'HOST',parentFolderID:null,sourceOrdinal:0})
 // Keep the checked-out clients so cleanup can destroy them even on failure.
 function boundedPublicationTestPool(connectionString){
  const rawPool=new pg.Pool({connectionString,max:8,connectionTimeoutMillis:5000,statement_timeout:12000,query_timeout:15000});
- const active=new Set(),streams=new Set();let closing=false;
+ const active=new Set(),streams=new Set();let closing=false,closePromise;
  rawPool.on('connect',client=>{
   const stream=client.connection.stream;
   if(closing){stream.destroy();return;}
@@ -42,27 +42,43 @@ function boundedPublicationTestPool(connectionString){
   const client=await connect();
   try{return await client.query(...args);}catch(error){client.release(true);throw error;}finally{client.release();}
  }};
- return {pool,connect,onConnect:callback=>rawPool.on('connect',callback),close:async()=>{
+ const close=()=>{
+  if(closePromise)return closePromise;
   closing=true;
-  for(const client of [...active])client.release(true);
-  const ended=rawPool.end();
-  // pool.end() may only half-close idle connections. This is a test-only
-  // teardown: force-close even if a synthetic or broken peer never responds.
-  for(const stream of streams)stream.destroy();
-  await ended;
- }};
+  closePromise=(async()=>{
+   for(const client of [...active])client.release(true);
+   const ended=rawPool.end();
+   // pool.end() may only half-close idle connections. This is a test-only
+   // teardown: force-close even if a synthetic or broken peer never responds.
+   for(const stream of streams)stream.destroy();
+   await ended;
+  })();
+  return closePromise;
+ };
+ return {pool,connect,onConnect:callback=>rawPool.on('connect',callback),close};
 }
-async function boundedPublicationWait(promise,label){
+function publicationPoolWatchdog(scoped,timeout=25000){
+ const timer=setTimeout(()=>{scoped.close().catch(()=>{});},timeout);
+ return ()=>clearTimeout(timer);
+}
+async function boundedPublicationWait(promise,label,timeout=8000){
  let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{
-  timer=setTimeout(()=>reject(Error(`test_wait_timeout:${label}`)),8000);
+  timer=setTimeout(()=>reject(Error(`test_wait_timeout:${label}`)),timeout);
  })]);}finally{clearTimeout(timer);}
 }
+async function pollPublicationTest(predicate,label,timeout=8000){
+ let running=true;
+ try{return await boundedPublicationWait((async()=>{
+  for(let n=0;n<400&&running;n++){
+   const matched=await predicate();
+   if(!running)return false;
+   if(matched)return true;await new Promise(r=>setTimeout(r,10));
+  }
+  return false;
+ })(),label,timeout);}finally{running=false;}
+}
 async function waitForBlockedPublisher(pool,pid){
- for(let n=0;n<400;n++){
-  const pending=(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1 AND datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'",[pid])).rows[0].n;
-  if(pending)return true;await new Promise(r=>setTimeout(r,10));
- }
- return false;
+ return pollPublicationTest(async()=>(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1 AND datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'",[pid])).rows[0].n>0,'blocked publisher');
 }
 
 test('reader schema20 remains present in latest schema22',async()=>{
@@ -351,6 +367,11 @@ test('repeatable read begun before revoke finishes coherently while the next rea
   await c.query('COMMIT');await assert.rejects(f.reader.header(f.input),/publication_access_denied/);
  }finally{await c.query('ROLLBACK');c.release();await pool.end();}
 });
+test('concurrency test polling has a deadline even when a query stalls',async()=>{
+ let calls=0;
+ await assert.rejects(pollPublicationTest(()=>{calls++;return new Promise(resolve=>setTimeout(()=>resolve(false),75));},'stalled query',25),/test_wait_timeout:stalled query/);
+ await new Promise(resolve=>setTimeout(resolve,100));assert.equal(calls,1);
+});
 test('concurrency test cleanup forcibly closes active and idle nonresponding peers',{timeout:15000},async()=>{
  const peers=[],sockets=[];let queryObserved;
  const queryStarted=new Promise(resolve=>{queryObserved=resolve;});
@@ -370,8 +391,11 @@ test('concurrency test cleanup forcibly closes active and idle nonresponding pee
   const waiting=active.query('SELECT 1').then(()=>null,error=>error);
   await boundedPublicationWait(queryStarted,'synthetic active query');
   const idle=await scoped.pool.connect();idle.release();
-  closed=true;await boundedPublicationWait(scoped.close(),'nonresponding pool close');
-  assert.match((await boundedPublicationWait(waiting,'synthetic query disconnect'))?.message??'',/connection terminated/i);
+  const stopWatchdog=publicationPoolWatchdog(scoped,25);
+  try{
+   assert.match((await boundedPublicationWait(waiting,'synthetic query disconnect'))?.message??'',/connection terminated/i);
+   closed=true;await boundedPublicationWait(scoped.close(),'nonresponding pool close');
+  }finally{stopWatchdog();}
   assert.equal(sockets.length,2);assert.ok(sockets.every(socket=>socket.destroyed));
  }finally{
   if(!closed)await scoped.close();
@@ -401,29 +425,23 @@ for(const operation of ['connect','query'])test(`concurrency test cleanup reject
  }
 });
 test('concurrency test cleanup terminates a blocked database client',{skip:!database,timeout:30000},async()=>{
- const scoped=boundedPublicationTestPool(database),{pool}=scoped;let owner;
+ const scoped=boundedPublicationTestPool(database),{pool}=scoped,stopWatchdog=publicationPoolWatchdog(scoped);let owner;
  try{
   const key=uuid();owner=await scoped.connect();const blocked=await scoped.connect();
   await owner.query('SELECT pg_advisory_lock(hashtext($1))',[key]);
   const waiting=blocked.query('SELECT pg_advisory_lock(hashtext($1))',[key]).then(()=>null,error=>error);
-  let isWaiting=false;for(let n=0;n<400;n++){
-   isWaiting=(await pool.query("SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",[blocked.processID])).rows[0]?.waiting===true;
-   if(isWaiting)break;await new Promise(r=>setTimeout(r,10));
-  }
+  const isWaiting=await pollPublicationTest(async()=>(await pool.query("SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",[blocked.processID])).rows[0]?.waiting===true,'blocked query');
   assert.equal(isWaiting,true);
   blocked.release(true);
   const error=await boundedPublicationWait(waiting,'destroyed blocked client');
   assert.match(error?.message??'',/connection terminated/i);
   owner.release(true); // Let PostgreSQL leave the lock wait and observe the disconnect.
-  let gone=false;for(let n=0;n<400;n++){
-   gone=(await pool.query('SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1',[blocked.processID])).rows[0].n===0;
-   if(gone)break;await new Promise(r=>setTimeout(r,10));
-  }
+  const gone=await pollPublicationTest(async()=>(await pool.query('SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1',[blocked.processID])).rows[0].n===0,'disconnected backend');
   assert.equal(gone,true);
- }finally{owner?.release(true);await scoped.close();}
+ }finally{stopWatchdog();owner?.release(true);await scoped.close();}
 });
 test('publisher/account deletion deadlock retries identical atomic deletion without duplicate rotation or audit',{skip:!database,timeout:30000},async()=>{
- const scoped=boundedPublicationTestPool(database),{pool}=scoped;let release,publisherPID;
+ const scoped=boundedPublicationTestPool(database),{pool}=scoped,stopWatchdog=publicationPoolWatchdog(scoped);let release,publisherPID;
  try{
   const f=await seedMigration(pool),g=await addMember(pool,f);
   await pool.query('UPDATE team_memberships SET revoked_at=now() WHERE team_id=$1 AND user_id=$2',[g.input.teamID,g.accountID]);
@@ -458,10 +476,10 @@ test('publisher/account deletion deadlock retries identical atomic deletion with
   assert.equal((await pool.query('SELECT count(*)::int n FROM users WHERE id=$1',[g.accountID])).rows[0].n,0);
   assert.equal((await pool.query("SELECT count(*)::int n FROM team_audit_events WHERE team_id=$1 AND action='team.member_account_deleted' AND target_membership_id=$2",[f.input.teamID,g.membershipID])).rows[0].n,1);
   assert.equal((await pool.query('SELECT count(*)::int n FROM shared_vault_rotation_tasks WHERE vault_id=$1 AND removed_membership_id=$2',[f.input.vaultID,g.membershipID])).rows[0].n,1);
- }finally{release?.();await scoped.close();}
+ }finally{stopWatchdog();release?.();await scoped.close();}
 });
 test('publication retry fails closed when deletion wins after injected transaction conflicts',{skip:!database,timeout:30000},async()=>{
- const scoped=boundedPublicationTestPool(database),{pool}=scoped;let resumeFirst,resumeSecond,secondPaused,deletionFinished,publisherPID;
+ const scoped=boundedPublicationTestPool(database),{pool}=scoped,stopWatchdog=publicationPoolWatchdog(scoped);let resumeFirst,resumeSecond,secondPaused,deletionFinished,publisherPID;
  try{
   const f=await seedMigration(pool),g=await addMember(pool,f);
   await pool.query('UPDATE team_memberships SET revoked_at=now() WHERE team_id=$1 AND user_id=$2',[g.input.teamID,g.accountID]);
@@ -515,7 +533,7 @@ test('publication retry fails closed when deletion wins after injected transacti
    {format_state:'V1_ACTIVE',rotation_required:true});
   assert.equal((await pool.query("SELECT count(*)::int n FROM team_audit_events WHERE team_id=$1 AND action='team.member_account_deleted' AND target_membership_id=$2",[f.input.teamID,g.membershipID])).rows[0].n,1);
   assert.equal((await pool.query('SELECT count(*)::int n FROM shared_vault_rotation_tasks WHERE vault_id=$1 AND removed_membership_id=$2',[f.input.vaultID,g.membershipID])).rows[0].n,1);
- }finally{resumeFirst?.();resumeSecond?.();secondPaused?.();deletionFinished?.();await scoped.close();}
+ }finally{stopWatchdog();resumeFirst?.();resumeSecond?.();secondPaused?.();deletionFinished?.();await scoped.close();}
 });
 test('real HTTP viewer metadata, admin inspection, outsider, device and membership revocation matrix',{skip:!database},async()=>{
  const isolated=await isolatedPublicationDatabase(database),pool=isolated.pool;let runtime,viewer,admin;
