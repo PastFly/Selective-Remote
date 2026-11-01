@@ -49,6 +49,7 @@ The final-source expiry check used the same actual sheet: Preview change produce
 
 ## Production gates still open
 
+- Native V1 Team snapshot compatibility remains open: a legacy macOS process does not honor the newer conditional-write lock. The branch retains a separate encrypted snapshot, its previous state and an interrupted-commit marker, and stops when current legacy bytes differ. This detects a difference at the time of checking, not every historical change or a coordinated rollback. An interrupted marker has no supported reconciliation UI yet; an older client may still publish first, and a server write can succeed before local acknowledgement fails. Do not treat these protections as completed upgrade, downgrade or recovery acceptance.
 - V1 legacy Host, Credential, Snippet, Folder and Forwarding models have no persisted authoritative V2 registry identity. Their contextual actions explain the mapping prerequisite. The native per-Vault picker uses exact registered IDs and is available only in PREPARING because current list/exact metadata APIs reject READY/ACTIVE.
 - Personal copies create fresh V1 encrypted identities and leave the original intact; resource ACL continuation needs mapping and publication. Both ancestry drag paths stop before persistence when mapping or publication is missing.
 - READY/ACTIVE policy writes require a reviewed encrypted generation publication path and remain blocked. ACTIVE fixture rendering does not establish real key delivery or usable cryptography.

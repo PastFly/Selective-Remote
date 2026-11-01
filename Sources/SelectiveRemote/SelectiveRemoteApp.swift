@@ -14,6 +14,9 @@ extension Notification.Name {
     static let selectiveRemoteCloudSessionChanged = Notification.Name(
         "SelectiveRemote.cloudSessionChanged"
     )
+    static let selectiveRemoteCloudSessionLost = Notification.Name(
+        "SelectiveRemote.cloudSessionLost"
+    )
     static let selectiveRemoteOpenTeamHosts = Notification.Name(
         "SelectiveRemote.openTeamHosts"
     )
@@ -526,6 +529,7 @@ struct SelectiveRemoteApp: App {
             syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
             return
         }
+        let sessionEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         let profiles = model.profiles
         let snippets = TerminalCommandHistoryStore.shared.templates()
         let forwarding = model.independentPortForwards
@@ -542,6 +546,7 @@ struct SelectiveRemoteApp: App {
             await personalVaultAutoSync.schedule(
                 endpoint: endpoint,
                 deviceID: deviceID,
+                expectedSessionEpoch: sessionEpoch,
                 profiles: profiles,
                 snippets: snippets,
                 forwarding: forwarding,

@@ -41,7 +41,7 @@ for(const mutation of ['device','epoch','role','group','policy','rotation','publ
   }});
   const token='inspection-session-'+uuid();await pool.query('UPDATE sessions SET token_hash=$2 WHERE id=$1',[f.sessionID,hashSessionToken(token,pepper)]);
   server=await runtime(isolated.databaseURL,f.input.vaultID);
-  const client=createAuthenticatedVaultClient({fetchValue:(path,options)=>fetch(server.origin+path,{...options,headers:{...options?.headers,Authorization:'Bearer '+token}})});await client.restoreSession();
+  const client=createAuthenticatedVaultClient({sessionStorageValue:{getItem:()=>f.sessionID},fetchValue:(path,options)=>fetch(server.origin+path,{...options,headers:{...options?.headers,Authorization:'Bearer '+token}})});await client.restoreSession();
   const scope={teamID:f.input.teamID,vaultID:f.input.vaultID};
   const driver=createWholePublicationAccessDriver({transport:client.wholePublicationTransport(scope.teamID),sessionIdentity:()=>client.publicationIdentity(server.origin),checkpointRepository:{discover:async()=>[]}});
   await driver.getContext(scope);
@@ -78,14 +78,14 @@ for(const mutation of ['device','epoch','role','group','policy','rotation','publ
    const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE)),browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH});
    try{
     const page=await browser.newPage();page.setDefaultTimeout(5000);await page.goto(server.origin);
-    await page.evaluate(async({token,scope})=>{
+    await page.evaluate(async({token,scope,sessionID})=>{
      document.documentElement.lang='en';
      const {createAuthenticatedVaultClient}=await import('/vault-sync.js'),{createWholePublicationAccessDriver}=await import('/whole-publication-flow.js'),{createAccessManager}=await import('/access-manager.js');
-     const client=createAuthenticatedVaultClient({fetchValue:(path,options)=>fetch(path,{...options,headers:{...options?.headers,Authorization:'Bearer '+token}})});await client.restoreSession();
+     const client=createAuthenticatedVaultClient({sessionStorageValue:{getItem:()=>sessionID},fetchValue:(path,options)=>fetch(path,{...options,headers:{...options?.headers,Authorization:'Bearer '+token}})});await client.restoreSession();
      const driver=createWholePublicationAccessDriver({transport:client.wholePublicationTransport(scope.teamID),sessionIdentity:()=>client.publicationIdentity(location.origin),checkpointRepository:{discover:async()=>[]}});
      const root=document.createElement('section');root.id='real-inspection';document.body.replaceChildren(root);
      window.inspector=createAccessManager({root,client:client.accessClient(),context:{...scope,role:'owner'},publicationDriver:async()=>driver});await window.inspector.refresh();
-    },{token,scope});
+    },{token,scope,sessionID:f.sessionID});
     const root=page.locator('#real-inspection');await root.getByRole('navigation').getByRole('button',{name:'Members',exact:true}).click();
     const inspectionResponse=page.waitForResponse(r=>r.url().includes('/resources-by-principal/')||r.url().includes('inspection=resources'));
     await root.locator('.access-directory').locator('li').filter({hasText:'m_'+member.accountID.replaceAll('-','').slice(0,24)}).getByRole('button',{name:'Resources',exact:true}).click();
@@ -136,7 +136,7 @@ test('active signed Folder View inspection requires GENERAL delivery through HTT
   assert.ok(f.out.readerProjection.recipients.find(r=>r.inventory.payload.deviceID===member.deviceID).proofs.some(p=>p.resourceID===folderID&&p.part==='GENERAL'));
   const token='folder-inspection-'+uuid();await pool.query('UPDATE sessions SET token_hash=$2 WHERE id=$1',[f.sessionID,hashSessionToken(token,pepper)]);
   server=await runtime(isolated.databaseURL,f.input.vaultID);
-  const client=createAuthenticatedVaultClient({fetchValue:(path,options)=>fetch(server.origin+path,{...options,headers:{...options?.headers,Authorization:'Bearer '+token}})});await client.restoreSession();
+  const client=createAuthenticatedVaultClient({sessionStorageValue:{getItem:()=>f.sessionID},fetchValue:(path,options)=>fetch(server.origin+path,{...options,headers:{...options?.headers,Authorization:'Bearer '+token}})});await client.restoreSession();
   const scope={teamID:f.input.teamID,vaultID:f.input.vaultID},driver=createWholePublicationAccessDriver({transport:client.wholePublicationTransport(scope.teamID),sessionIdentity:()=>client.publicationIdentity(server.origin),checkpointRepository:{discover:async()=>[]}});
   await driver.getContext(scope);
   const result=await driver.effective(scope,folderID,member.accountID,member.deviceID);

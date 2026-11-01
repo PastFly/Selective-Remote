@@ -133,7 +133,7 @@ actor SelectiveRemoteVaultPublicationCoordinator {
         guard response["header"] == cache.header, response["headerHash"] == .string(cache.headerHash), response["subject"] == cache.subject, response["inventory"] == cache.inventory else { throw SelectiveRemoteCloudError.serviceError(409, "publication_changed") }
     }
     static func authenticationLoss(_ error: Error) -> Bool {
-        if case SelectiveRemoteCloudError.authenticationRequired = error { return true }
+        if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true { return true }
         if case let SelectiveRemoteCloudError.serviceError(status, _) = error { return status == 401 }
         return false
     }
@@ -147,7 +147,7 @@ actor SelectiveRemoteVaultPublicationCoordinator {
         }
     }
     static func authoritative(_ error: Error) -> Bool {
-        if case SelectiveRemoteCloudError.authenticationRequired = error { return true }
+        if authenticationLoss(error) { return true }
         if case let SelectiveRemoteCloudError.serviceError(status, code) = error { return status == 401 || status == 403 || status == 404 || code == "publication_repair_required" }
         return false
     }

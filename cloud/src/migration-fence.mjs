@@ -14,14 +14,14 @@ export class MigrationFence{
   if(!isAbsolute(path))throw Error('invalid_deployment_fence_path');
   this.path=path;this.openFile=openFile;
  }
- async records(file){
+ async records(file,{validateHistory=true}={}){
   const stat=await file.stat();
   if(!stat.isFile()||stat.size>FENCE_MAX_BYTES)throw Error('corrupt_deployment_fence');
   const bytes=await file.readFile();
   if(bytes.length>FENCE_MAX_BYTES||(bytes.length&&bytes.at(-1)!==10))throw Error('corrupt_deployment_fence');
   let parsed;try{parsed=bytes.length?bytes.toString('utf8').slice(0,-1).split('\n').map(line=>JSON.parse(line)):[];}
   catch{throw Error('corrupt_deployment_fence');}
-  const records=parsed.map(validateFenceEvent);reduceFenceEvents(records);return records;
+  const records=parsed.map(validateFenceEvent);if(validateHistory)reduceFenceEvents(records);return records;
  }
  async intent(record){
   const validated=validateFenceEvent(record);
@@ -116,7 +116,14 @@ export class MigrationFence{
   const file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
   try{const records=await this.records(file);await this.assertUnlocked();return records;}finally{await file.close();}
  }
- async snapshot(){return reduceFenceEvents(await this.readRecords());}
+ async snapshot(){
+  await this.assertUnlocked();
+  const file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{
+   const snapshot=reduceFenceEvents(await this.records(file,{validateHistory:false}));
+   await this.assertUnlocked();return snapshot;
+  }finally{await file.close();}
+ }
  async verifySchemaFloor(schemaVersion){return verifySchemaFloor(schemaVersion,await this.snapshot());}
  async verify({schemaVersion,publications}){
   const snapshot=await this.snapshot();verifySchemaFloor(schemaVersion,snapshot);

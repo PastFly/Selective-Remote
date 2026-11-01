@@ -150,16 +150,20 @@ actor SelectiveRemoteTeamVaultAutoSync {
         }
         var report = SelectiveRemoteTeamVaultAutoSyncReport()
         let cycleGeneration = generation
-        let hasSession = await remote.hasStoredSession(endpoint: endpoint)
+        let hasSession = await self.remote.hasStoredSession(endpoint: endpoint)
         guard eligible, generation == cycleGeneration else { throw CancellationError() }
         guard hasSession else {
             await snapshotConsumer([])
             return report
         }
 
-        let session = try await remote.publicationSession(endpoint: endpoint, deviceID: deviceID)
+        let session = try await self.remote.publicationSession(endpoint: endpoint, deviceID: deviceID)
         synchronizationSession = session
         try session?.check()
+        let remote: any SelectiveRemoteTeamVaultAutoSyncRemote
+        if let client = self.remote as? SelectiveRemoteCloudAPIClient, let session {
+            remote = await client.bound(to: session)
+        } else { remote = self.remote }
         if let session { try await remote.preparePublicationRetirement(session: session) }
         try session?.check()
         guard eligible, generation == cycleGeneration else { throw CancellationError() }
@@ -240,7 +244,8 @@ actor SelectiveRemoteTeamVaultAutoSync {
                     let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
                         endpoint: endpoint,
                         remote: remote,
-                        snapshots: try snapshotStore()
+                        snapshots: try snapshotStore(),
+                        session: session
                     )
                     report.wrappersGranted += try await coordinator.provisionMissingWrappers(
                         teamID: team.id,

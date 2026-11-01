@@ -5,6 +5,46 @@ import Testing
 @Suite("macOS Team Credential materialization")
 struct CloudTeamCredentialsTests {
     @MainActor
+    @Test("V1 Team projections retire only stale sessions and retain a newer account")
+    func invalidSessionCleanupPreservesNewerAccount() async throws {
+        let endpoint = URL(string: "https://team-cleanup-\(UUID()).example.invalid")!
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        let oldToken = String(repeating: "a", count: 43), newToken = String(repeating: "b", count: 43)
+        tokens.saveToken(oldToken, for: endpoint)
+        let oldSession = SelectiveRemotePublicationSession(endpoint: endpoint, accountID: UUID(), deviceID: Self.deviceID,
+                                                            token: oldToken, tokenStore: tokens)
+        var old = try Self.snapshot(records: [Self.credentialRecord()])
+        old.publicationSession = oldSession
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+        tokens.saveToken(newToken, for: endpoint)
+        let newSession = SelectiveRemotePublicationSession(endpoint: endpoint, accountID: UUID(), deviceID: Self.deviceID,
+                                                            token: newToken, tokenStore: tokens)
+        var newer = SelectiveRemoteTeamVaultMaterializedSnapshot(teamID: UUID(), teamName: "New", role: .viewer,
+            vaultID: UUID(), vaultName: "New", revision: old.revision, keyGeneration: old.keyGeneration, payload: old.payload)
+        newer.publicationSession = newSession
+        let hosts = SelectiveRemoteTeamHostStore(), snippets = SelectiveRemoteTeamSnippetStore(), credentials = SelectiveRemoteTeamCredentialStore()
+        hosts.replace(with: [old, newer]); snippets.replace(with: [old, newer]); credentials.replace(with: [old, newer])
+        let cleanup = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            hosts.clearInvalidSessions(endpoint: endpoint)
+            snippets.clearInvalidSessions(endpoint: endpoint)
+            credentials.clearInvalidSessions(endpoint: endpoint)
+        }
+        await cleanup.value
+        #expect(hosts.synchronizedVaultCount == 1)
+        #expect(snippets.synchronizedVaultCount == 1)
+        #expect(credentials.synchronizedVaultCount == 1)
+        #expect(credentials.credentials.count == 1)
+        #expect(credentials.session(teamID: newer.teamID, vaultID: newer.vaultID) === newSession)
+        credentials.removeVault(teamID: newer.teamID, vaultID: newer.vaultID, expectedSession: oldSession)
+        #expect(credentials.credentials.count == 1)
+        let delivery = try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint.absoluteString, deviceID: Self.deviceID, owner: newSession)
+        #expect(try delivery.bind(newer).publicationSession === newSession)
+        newSession.invalidate()
+        #expect(throws: CancellationError.self) { try delivery.bind(newer) }
+    }
+
+    @MainActor
     @Test("standalone Team Credentials use a separate memory-only projection")
     func materializesStandaloneCredential() throws {
         let store = SelectiveRemoteTeamCredentialStore()

@@ -3,6 +3,7 @@ import Security
 
 struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     var sessionToken: String?
+    var legacySessionRetired: Bool
     var teamDevicePrivateKeys: [String: Data]
     var personalVaultKeyMaterials: [String: Data]
     var deviceTrustRootKeys: [String: Data]
@@ -12,6 +13,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
 
     init(
         sessionToken: String? = nil,
+        legacySessionRetired: Bool = false,
         teamDevicePrivateKeys: [String: Data] = [:],
         personalVaultKeyMaterials: [String: Data] = [:],
         deviceTrustRootKeys: [String: Data] = [:],
@@ -20,6 +22,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
         deviceTrustPendingRekeys: [String: Data] = [:]
     ) {
         self.sessionToken = sessionToken
+        self.legacySessionRetired = legacySessionRetired
         self.teamDevicePrivateKeys = teamDevicePrivateKeys
         self.personalVaultKeyMaterials = personalVaultKeyMaterials
         self.deviceTrustRootKeys = deviceTrustRootKeys
@@ -30,6 +33,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
 
     var isEmpty: Bool {
         sessionToken == nil
+            && !legacySessionRetired
             && teamDevicePrivateKeys.isEmpty
             && personalVaultKeyMaterials.isEmpty
             && deviceTrustRootKeys.isEmpty
@@ -39,7 +43,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case sessionToken, teamDevicePrivateKeys, personalVaultKeyMaterials
+        case sessionToken, legacySessionRetired, teamDevicePrivateKeys, personalVaultKeyMaterials
         case deviceTrustRootKeys, deviceTrustPins, deviceTrustBootstrapBundles
         case deviceTrustPendingRekeys
     }
@@ -47,6 +51,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         sessionToken = try values.decodeIfPresent(String.self, forKey: .sessionToken)
+        legacySessionRetired = try values.decodeIfPresent(Bool.self, forKey: .legacySessionRetired) ?? false
         teamDevicePrivateKeys = try values.decodeIfPresent(
             [String: Data].self,
             forKey: .teamDevicePrivateKeys
@@ -67,7 +72,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     }
 }
 
-struct SelectiveRemoteCloudSecureEnvelopeStore {
+struct SelectiveRemoteCloudSecureEnvelopeStore: Sendable {
     static let legacyService = "local.selectiveremote.cloud.secure-envelope.v1"
     static let namespace = "cloud-secure-envelope.v1"
     private static let lock = NSLock()

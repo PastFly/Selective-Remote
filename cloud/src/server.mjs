@@ -14,7 +14,8 @@ import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
 import { MigrationFence } from './migration-fence.mjs';
-import { currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
+import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
+import { browserSessionBinding } from './browser-session-binding.mjs';
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
@@ -25,10 +26,10 @@ const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
   wholePublication: Object.freeze({ ...config.wholePublication, fence: deploymentFence }),
 }) : config;
 const service = new CloudService(store, runtimeConfig, mailer);
-async function checkDeployment() {
-  if (deploymentFence) return verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
-    fence: deploymentFence, candidate: currentCapabilities });
-}
+const checkDeployment = deploymentFence
+  ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
+    fence: deploymentFence, candidate: currentCapabilities }))
+  : async () => {};
 const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
@@ -81,7 +82,14 @@ async function route(request, response) {
   if (method === "POST" && url.pathname === "/v1/auth/login") {
     return handleAuthOperation(
       request, response, "login_ip", "login_email", service.login.bind(service), 200,
-      (result) => setBrowserSessionCookie(response, result.token),
+      async (result) => {
+        const authenticated = await service.authenticate(result.token);
+        if (!authenticated || authenticated.user_id !== result.user?.id || authenticated.device_id !== result.deviceID) {
+          throw Error("login_session_invalid");
+        }
+        response.setHeader("X-Selective-Session-Binding", authenticated.session_id);
+        setBrowserSessionCookie(response, result.token);
+      },
     );
   }
   if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
@@ -119,8 +127,15 @@ async function route(request, response) {
     }
     const session = await service.authenticate(bearer ?? cookie);
     if (!session) {
-      if (cookie) clearBrowserSessionCookie(response);
+      // A delayed response must not clear a cookie installed by another tab.
+      // Invalid and revoked sessions are rejected server-side.
       return sendError(response, 401, "unauthorized");
+    }
+    const browserBinding = browserSessionBinding({ sessionID: session.session_id, bearer, cookie, method,
+      path: url.pathname, supplied: request.headers["x-selective-session-binding"] });
+    if (!browserBinding.allowed) return sendError(response, 409, "browser_session_changed");
+    if (method === "GET" && url.pathname === "/v1/me") {
+      response.setHeader("X-Selective-Session-Binding", browserBinding.binding);
     }
     const wholeRoute=wholePublicationRoute(url.pathname,method);
     if(wholeRoute)return handleOperation(response,()=>runWholePublicationRoute(request,url,session,service,wholeRoute));
@@ -137,7 +152,6 @@ async function route(request, response) {
     });
     if (method === "POST" && url.pathname === "/v1/auth/logout") {
       await store.revokeSession(session.session_id);
-      clearBrowserSessionCookie(response);
       return empty(response, 204);
     }
     if (method === "GET" && url.pathname === "/v1/me") {
@@ -163,7 +177,6 @@ async function route(request, response) {
         response,
         async () => {
           const result = await service.deleteAccount(session, await readJSON(request, maxTeamBodyBytes));
-          clearBrowserSessionCookie(response);
           return result;
         },
       );
@@ -786,7 +799,7 @@ async function handleAuthOperation(request, response, ipScope, emailScope, opera
       if (email) await authRateLimiter.require(emailScope, email);
     }
     const result = await operation(input);
-    beforeSend?.(result);
+    if (beforeSend) await beforeSend(result);
     return result;
   }, successStatus);
 }
@@ -838,10 +851,6 @@ function sessionCookie(value, maximumAge) {
 
 function setBrowserSessionCookie(response, token) {
   response.setHeader("Set-Cookie", sessionCookie(token, config.sessionTTLDays * 86_400));
-}
-
-function clearBrowserSessionCookie(response) {
-  response.setHeader("Set-Cookie", sessionCookie("", 0));
 }
 
 function hasTrustedOrigin(request) {

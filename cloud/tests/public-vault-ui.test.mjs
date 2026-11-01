@@ -104,6 +104,7 @@ function memoryVaultRepository() {
   let deviceID = null;
   let sessionDeviceKey = null;
   let sessionUnlock = null;
+  let ownership = null;
   return {
     async load() { return snapshot ? structuredClone(snapshot) : null; },
     async save(value) { snapshot = structuredClone(value); },
@@ -116,6 +117,8 @@ function memoryVaultRepository() {
     async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
     async saveSessionUnlock(value) { sessionUnlock = structuredClone(value); },
     async deleteSessionUnlock() { sessionUnlock = null; },
+    async loadOwnershipBinding() { return ownership ? structuredClone(ownership) : null; },
+    async saveOwnershipBinding(value) { ownership = structuredClone(value); },
     rememberedSession() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
   };
 }
@@ -164,6 +167,28 @@ test("interactive browser bootstrap creates exactly one encrypted r1 for an unin
   assert.equal(result.revision, 1);
   assert.equal(uploads, 1);
   assert.equal(await vault.status(), "unlocked");
+});
+
+test("a new account can retry its own initial upload after a failed connection and reload", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const repository = memoryVaultRepository();
+  let attempts = 0;
+  const client = {
+    session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 0, envelope: null }; },
+    async putVault() {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network_unavailable");
+      return { conflict: false, revision: 1 };
+    },
+  };
+  const first = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await assert.rejects(bootstrapPersonalVault({ vault: first, client, passphrase }), /network_unavailable/u);
+  first.lock();
+  const reloaded = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  assert.deepEqual(await bootstrapPersonalVault({ vault: reloaded, client, passphrase }), { status: "uploaded", revision: 1 });
+  assert.equal(attempts, 2);
 });
 
 test("fresh-account interactive login uses one credential flow, persists trusted unlock, and restores after reload", async () => {
@@ -262,6 +287,20 @@ test("interactive login stays unlocked but reports when trusted-browser persiste
     rememberSession: async () => { throw new Error("local_vault_storage_failed"); },
   });
   assert.deepEqual(rejectedPersistence, { result: { status: "downloaded", revision: 1 }, remembered: false });
+});
+
+test("interactive login does not initialize or sync an unowned legacy local Vault", async () => {
+  let synchronizationCalls = 0;
+  let rememberCalls = 0;
+  await assert.rejects(completeInteractivePersonalVaultLogin({
+    user: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+    password: "synthetic account password",
+    activateAccountVault: async () => ({ legacyOwnershipUnverified: true }),
+    unlockAndSyncPersonalVault: async () => { synchronizationCalls += 1; },
+    rememberSession: async () => { rememberCalls += 1; },
+  }), /legacy_vault_owner_unverified/u);
+  assert.equal(synchronizationCalls, 0);
+  assert.equal(rememberCalls, 0);
 });
 
 test("an existing remote Vault is imported instead of being replaced with an empty r1", async () => {
@@ -1126,7 +1165,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /initializeHeroPreview/u);
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
   assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
-  assert.match(application, /vault\.rememberSession\(user\.id\)/u);
+  assert.match(application, /targetVault\.hasAccountOwnership\(user\.id\)/u);
+  assert.match(application, /targetVault\.rememberSession\(user\.id\)/u);
   assert.doesNotMatch(application, /try \{ await vault\.rememberSession\(user\.id\); \} catch \{\}/u);
   assert.match(application, /vault\.forgetRememberedSession\(\)/u);
   assert.match(application, /visibilitychange/u);
@@ -1299,7 +1339,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /createIndexedDBTeamVaultRepository[\s\S]*\.remove\(\)/u);
   assert.match(application, /resolveConflicts/u);
   assert.match(application, /recoveryPassphrase/u);
-  assert.doesNotMatch(`${application}\n${synchronization}\n${teamSynchronization}`, /localStorage|sessionStorage/u);
+  assert.doesNotMatch(`${application}\n${teamSynchronization}`, /localStorage|sessionStorage/u);
+  assert.doesNotMatch(synchronization, /localStorage/u);
   assert.match(synchronization, /unsupported_vault_scope/u);
   assert.match(synchronization, /credentials: "same-origin"/u);
   assert.match(teamSynchronization, /team_vault_rotation_required/u);

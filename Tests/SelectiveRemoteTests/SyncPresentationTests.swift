@@ -5,6 +5,17 @@ import Testing
 @Suite("Sync presentation")
 @MainActor
 struct SyncPresentationTests {
+    @Test("An unconfirmed session cleanup remains visible across account changes")
+    func cleanupWarningSurvivesAccountChanges() {
+        let store = SyncPresentationStore()
+        store.reportUnconfirmedSessionCleanup()
+        store.invalidateSession()
+        store.setAccount(endpoint: "https://example.invalid", deviceID: UUID().uuidString)
+        #expect(store.unconfirmedSessionCleanup)
+        store.acknowledgeUnconfirmedSessionCleanup()
+        #expect(!store.unconfirmedSessionCleanup)
+    }
+
     @Test("Aggregate preserves the most urgent scope")
     func aggregatePriority() {
         let store = SyncPresentationStore()

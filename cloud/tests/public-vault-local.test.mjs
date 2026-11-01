@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import test from "node:test";
+import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import * as vaultLocal from "../public/vault-local.js";
 
 const {
   accountVaultStorageKeys,
+  createIndexedDBVaultRepository,
   createLocalVaultController,
   prepareAccountScopedVault,
 } = vaultLocal;
@@ -22,9 +24,17 @@ function memoryRepository(initial = null, sharedSessionDevice = { key: null }) {
   let value = initial;
   let sync = null;
   let sessionUnlock = null;
+  let ownership = null;
   return {
     async load() { return value ? structuredClone(value) : null; },
     async save(next) { value = structuredClone(next); },
+    async loadLegacyState() { return { snapshot: value ? structuredClone(value) : null, sync: sync ? structuredClone(sync) : null, owner: ownership ? structuredClone(ownership) : null }; },
+    async importLegacyStateIfAbsent({ snapshot, sync: nextSync, owner }) {
+      if (value) throw new Error("local_vault_exists");
+      value = structuredClone(snapshot);
+      sync = nextSync ? structuredClone(nextSync) : null;
+      ownership = { version: 1, accountID: owner, wrappedKey: structuredClone(snapshot.envelope.wrappedKey) };
+    },
     async loadSync() { return sync ? structuredClone(sync) : null; },
     async saveSync(next) { sync = structuredClone(next); },
     async loadSessionDeviceKey() { return sharedSessionDevice.key ? structuredClone(sharedSessionDevice.key) : null; },
@@ -32,10 +42,30 @@ function memoryRepository(initial = null, sharedSessionDevice = { key: null }) {
     async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
     async saveSessionUnlock(next) { sessionUnlock = structuredClone(next); },
     async deleteSessionUnlock() { sessionUnlock = null; },
+    async loadOwnershipBinding() { return ownership ? structuredClone(ownership) : null; },
+    async saveOwnershipBinding(next) { ownership = structuredClone(next); },
     snapshot() { return value ? structuredClone(value) : null; },
     synchronization() { return sync ? structuredClone(sync) : null; },
     rememberedSession() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
+    markLegacyOwner(accountID) { ownership = { version: 1, accountID, wrappedKey: structuredClone(value.envelope.wrappedKey) }; },
   };
+}
+
+// Seed an already verified binding in synthetic fixtures; production never
+// promotes an unverified snapshot merely because a password or wrapper works.
+async function markLegacyOwner(indexedDB, accountID) {
+  const request = indexedDB.open("selective-remote-cloud", 1);
+  const database = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = database.transaction("local-vault", "readwrite"), store = tx.objectStore("local-vault");
+    const snapshot = store.get("personal");
+    snapshot.onsuccess = () => store.put({ version: 1, accountID,
+      wrappedKey: structuredClone(snapshot.result.envelope.wrappedKey) }, "personal-legacy-owner:v1");
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  database.close();
 }
 
 function controller(repository, ids = [deviceID, ...recordIDs]) {
@@ -70,12 +100,528 @@ test("Personal Vault storage keys are account-scoped by stable user ID", () => {
   const keysA = accountVaultStorageKeys(accountA);
   const keysB = accountVaultStorageKeys(accountB);
 
-  assert.deepEqual(Object.keys(keysA).sort(), ["backup", "sessionUnlock", "snapshot", "sync"]);
+  assert.deepEqual(Object.keys(keysA).sort(), ["backup", "ownership", "sessionUnlock", "snapshot", "sync"]);
   assert.notEqual(keysA.snapshot, keysB.snapshot);
   assert.notEqual(keysA.sync, keysB.sync);
   assert.notEqual(keysA.sessionUnlock, keysB.sessionUnlock);
   assert.match(keysA.snapshot, /personal-account:v1:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee:snapshot/u);
   assert.doesNotMatch(JSON.stringify(keysA), /@/u);
+});
+
+test("account ownership survives reload and cannot be transferred to a different snapshot", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const root = createIndexedDBVaultRepository(new IDBFactory());
+  const accountRepository = root.forAccount(accountA);
+  const original = controller(accountRepository);
+  await original.create(passphrase);
+  await original.bindAccountOwnership(accountA);
+  assert.equal(await original.hasAccountOwnership(accountA), true);
+  await assert.rejects(original.bindAccountOwnership(accountB), /invalid_local_vault_owner/u);
+
+  const reloaded = controller(accountRepository);
+  await reloaded.unlock(passphrase);
+  assert.equal(await reloaded.hasAccountOwnership(accountA), true);
+  const otherRepository = memoryRepository();
+  const other = controller(otherRepository);
+  await other.create(passphrase);
+  await accountRepository.save(otherRepository.snapshot());
+  const changed = controller(accountRepository);
+  await changed.unlock(passphrase);
+  assert.equal(await changed.hasAccountOwnership(accountA), false);
+});
+
+test("an unverified scoped copy is not restored or displayed even when its password and remembered key work", async () => {
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const root = createIndexedDBVaultRepository(new IDBFactory());
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  await legacy.upsert({ type: "host", data: { title: "A only", address: "a.invalid" } });
+  const target = root.forAccount(accountB);
+  await target.save(await root.load());
+  const copied = controller(target);
+  await copied.unlock(passphrase);
+  await copied.rememberSession(accountB);
+  const prepared = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: target, legacyRepository: root, cryptoValue: webcrypto,
+    readLegacyRemote: async () => ({ revision: 0, envelope: null }),
+  });
+  assert.equal(prepared.restored, false);
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(await prepared.vault.status(), "locked");
+  assert.throws(() => prepared.vault.document(), /local_vault_locked/);
+});
+
+test("a stale remembered account and matching remote cannot claim the current legacy snapshot", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const root = createIndexedDBVaultRepository(new IDBFactory());
+  const original = controller(root);
+  await original.create(passphrase);
+  await original.rememberSession(accountA);
+  const replacementRepository = memoryRepository();
+  const replacement = controller(replacementRepository);
+  await replacement.create(passphrase);
+  const remote = await replacement.prepareUpload(0);
+  await replacement.upsert({ type: "host", data: { title: "B only", address: "b.invalid" } });
+  await root.save(replacementRepository.snapshot());
+  const prepared = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: root.forAccount(accountB), legacyRepository: root,
+    passphrase, cryptoValue: webcrypto, readLegacyRemote: async () => ({ revision: 1, envelope: remote.envelope }),
+  });
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(await root.forAccount(accountB).load(), null);
+});
+
+test("concurrent tabs cannot overwrite each other's equal-revision edits or mark the wrong snapshot clean", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const initial = controller(repository);
+  await initial.create(passphrase);
+  await initial.markSynced({ serverRevision: 1, localRevision: 1 });
+  const first = controller(repository), second = controller(repository);
+  await first.unlock(passphrase);
+  await second.unlock(passphrase);
+  await first.upsert({ type: "host", data: { title: "First", address: "first.invalid" } });
+  await assert.rejects(second.upsert({ type: "host", data: { title: "Second", address: "second.invalid" } }), /local_vault_changed/);
+  const reloaded = controller(repository);
+  await reloaded.unlock(passphrase);
+  assert.equal(reloaded.document().records[0].data.address, "first.invalid");
+  assert.equal((await reloaded.syncState()).dirty, true);
+  await assert.rejects(second.markSynced({ serverRevision: 2, localRevision: 1 }), /local_vault_changed/);
+  assert.equal((await reloaded.syncState()).dirty, true);
+});
+
+test("a delayed sync confirmation cannot lower a newer confirmed server revision", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const first = controller(repository);
+  await first.create(passphrase);
+  const second = controller(repository);
+  await second.unlock(passphrase);
+  await first.markSynced({ serverRevision: 3, localRevision: 1 });
+  await assert.rejects(second.markSynced({ serverRevision: 2, localRevision: 1 }), /local_vault_sync_changed/);
+  assert.equal((await first.syncState()).serverRevision, 3);
+});
+
+test("a new scoped snapshot and its ownership are created together", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const fresh = controller(repository);
+  await fresh.create(passphrase);
+  assert.equal(await fresh.hasAccountOwnership(accountID), true);
+  const next = controller(repository);
+  await next.unlock(passphrase);
+  assert.equal(await next.hasAccountOwnership(accountID), true);
+});
+
+test("a scoped browser vault cannot remember a different account's session", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountA);
+  const vault = controller(repository);
+  await vault.create(passphrase);
+  await assert.rejects(vault.rememberSession(accountB), /invalid_session_unlock/);
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("two accounts remembering sessions concurrently converge on one browser device key", async () => {
+  const root = createIndexedDBVaultRepository(new IDBFactory());
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  let reads = 0, release;
+  const held = new Promise(resolve => { release = resolve; });
+  const waitingRepository = account => {
+    const repo = root.forAccount(account);
+    return { ...repo, loadSessionDeviceKey: async () => {
+      const existing = await repo.loadSessionDeviceKey();
+      reads += 1;
+      if (reads === 2) release();
+      await held;
+      return existing;
+    } };
+  };
+  const a = controller(waitingRepository(accountA)), b = controller(waitingRepository(accountB));
+  await a.create(passphrase);
+  await b.create(passphrase);
+  assert.deepEqual(await Promise.all([a.rememberSession(accountA), b.rememberSession(accountB)]), [true, true]);
+  const reopenedA = controller(root.forAccount(accountA)), reopenedB = controller(root.forAccount(accountB));
+  assert.equal(await reopenedA.restoreRememberedSession(accountA), true);
+  assert.equal(await reopenedB.restoreRememberedSession(accountB), true);
+});
+
+test("failed remembered-key restore cannot delete a concurrently replaced unlock record", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const first = controller(repository);
+  await first.create(passphrase);
+  await first.rememberSession(accountID);
+  const valid = await repository.loadSessionUnlock();
+  const corrupt = structuredClone(valid);
+  corrupt.ciphertext[0] ^= 1;
+  const racing = { ...repository, loadSessionUnlock: async () => {
+    await repository.saveSessionUnlock(valid);
+    return corrupt;
+  } };
+  assert.equal(await controller(racing).restoreRememberedSession(accountID), false);
+  assert.deepEqual(await repository.loadSessionUnlock(), valid);
+});
+
+test("logout cannot be undone by a delayed remembered-key write", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const racing = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    entered(); await held;
+    return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  const vault = controller(racing);
+  await vault.create(passphrase);
+  const pending = vault.rememberSession(accountID);
+  await Promise.race([started, pending.then(() => { throw new Error("remembered_session_generation_missing"); })]);
+  vault.lock();
+  await vault.forgetRememberedSession();
+  release();
+  assert.equal(await pending, false);
+  assert.equal(await repository.loadSessionUnlock(), null);
+  assert.equal(await controller(repository).restoreRememberedSession(accountID), false);
+});
+
+test("a delayed old logout cannot delete a newer remembered session", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository,
+    deleteSessionUnlock: async (...args) => { entered(); await held; return repository.deleteSessionUnlock(...args); },
+    deleteSessionUnlockIfCurrent: async (...args) => { entered(); await held; return repository.deleteSessionUnlockIfCurrent(...args); },
+  };
+  const old = controller(delayed);
+  await old.create(passphrase);
+  await old.rememberSession(accountID);
+  old.lock();
+  const forgetting = old.forgetRememberedSession();
+  await Promise.race([started, forgetting.then(() => { throw new Error("forget_hook_not_called"); })]);
+  const fresh = controller(repository);
+  await fresh.unlock(passphrase);
+  assert.equal(await fresh.rememberSession(accountID), true);
+  release();
+  await forgetting;
+  assert.ok(await repository.loadSessionUnlock());
+  assert.equal(await controller(repository).restoreRememberedSession(accountID), true);
+});
+
+test("an old logout cannot delete a newer tab's restored remembered session", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const old = controller(repository);
+  await old.create(passphrase);
+  assert.equal(await old.rememberSession(accountID), true);
+  const fresh = controller(repository);
+  assert.equal(await fresh.restoreRememberedSession(accountID), true);
+  old.lock();
+  await old.forgetRememberedSession();
+  assert.ok(await repository.loadSessionUnlock());
+  fresh.lock();
+  await fresh.forgetRememberedSession();
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("logout removes its own remembered key even when its save acknowledgement is delayed", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    const saved = await repository.saveSessionUnlockIfCurrent(...args);
+    entered(); await held; return saved;
+  } };
+  const vault = controller(delayed);
+  await vault.create(passphrase);
+  const remembering = vault.rememberSession(accountID);
+  await started;
+  vault.lock();
+  await vault.forgetRememberedSession();
+  release();
+  assert.equal(await remembering, false);
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("logout of a pending old remember preserves a newer tab's remembered key", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  const old = controller(delayed);
+  await old.create(passphrase);
+  const remembering = old.rememberSession(accountID);
+  await started;
+  const fresh = controller(repository);
+  await fresh.unlock(passphrase);
+  assert.equal(await fresh.rememberSession(accountID), true);
+  old.lock();
+  await old.forgetRememberedSession();
+  release();
+  assert.equal(await remembering, false);
+  assert.equal(await controller(repository).restoreRememberedSession(accountID), true);
+});
+
+test("an older remember read cannot replace a newer observed unlock", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release, calls = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, loadSessionUnlockState: async () => {
+    const state = await repository.loadSessionUnlockState();
+    if (++calls === 1) { entered(); await held; }
+    return state;
+  } };
+  const vault = controller(delayed);
+  await vault.create(passphrase);
+  const first = vault.rememberSession(accountID);
+  await started;
+  assert.equal(await vault.rememberSession(accountID), true);
+  release();
+  assert.equal(await first, false);
+  vault.lock();
+  await vault.forgetRememberedSession();
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("an older remember acknowledgement cannot replace a newer observed unlock", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release, calls = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    const saved = await repository.saveSessionUnlockIfCurrent(...args);
+    if (++calls === 1) { entered(); await held; }
+    return saved;
+  } };
+  const vault = controller(delayed);
+  await vault.create(passphrase);
+  const first = vault.rememberSession(accountID);
+  await started;
+  assert.equal(await vault.rememberSession(accountID), true);
+  release();
+  assert.equal(await first, true);
+  vault.lock();
+  await vault.forgetRememberedSession();
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("an unfinished old remember cannot adopt and delete a newer tab's unlock", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release, calls = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, loadSessionDeviceKey: async () => {
+    if (++calls === 2) { entered(); await held; }
+    return repository.loadSessionDeviceKey();
+  } };
+  const old = controller(delayed);
+  await old.create(passphrase);
+  assert.equal(await old.rememberSession(accountID), true);
+  const fresh = controller(repository);
+  await fresh.unlock(passphrase);
+  assert.equal(await fresh.rememberSession(accountID), true);
+  const pending = old.rememberSession(accountID);
+  await started;
+  old.lock();
+  await old.forgetRememberedSession();
+  release();
+  assert.equal(await pending, false);
+  assert.ok(await repository.loadSessionUnlock());
+  fresh.lock();
+  await fresh.forgetRememberedSession();
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("cancelling an old pending save preserves and can later remove the newer tab's key", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  let entered, release, saves = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    if (++saves === 2) { entered(); await held; }
+    return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  const old = controller(delayed);
+  await old.create(passphrase);
+  assert.equal(await old.rememberSession(accountID), true);
+  const fresh = controller(repository);
+  await fresh.unlock(passphrase);
+  assert.equal(await fresh.rememberSession(accountID), true);
+  const pending = old.rememberSession(accountID);
+  await started;
+  old.lock();
+  await old.forgetRememberedSession();
+  release();
+  assert.equal(await pending, false);
+  assert.ok(await repository.loadSessionUnlock());
+  fresh.lock();
+  await fresh.forgetRememberedSession();
+  assert.equal(await repository.loadSessionUnlock(), null);
+});
+
+test("a stale remember cannot overwrite a replacement that did not advance generation", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase);
+  await seed.rememberSession(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  const target = controller(delayed);
+  await target.unlock(passphrase);
+  const pending = target.rememberSession(accountID);
+  await started;
+  const replacement = structuredClone(await repository.loadSessionUnlock());
+  replacement.nonce[0] ^= 1;
+  // Simulates an older version that writes a record without this generation field.
+  await repository.saveSessionUnlock(replacement);
+  release();
+  assert.equal(await pending, false);
+  assert.deepEqual(await repository.loadSessionUnlock(), replacement);
+});
+
+test("lock invalidates in-flight password and session-key unlocks", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase);
+  const sessionKey = seed.sessionKey();
+  seed.lock();
+  for (const unlock of [vault => vault.unlock(passphrase), vault => vault.unlockWithSessionKey(sessionKey)]) {
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    const delayed = { ...repository, load: async () => {
+      const captured = await repository.load(); entered(); await held; return captured;
+    } };
+    const target = controller(delayed);
+    const pending = unlock(target);
+    await started;
+    target.lock();
+    release();
+    await pending.catch(() => {});
+    assert.equal(await target.status(), "locked");
+    assert.throws(() => target.document(), /local_vault_locked/u);
+  }
+});
+
+test("lock during creation or remote import cannot reopen the controller", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const source = controller(memoryRepository());
+  await source.create(passphrase);
+  const remote = await source.prepareUpload(0);
+  for (const start of [vault => vault.create(passphrase), vault => vault.importRemote({ revision: 1, envelope: remote.envelope }, passphrase)]) {
+    const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    const delayed = { ...repository, saveInitial: async (...args) => {
+      await repository.saveInitial(...args); entered(); await held;
+    } };
+    const target = controller(delayed), pending = start(target);
+    await started;
+    target.lock();
+    release();
+    await assert.rejects(pending, /local_vault_locked/u);
+    assert.equal(await target.status(), "locked");
+    assert.throws(() => target.document(), /local_vault_locked/u);
+  }
+});
+
+test("a failed ownership write aborts the new snapshot and permits a clean retry", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const idb = new IDBFactory(), repository = createIndexedDBVaultRepository(idb).forAccount(accountID);
+  const keys = accountVaultStorageKeys(accountID);
+  const opened = idb.open("selective-remote-cloud", 1);
+  opened.onupgradeneeded = () => opened.result.createObjectStore("local-vault");
+  const database = await new Promise((resolve, reject) => {
+    opened.onsuccess = () => resolve(opened.result); opened.onerror = () => reject(opened.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = database.transaction("local-vault", "readwrite");
+    tx.objectStore("local-vault").put({ stale: true }, keys.ownership);
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  database.close();
+  const put = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function(value, key) {
+    return key === keys.ownership ? this.add(value, key) : put.call(this, value, key);
+  };
+  try { await assert.rejects(controller(repository).create(passphrase), /local_vault_storage_failed/); }
+  finally { IDBObjectStore.prototype.put = put; }
+  assert.equal(await repository.load(), null);
+  const retried = controller(repository);
+  await retried.create(passphrase);
+  assert.equal(await retried.hasAccountOwnership(accountID), true);
+});
+
+test("a remote import cannot overwrite a legacy migration that wins the same empty slot", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const idb = new IDBFactory(), root = createIndexedDBVaultRepository(idb);
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  const remote = await legacy.prepareUpload(0);
+  await legacy.upsert({ type: "host", data: { title: "Unsynced", address: "unsynced.invalid" } });
+  await markLegacyOwner(idb, accountID);
+  const target = root.forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...target, saveInitial: async (...args) => { entered(); await held; return target.saveInitial(...args); } };
+  const importing = controller(delayed).importRemote({ revision: 1, envelope: remote.envelope }, passphrase);
+  await started;
+  const prepared = await prepareAccountScopedVault({
+    accountID, accountRepository: target, legacyRepository: root, passphrase, cryptoValue: webcrypto,
+    readLegacyRemote: async () => ({ revision: 1, envelope: remote.envelope }),
+  });
+  release();
+  await assert.rejects(importing, /local_vault_exists/);
+  const reopened = controller(target);
+  await reopened.unlock(passphrase);
+  assert.equal(prepared.legacyMigrated, true);
+  assert.equal(reopened.document().records[0].data.address, "unsynced.invalid");
+  assert.ok(await root.load());
+});
+
+test("a remote replacement cannot overwrite edits made after the failed local unlock", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const original = controller(repository);
+  await original.create(passphrase);
+  const concurrent = controller(repository);
+  await concurrent.unlock(passphrase);
+  const remote = controller(memoryRepository());
+  const newPassphrase = "a different synthetic recovery password";
+  await remote.create(newPassphrase);
+  const envelope = (await remote.prepareUpload(0)).envelope;
+  const replacement = controller(repository);
+  await assert.rejects(replacement.unlock(newPassphrase));
+  await concurrent.upsert({ type: "host", data: { title: "Keep", address: "keep.invalid" } });
+  await assert.rejects(replacement.replaceLockedWithRemote({ revision: 1, envelope }, newPassphrase), /local_vault_changed/);
+  const reloaded = controller(repository);
+  await reloaded.unlock(passphrase);
+  assert.equal(reloaded.document().records[0].data.address, "keep.invalid");
+  assert.equal((await reloaded.syncState()).dirty, true);
 });
 
 test("a foreign legacy snapshot is preserved and not migrated for a new account", async () => {
@@ -100,12 +646,267 @@ test("a foreign legacy snapshot is preserved and not migrated for a new account"
   assert.deepEqual(legacyRepository.snapshot(), before);
 });
 
+test("a different account with the same password cannot claim a remembered legacy Vault", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const legacyRepository = memoryRepository();
+  const legacy = controller(legacyRepository);
+  await legacy.create(passphrase);
+  await legacy.upsert({ type: "host", data: { title: "A only", address: "a.invalid" } });
+  await legacy.rememberSession(accountA);
+  const before = legacyRepository.snapshot();
+  const target = memoryRepository();
+
+  const prepared = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: target, legacyRepository, passphrase, cryptoValue: webcrypto,
+  });
+
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(await prepared.vault.status(), "empty");
+  assert.equal(target.snapshot(), null);
+  assert.deepEqual(legacyRepository.snapshot(), before);
+});
+
+test("an unbound legacy Vault is retained until its account ownership is proven", async () => {
+  const legacyRepository = memoryRepository();
+  const legacy = controller(legacyRepository);
+  await legacy.create(passphrase);
+  const before = legacyRepository.snapshot();
+  const target = memoryRepository();
+  const prepared = await prepareAccountScopedVault({
+    accountID: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    accountRepository: target, legacyRepository, passphrase, cryptoValue: webcrypto,
+  });
+
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(target.snapshot(), null);
+  assert.deepEqual(legacyRepository.snapshot(), before);
+});
+
+test("an unrelated remote key cannot establish legacy Vault ownership", async () => {
+  const legacyRepository = memoryRepository();
+  const legacy = controller(legacyRepository);
+  await legacy.create(passphrase);
+  const otherRepository = memoryRepository();
+  const other = controller(otherRepository);
+  await other.create(passphrase);
+  const remote = await other.prepareUpload(0);
+  const before = legacyRepository.snapshot();
+  const target = memoryRepository();
+
+  const prepared = await prepareAccountScopedVault({
+    accountID: "ffffffff-ffff-4fff-8fff-ffffffffffff", accountRepository: target,
+    legacyRepository, passphrase, cryptoValue: webcrypto,
+    readLegacyRemote: async () => ({ revision: 1, envelope: remote.envelope }),
+  });
+
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(target.snapshot(), null);
+  assert.deepEqual(legacyRepository.snapshot(), before);
+});
+
+test("a remote copy contaminated by a prior account mix-up cannot prove legacy ownership", async () => {
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const legacyRepository = memoryRepository();
+  const ownerA = controller(legacyRepository);
+  await ownerA.create(passphrase);
+  await ownerA.upsert({ type: "host", data: { title: "Only A", address: "a.invalid" } });
+  // An older client could already have uploaded A's envelope to B when their
+  // passphrases matched. The remote copy therefore supplies no provenance.
+  const copiedToB = await ownerA.prepareUpload(0);
+  const target = memoryRepository();
+  const prepared = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: target, legacyRepository,
+    passphrase, cryptoValue: webcrypto,
+    readLegacyRemote: async () => ({ revision: 1, envelope: copiedToB.envelope }),
+  });
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(await target.load(), null);
+  assert.equal(await prepared.vault.status(), "empty");
+});
+
+test("a legacy remembered login created after an account mix-up is not ownership proof", async () => {
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const legacyRepository = memoryRepository();
+  const ownerA = controller(legacyRepository);
+  await ownerA.create(passphrase);
+  await ownerA.rememberSession(accountB);
+  const target = memoryRepository();
+  const prepared = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: target, legacyRepository, cryptoValue: webcrypto,
+  });
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(await target.load(), null);
+});
+
+test("a matching remote wrapper preserves an unbound legacy Vault without importing it", async () => {
+  const legacyRepository = memoryRepository();
+  const legacy = controller(legacyRepository);
+  await legacy.create(passphrase);
+  await legacy.upsert({ type: "host", data: { title: "Existing", address: "existing.invalid" } });
+  const remote = await legacy.prepareUpload(0);
+  const before = legacyRepository.snapshot();
+  const target = memoryRepository();
+  const prepared = await prepareAccountScopedVault({
+    accountID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", accountRepository: target,
+    legacyRepository, passphrase, cryptoValue: webcrypto,
+    readLegacyRemote: async () => ({ revision: 1, envelope: remote.envelope }),
+  });
+
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(target.snapshot(), null);
+  assert.deepEqual(legacyRepository.snapshot(), before);
+});
+
+test("legacy migration cannot overwrite an account Vault created in another tab", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const idb = new IDBFactory(), root = createIndexedDBVaultRepository(idb);
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  const before = await root.load();
+  const remote = await legacy.prepareUpload(0);
+  const concurrent = memoryRepository();
+  await controller(concurrent).create(passphrase);
+  const otherSnapshot = concurrent.snapshot();
+  const target = root.forAccount(accountID);
+  await markLegacyOwner(idb, accountID);
+  const racing = { ...target, importLegacyStateIfAbsent: async (...args) => {
+    await target.save(otherSnapshot);
+    return target.importLegacyStateIfAbsent(...args);
+  } };
+
+  await assert.rejects(prepareAccountScopedVault({
+    accountID, accountRepository: racing, legacyRepository: root, passphrase, cryptoValue: webcrypto,
+  }), /local_vault_exists/u);
+  assert.deepEqual(await target.load(), otherSnapshot);
+  assert.deepEqual(await root.load(), before);
+});
+
+test("legacy ownership verification stays bound to the exact captured snapshot", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const root = createIndexedDBVaultRepository(new IDBFactory());
+  const first = controller(root);
+  await first.create(passphrase);
+  await first.rememberSession(accountA);
+  const captured = await root.loadLegacyState();
+
+  const secondRepository = memoryRepository();
+  await controller(secondRepository).create(passphrase);
+  await root.save(secondRepository.snapshot());
+  const second = controller(root);
+  await second.unlock(passphrase);
+  await second.rememberSession(accountB);
+  const staleRead = { ...root, loadLegacyState: async () => structuredClone(captured) };
+  const target = root.forAccount(accountB);
+
+  const prepared = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: target, legacyRepository: staleRead, passphrase, cryptoValue: webcrypto,
+  });
+  assert.equal(prepared.legacyOwnershipUnverified, true);
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(await target.load(), null);
+});
+
+test("a verified legacy owner lets another account use its own empty Vault", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const idb = new IDBFactory(), root = createIndexedDBVaultRepository(idb);
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  const remote = await legacy.prepareUpload(0);
+  await markLegacyOwner(idb, accountA);
+  const first = await prepareAccountScopedVault({
+    accountID: accountA, accountRepository: root.forAccount(accountA), legacyRepository: root,
+    passphrase, cryptoValue: webcrypto, readLegacyRemote: async () => ({ revision: 1, envelope: remote.envelope }),
+  });
+  assert.equal(first.legacyMigrated, true);
+  const second = await prepareAccountScopedVault({
+    accountID: accountB, accountRepository: root.forAccount(accountB), legacyRepository: root,
+    passphrase, cryptoValue: webcrypto, readLegacyRemote: async () => ({ revision: 0, envelope: null }),
+  });
+  assert.equal(second.legacyMigrated, false);
+  assert.notEqual(second.legacyOwnershipUnverified, true);
+  assert.equal(await second.vault.status(), "empty");
+});
+
+test("verified legacy restore preserves the source remembered record during migration", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const idb = new IDBFactory(), root = createIndexedDBVaultRepository(idb);
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  assert.equal(await legacy.rememberSession(accountID), true);
+  await markLegacyOwner(idb, accountID);
+  const before = await root.loadSessionUnlockState();
+  const migrated = await prepareAccountScopedVault({
+    accountID, accountRepository: root.forAccount(accountID), legacyRepository: root, cryptoValue: webcrypto,
+  });
+  assert.equal(migrated.legacyMigrated, true);
+  assert.equal(migrated.restored, true);
+  assert.deepEqual(await root.loadSessionUnlockState(), before);
+  assert.equal(await migrated.vault.status(), "unlocked");
+});
+
+test("legacy migration stops if another tab changes the captured snapshot", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const idb = new IDBFactory(), root = createIndexedDBVaultRepository(idb);
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  const remote = await legacy.prepareUpload(0);
+  const other = memoryRepository();
+  await controller(other).create(passphrase);
+  const replacement = other.snapshot();
+  const target = root.forAccount(accountID);
+  await markLegacyOwner(idb, accountID);
+  const racing = { ...target, importLegacyStateIfAbsent: async (...args) => {
+    await root.save(replacement);
+    return target.importLegacyStateIfAbsent(...args);
+  } };
+  await assert.rejects(prepareAccountScopedVault({
+    accountID, accountRepository: racing, legacyRepository: root, passphrase, cryptoValue: webcrypto,
+  }), /legacy_snapshot_changed/u);
+  assert.deepEqual(await root.load(), replacement);
+  assert.equal(await target.load(), null);
+});
+
+test("legacy migration stops if its ownership proof disappears before commit", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const idb = new IDBFactory(), root = createIndexedDBVaultRepository(idb);
+  const legacy = controller(root);
+  await legacy.create(passphrase);
+  const before = await root.load(), target = root.forAccount(accountID);
+  await markLegacyOwner(idb, accountID);
+  const racing = { ...target, importLegacyStateIfAbsent: async (...args) => {
+    const request = idb.open("selective-remote-cloud", 1);
+    const database = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const tx = database.transaction("local-vault", "readwrite");
+      tx.objectStore("local-vault").delete("personal-legacy-owner:v1");
+      tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+    });
+    database.close();
+    return target.importLegacyStateIfAbsent(...args);
+  } };
+  await assert.rejects(prepareAccountScopedVault({
+    accountID, accountRepository: racing, legacyRepository: root, passphrase, cryptoValue: webcrypto,
+  }), /local_vault_owner_unverified/u);
+  assert.equal(await target.load(), null);
+  assert.deepEqual(await root.load(), before);
+});
+
 test("a same-account legacy snapshot migrates only after successful unwrap", async () => {
   const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const legacyRepository = memoryRepository();
   const legacyVault = controller(legacyRepository);
   await legacyVault.create(passphrase);
   await legacyVault.upsert({ type: "host", data: { title: "Legacy", address: "legacy.invalid" } });
+  await legacyVault.rememberSession(accountID);
+  legacyRepository.markLegacyOwner(accountID);
   await legacyRepository.saveSync({ localRevision: 2, serverRevision: 2 });
   const before = legacyRepository.snapshot();
   const accountRepository = memoryRepository();
@@ -134,6 +935,7 @@ test("remembered restore is account-bound and a wrong account leaves legacy stat
   const legacyVault = controller(legacyRepository);
   await legacyVault.create(passphrase);
   await legacyVault.rememberSession(accountA);
+  legacyRepository.markLegacyOwner(accountA);
   legacyVault.lock();
   const rememberedBefore = legacyRepository.rememberedSession();
 
@@ -168,6 +970,7 @@ test("same-account remembered migration persists an account-scoped unlock for th
   const legacyVault = controller(legacyRepository);
   await legacyVault.create(passphrase);
   assert.equal(await legacyVault.rememberSession(accountID), true);
+  legacyRepository.markLegacyOwner(accountID);
   legacyVault.lock();
   const legacyRemembered = legacyRepository.rememberedSession();
 

@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import Foundation
 import Testing
@@ -6,6 +7,55 @@ import Testing
 @Suite("Personal Vault remote revision checks", .serialized)
 @MainActor
 struct PersonalVaultAutoSyncCheckTests {
+    @Test("A synchronous snippet observer may capture the current session during an incoming commit", .timeLimit(.minutes(1)))
+    func snippetObserverCanCaptureEpochDuringCommit() throws {
+        let endpoint = URL(string: "https://observer-\(UUID()).example.invalid")!
+        let expected = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        let changed = PassthroughSubject<Void, Never>()
+        var observed: UUID?
+        let observation = changed.sink { observed = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) }
+        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: endpoint, expectedEpoch: expected) {
+            changed.send(())
+        }
+        #expect(observed == expected)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test("An outgoing snapshot captured before account switch cannot enter the new account", .timeLimit(.minutes(1)))
+    func outgoingSnapshotQueuedBeforeAccountSwitchIsDenied() async throws {
+        let puts = PersonalCheckRequests()
+        let fixture = try PersonalCheckFixture(remoteRevision: 5, verifyAuthorization: false, uploadResponse: { request, remote, _ in
+            puts.record()
+            return (try remote.acknowledge(request), try #require(HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )))
+        })
+        let capturedEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint)
+        let capturedSnippet = Self.localSnippet
+        let oldMaterial = try #require(fixture.keys.value)
+        let newMaterial = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: UUID(uuidString: "88888888-8888-4888-8888-888888888888")!,
+            vaultKey: Data(repeating: 0x55, count: 32), wrappedKey: oldMaterial.wrappedKey,
+            revision: 5, documentHash: oldMaterial.documentHash
+        )
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: Self.endpoint)
+        fixture.tokens.saveToken(String(repeating: "n", count: 43), for: Self.endpoint)
+        fixture.keys.save(newMaterial, endpoint: Self.endpoint, deviceID: Self.deviceID)
+        try fixture.remote.replaceVault(newMaterial, revision: 5)
+
+        // This models an invocation carrying a previously captured snapshot
+        // that enters the actor only after the next account is established.
+        let completion = await fixture.sync.schedule(
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: capturedEpoch, profiles: [],
+            snippets: [capturedSnippet], forwarding: [], sshKeys: []
+        )
+        await completion.value
+        #expect(puts.count == 0)
+        #expect(fixture.keys.value?.vaultID == newMaterial.vaultID)
+        #expect(fixture.keys.value?.revision == newMaterial.revision)
+    }
+
     @Test("Changing accounts immediately before an upload cannot write into the new account", .timeLimit(.minutes(1)))
     func accountChangeImmediatelyBeforeUploadIsDenied() async throws {
         let putRequests = PersonalCheckRequests()
@@ -27,7 +77,8 @@ struct PersonalVaultAutoSyncCheckTests {
             }
         }
         let task = await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [Self.localSnippet], forwarding: [], sshKeys: []
         )
         await task.value
@@ -192,7 +243,8 @@ struct PersonalVaultAutoSyncCheckTests {
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [snippet], forwarding: [], sshKeys: [],
             onFailure: { failed.continuation.yield($0) }
         )
@@ -236,7 +288,8 @@ struct PersonalVaultAutoSyncCheckTests {
     func unchangedOutgoingSnapshotConfirms() async throws {
         let fixture = try PersonalCheckFixture(remoteRevision: 5)
         await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [], forwarding: [], sshKeys: []
         )
         let pending = try await check(fixture)
@@ -268,7 +321,8 @@ struct PersonalVaultAutoSyncCheckTests {
             return (body, response)
         })
         await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [Self.localSnippet], forwarding: [], sshKeys: []
         )
         for await _ in uploaded.stream { break }
@@ -310,12 +364,14 @@ struct PersonalVaultAutoSyncCheckTests {
         })
         var events = started.stream.makeAsyncIterator()
         let firstCompletion = await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [Self.localSnippet], forwarding: [], sshKeys: []
         )
         _ = await events.next()
         await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [Self.localSnippet], forwarding: [], sshKeys: [],
             onFailure: { failed.continuation.yield($0) }
         )
@@ -348,7 +404,8 @@ struct PersonalVaultAutoSyncCheckTests {
             )))
         })
         let completion = await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [Self.localSnippet], forwarding: [], sshKeys: []
         )
         await completion.value
@@ -414,7 +471,8 @@ struct PersonalVaultAutoSyncCheckTests {
             )))
         })
         let failedUpload = await fixture.sync.schedule(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint), profiles: [],
             snippets: [Self.localSnippet], forwarding: [], sshKeys: []
         )
         await failedUpload.value

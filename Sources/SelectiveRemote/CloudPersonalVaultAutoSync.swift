@@ -340,16 +340,20 @@ actor SelectiveRemotePersonalVaultAutoSync {
     func schedule(
         endpoint: URL,
         deviceID: UUID,
+        expectedSessionEpoch: UUID,
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
         sshKeys: [SSHKeyRecord],
         onFailure: (@Sendable (SyncIssue) async -> Void)? = nil
     ) -> Task<Void, Never> {
+        guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == expectedSessionEpoch else {
+            return Task { }
+        }
         pending?.cancel()
         let account = Account(endpoint: endpoint, deviceID: deviceID)
         let uploadID = UUID()
-        let sessionEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        let sessionEpoch = expectedSessionEpoch
         let vaultID = (try? keyStore.material(endpoint: endpoint, deviceID: deviceID))?.vaultID
         unconfirmedUploads[account] = UploadState(id: uploadID, sessionEpoch: sessionEpoch, vaultID: vaultID)
         pending = Task {

@@ -532,11 +532,26 @@ export async function loginWithDeviceConflictRetry({
   throw new Error("login_failed");
 }
 
-export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch } = {}) {
+export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, sessionStorageValue = undefined } = {}) {
   if (typeof fetchValue !== "function") throw new Error("invalid_fetch");
+  let bindingStorage = sessionStorageValue;
+  if (bindingStorage === undefined) {
+    try { bindingStorage = globalThis.sessionStorage ?? null; } catch { bindingStorage = null; }
+  }
+  const bindingStorageKey = "selective-remote:browser-session-binding:v1";
+  function readStoredBinding() {
+    try { return bindingStorage?.getItem(bindingStorageKey) ?? null; } catch { return null; }
+  }
+  function writeStoredBinding(binding) {
+    try {
+      if (binding) bindingStorage?.setItem(bindingStorageKey, binding);
+      else bindingStorage?.removeItem(bindingStorageKey);
+    } catch { /* A memory-only session remains usable until this tab closes. */ }
+  }
   let token = null;
   let user = null;
   let currentDeviceID = null;
+  let cookieSessionBinding = null;
   let sessionEpoch = 0;
   const identityListeners = new Set();
   function invalidateIdentity() { sessionEpoch++; for (const listener of identityListeners) listener(); }
@@ -549,14 +564,16 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         ...(options.headers ?? {}),
         Accept: "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(!token && cookieSessionBinding ? { "X-Selective-Session-Binding": cookieSessionBinding } : {}),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
       },
       cache: "no-store",
       credentials: "same-origin",
       referrerPolicy: "no-referrer",
     });
-    if (response.status === 401) {
+    if (response.status === 401 || response.status === 409) {
       const result = await response.clone().json().catch(() => null);
+      if (response.status === 409 && result?.error !== "browser_session_changed") return response;
       if (reauthenticationErrors.includes(result?.error)) return response;
       const error = new Error("authentication_required");
       if (requestEpoch === sessionEpoch) {
@@ -565,6 +582,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         token = null;
         user = null;
         currentDeviceID = null;
+        cookieSessionBinding = null;
         invalidateIdentity();
       }
       throw error;
@@ -632,6 +650,12 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
 
     async login({ email, password, deviceID, publicKey = null }) {
       invalidateIdentity();
+      const loginEpoch = sessionEpoch;
+      token = null;
+      user = null;
+      currentDeviceID = null;
+      cookieSessionBinding = null;
+      writeStoredBinding(null);
       const normalizedDeviceID = String(deviceID ?? "").toLowerCase();
       if (!uuidPattern.test(normalizedDeviceID)) throw new Error("invalid_device");
       const normalizedPublicKey = publicKey === null ? null : normalizeTeamDevicePublicKey(publicKey);
@@ -654,6 +678,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         referrerPolicy: "no-referrer",
       });
       const result = await responseJSON(response, "login_failed");
+      if (loginEpoch !== sessionEpoch) throw new Error("authentication_required");
       if (!response.ok) {
         const deviceError = response.status === 409 && result.error === "device_conflict"
           || response.status === 400 && result.error === "invalid_device";
@@ -669,6 +694,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       }
       if (String(result.deviceID ?? "").toLowerCase() !== normalizedDeviceID) throw new Error("login_failed");
       token = result.token;
+      cookieSessionBinding = null;
+      const loginBinding = response.headers.get("X-Selective-Session-Binding");
+      writeStoredBinding(uuidPattern.test(String(loginBinding ?? "")) ? String(loginBinding).toLowerCase() : null);
       currentDeviceID = normalizedDeviceID;
       user = {
         id: String(result.user.id).toLowerCase(),
@@ -681,12 +709,20 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
 
     async restoreSession() {
       invalidateIdentity();
+      const restoreEpoch = sessionEpoch;
+      cookieSessionBinding = null;
       const response = await authorizedRequest("/v1/me");
       if (!response.ok) throw new Error("authentication_required");
       const result = await responseJSON(response, "authentication_required");
+      const binding = response.headers.get("X-Selective-Session-Binding");
+      if (restoreEpoch !== sessionEpoch || (!token && (!uuidPattern.test(String(binding ?? ""))
+          || String(readStoredBinding() ?? "").toLowerCase() !== String(binding).toLowerCase()))) {
+        throw new Error("authentication_required");
+      }
       if (!uuidPattern.test(String(result.id ?? "")) || !uuidPattern.test(String(result.deviceID ?? ""))) {
         throw new Error("authentication_required");
       }
+      cookieSessionBinding = token ? null : String(binding).toLowerCase();
       currentDeviceID = String(result.deviceID).toLowerCase();
       user = {
         id: String(result.id).toLowerCase(),
@@ -700,6 +736,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     publicationIdentity(endpoint = globalThis.location?.origin) {
       return user ? {endpoint, accountID:user.id, deviceID:currentDeviceID, sessionEpoch:String(sessionEpoch)} : null;
     },
+    sessionGeneration() { return String(sessionEpoch); },
     subscribePublicationIdentity(listener) { identityListeners.add(listener); return () => identityListeners.delete(listener); },
     publicationTransport() {
       async function json(scope, route, query = null) {
@@ -769,12 +806,16 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
 
     async logout() {
       const logoutToken = token;
+      const logoutBinding = cookieSessionBinding;
       token = null;
       user = null;
       currentDeviceID = null;
+      cookieSessionBinding = null;
+      writeStoredBinding(null);
       invalidateIdentity();
       await authorizedRequest("/v1/auth/logout", { method: "POST",
-        ...(logoutToken ? {headers:{Authorization:`Bearer ${logoutToken}`}} : {}) });
+        headers: { ...(logoutToken ? { Authorization: `Bearer ${logoutToken}` } : {}),
+          ...(logoutBinding ? { "X-Selective-Session-Binding": logoutBinding } : {}) } });
     },
 
     async deleteAccount({ email, password }) {
@@ -1464,15 +1505,40 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   };
 }
 
-async function uploadCurrent(client, vault, scope, baseRevision) {
+export function capturePersonalVaultSession(client) {
+  const session = client?.session();
+  if (!session?.id) throw new Error("authentication_required");
+  const identity = typeof client.publicationIdentity === "function" ? client.publicationIdentity() : null;
+  if (typeof client.publicationIdentity === "function" && (!identity || identity.accountID !== session.id
+      || !uuidPattern.test(String(identity.deviceID ?? "")) || typeof identity.sessionEpoch !== "string"
+      || !identity.sessionEpoch)) {
+    throw new Error("authentication_required");
+  }
+  return {
+    accountID: session.id,
+    requireCurrent() {
+      if (client.session()?.id !== session.id) throw new Error("authentication_required");
+      if (identity) {
+        const current = client.publicationIdentity();
+        if (!current || current.accountID !== identity.accountID || current.deviceID !== identity.deviceID
+            || current.sessionEpoch !== identity.sessionEpoch) throw new Error("authentication_required");
+      }
+    },
+  };
+}
+
+async function uploadCurrent(client, vault, scope, baseRevision, requireCurrentSession) {
   const prepared = await vault.prepareUpload(baseRevision);
+  requireCurrentSession();
   const result = await client.putVault(scope, prepared.envelope);
+  requireCurrentSession();
   if (result.conflict) return { status: "remote_changed", remoteRevision: result.revision };
   if (result.revision !== baseRevision + 1) throw new Error("invalid_remote_revision");
   const state = await vault.markSynced({
     serverRevision: result.revision,
     localRevision: prepared.localRevision,
   });
+  requireCurrentSession();
   return { status: state.dirty ? "uploaded_with_new_local_changes" : "uploaded", revision: result.revision };
 }
 
@@ -1483,36 +1549,50 @@ export async function synchronizeVault({
   recoveryPassphrase = null,
 } = {}) {
   normalizedScope(scope);
-  if (!client?.session()) throw new Error("authentication_required");
+  const session = capturePersonalVaultSession(client);
+  const requireCurrentSession = () => session.requireCurrent();
   if (!vault || typeof vault.status !== "function") throw new Error("invalid_local_vault");
 
   const remote = await client.getVault(scope);
+  requireCurrentSession();
   const localStatus = await vault.status();
+  requireCurrentSession();
   if (localStatus === "empty") {
     if (remote.revision === 0) return { status: "empty" };
     if (!recoveryPassphrase) throw new Error("recovery_passphrase_required");
     await vault.importRemote(remote, recoveryPassphrase);
+    requireCurrentSession();
     return { status: "downloaded", revision: remote.revision };
   }
   if (localStatus !== "unlocked") throw new Error("local_vault_locked");
 
   const state = await vault.syncState();
+  requireCurrentSession();
   if (remote.revision < state.serverRevision) throw new Error("remote_revision_regressed");
-  if (remote.revision === 0) return uploadCurrent(client, vault, scope, 0);
+  if (remote.revision === 0) {
+    if (typeof vault.hasAccountOwnership !== "function" || !await vault.hasAccountOwnership(session.accountID)) {
+      throw new Error("local_vault_owner_unverified");
+    }
+    requireCurrentSession();
+    return uploadCurrent(client, vault, scope, 0, requireCurrentSession);
+  }
+  if (typeof vault.verifyRemoteWrapper !== "function") throw new Error("invalid_local_vault");
+  vault.verifyRemoteWrapper(remote);
   if (remote.revision === state.serverRevision) {
     return state.dirty
-      ? uploadCurrent(client, vault, scope, remote.revision)
+      ? uploadCurrent(client, vault, scope, remote.revision, requireCurrentSession)
       : { status: "up_to_date", revision: remote.revision };
   }
 
   const merged = await vault.mergeRemote(remote);
+  requireCurrentSession();
   if (merged.conflicts.length > 0) {
     return { status: "conflict", revision: remote.revision, conflicts: merged.conflicts };
   }
-  const afterMerge = await vault.syncState();
   if (merged.matchesRemote) {
-    await vault.markSynced({ serverRevision: remote.revision, localRevision: afterMerge.localRevision });
-    return { status: "downloaded", revision: remote.revision };
+    const confirmed = await vault.markSynced({ serverRevision: remote.revision, localRevision: merged.localRevision });
+    requireCurrentSession();
+    return { status: confirmed.dirty ? "downloaded_with_new_local_changes" : "downloaded", revision: remote.revision };
   }
-  return uploadCurrent(client, vault, scope, remote.revision);
+  return uploadCurrent(client, vault, scope, remote.revision, requireCurrentSession);
 }

@@ -52,7 +52,7 @@ enum SyncIssue: Equatable, Sendable {
                  .legacyMigrationRequiresLocalData: return .unknownFailure
             }
         }
-        if error as? SelectiveRemoteCloudError == .authenticationRequired {
+        if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
             return .sessionExpired
         }
         return .unknownFailure
@@ -106,9 +106,13 @@ final class SyncPresentationStore: ObservableObject {
 
     @Published private(set) var personal = SyncScopeSnapshot.unknown(.personal)
     @Published private(set) var team = SyncScopeSnapshot.unknown(.team)
+    @Published private(set) var unconfirmedSessionCleanup = false
     private(set) var generation = UUID()
     private var accountKey: String?
     private var activeTeamCycle: (token: UUID, generation: UUID)?
+
+    func reportUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = true }
+    func acknowledgeUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = false }
 
     var aggregate: SyncLifecycle {
         let scopes = [personal.lifecycle, team.lifecycle]

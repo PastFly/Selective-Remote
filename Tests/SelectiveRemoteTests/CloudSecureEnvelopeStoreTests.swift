@@ -6,6 +6,57 @@ import Testing
 struct CloudSecureEnvelopeStoreTests {
     private let endpoint = URL(string: "https://synthetic-envelope-update.example.invalid")!
 
+    @Test("A failed legacy deletion cannot restore a logged-out token")
+    func legacyDeleteFailureLeavesDurableLogoutTombstone() throws {
+        let current = String(repeating: "c", count: 43)
+        let old = String(repeating: "o", count: 43)
+        let memory = EnvelopeUpdateMemory(.init(sessionToken: current))
+        let store = SelectiveRemoteCloudKeychainTokenStore(
+            envelopeStore: memory.store(),
+            legacyReader: { _ in old },
+            legacyRemover: { _ in throw CocoaError(.fileWriteNoPermission) }
+        )
+
+        #expect(throws: CocoaError.self) { try store.removeToken(for: endpoint) }
+        #expect(memory.value?.sessionToken == nil)
+        #expect(memory.value?.legacySessionRetired == true)
+        #expect(try store.token(for: endpoint) == nil)
+
+        let reopened = SelectiveRemoteCloudKeychainTokenStore(
+            envelopeStore: memory.store(), legacyReader: { _ in old }, legacyRemover: { _ in }
+        )
+        #expect(try reopened.token(for: endpoint) == nil)
+        try reopened.saveToken(String(repeating: "n", count: 43), for: endpoint)
+        #expect(try reopened.token(for: endpoint) == String(repeating: "n", count: 43))
+        try reopened.removeToken(for: endpoint)
+        #expect(try reopened.token(for: endpoint) == nil)
+    }
+
+    @Test("A 401 retires the token even when legacy Keychain deletion fails")
+    func unauthorizedRetiresTokenDespiteLegacyDeleteFailure() async throws {
+        let endpoint = URL(string: "https://synthetic-401-\(UUID()).example.invalid")!
+        let current = String(repeating: "c", count: 43)
+        let memory = EnvelopeUpdateMemory(.init(sessionToken: current))
+        let store = SelectiveRemoteCloudKeychainTokenStore(
+            envelopeStore: memory.store(),
+            legacyReader: { _ in String(repeating: "o", count: 43) },
+            legacyRemover: { _ in throw CocoaError(.fileWriteNoPermission) }
+        )
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: TestEnvelopeOnlyTokenStore(inner: store), dataLoader: { request in
+            (Data(#"{"error":"unauthorized"}"#.utf8),
+             HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, publicationStore: { throw CancellationError() })
+
+        do {
+            _ = try await client.currentUser(endpoint: endpoint)
+            Issue.record("A 401 must reject the session")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .logoutUnconfirmed)
+        }
+        #expect(memory.value?.legacySessionRetired == true)
+        #expect(try store.token(for: endpoint) == nil)
+    }
+
     @Test("Missing fallback data neither creates nor deletes an envelope")
     func missingFallbackDoesNotPersist() throws {
         let memory = EnvelopeUpdateMemory()
@@ -66,6 +117,13 @@ struct CloudSecureEnvelopeStoreTests {
         #expect(memory.deletes == 0)
         #expect(memory.value == original)
     }
+}
+
+private struct TestEnvelopeOnlyTokenStore: SelectiveRemoteCloudTokenStore {
+    let inner: SelectiveRemoteCloudKeychainTokenStore
+    func token(for endpoint: URL) throws -> String? { try inner.token(for: endpoint) }
+    func saveToken(_ token: String, for endpoint: URL) throws { try inner.saveToken(token, for: endpoint) }
+    func removeToken(for endpoint: URL) throws { try inner.removeToken(for: endpoint) }
 }
 
 // Every persistence operation is replaced. This fixture cannot invoke Keychain,

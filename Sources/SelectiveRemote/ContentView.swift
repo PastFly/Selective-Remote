@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+private struct CloudProfileShareSelection: Identifiable {
+    let id = UUID()
+    let profile: ConnectionProfile
+    let delivery: SelectiveRemoteTeamMutationDelivery
+}
+
 private enum ProfileTab: String, CaseIterable, Identifiable {
     case general = "Основные"
     case authentication = "Аутентификация"
@@ -146,7 +152,7 @@ struct ContentView: View {
     @State private var showsNotifications = false
     @State private var notificationAccountEndpoint: String?
     @State private var notificationAccountID: UUID?
-    @State private var profileToShare: ConnectionProfile?
+    @State private var profileToShare: CloudProfileShareSelection?
     @State private var personalHostPendingDeletion: ConnectionProfile?
     @State private var showsPersonalFolderCreator = false
     @State private var newPersonalFolderName = ""
@@ -299,6 +305,15 @@ struct ContentView: View {
                 forKey: "SelectiveRemote.host-shelf.team-selection.v1"
             )
         }
+        .alert(UpdateLocalization.text(ru: "Не удалось подтвердить выход из Cloud", en: "Cloud sign-out could not be confirmed"),
+               isPresented: Binding(
+                get: { syncPresentation.unconfirmedSessionCleanup },
+                set: { if !$0 { syncPresentation.acknowledgeUnconfirmedSessionCleanup() } }
+               )) {
+            Button("OK", role: .cancel) { syncPresentation.acknowledgeUnconfirmedSessionCleanup() }
+        } message: {
+            Text(SelectiveRemoteCloudError.logoutUnconfirmed.localizedDescription)
+        }
         .alert("Ошибка", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -407,8 +422,8 @@ struct ContentView: View {
                 model.generateSSHKey(request, session: session)
             }
         }
-        .sheet(item: $profileToShare) { profile in
-            SelectiveRemoteCloudProfileShareView(profile: profile)
+        .sheet(item: $profileToShare) { selection in
+            SelectiveRemoteCloudProfileShareView(profile: selection.profile, openingDelivery: selection.delivery)
         }
         .sheet(isPresented: $showsPersonalFolderCreator) {
             personalFolderCreator
@@ -1855,26 +1870,37 @@ struct ContentView: View {
         }
         sidebarTeamMutationInProgress = true
         teamHostSortMode = .manual
+        let pendingDelivery = Result {
+            guard let deviceID = UUID(uuidString: cloudDeviceID), deviceID.isSelectiveRemoteCloudUUID,
+                  let owner = teamHosts.session(teamID: context.teamID, vaultID: context.vaultID)
+            else { throw SelectiveRemoteCloudError.authenticationRequired }
+            return try SelectiveRemoteTeamMutationDelivery(endpoint: cloudEndpoint, deviceID: deviceID, owner: owner)
+        }
         Task { @MainActor in
             defer { sidebarTeamMutationInProgress = false }
             do {
-                let endpoint = try SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
+                let delivery = try pendingDelivery.get()
+                guard let owner = delivery.owner else { throw SelectiveRemoteCloudError.authenticationRequired }
+                let boundClient = SelectiveRemoteCloudAPIClient(boundPublicationSession: owner)
+                let currentDevice = { UUID(uuidString: cloudDeviceID) ?? UUID() }
+                try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice())
+                let endpoint = delivery.endpoint
                 let outcome = try await AccessMoveDecision.perform(
                     changesAncestry: changesAncestry,
                     decide: {
                         try await AccessMoveDecision.fetch(
                             teamID: context.teamID, vaultID: context.vaultID,
-                            endpoint: endpoint, client: cloudClient,
+                            endpoint: endpoint, client: boundClient,
                             changesAncestry: true
                         )
                     },
                     persist: {
-                        let deviceID = UUID(uuidString: cloudDeviceID)
-                            .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
-                        cloudDeviceID = deviceID.canonicalCloudString
+                        try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice())
                         let identity = try await SelectiveRemoteTeamDeviceIdentityManager()
-                            .identity(endpoint: endpoint, deviceID: deviceID)
-                        let service = try SelectiveRemoteTeamHostMutationService()
+                            .identity(endpoint: endpoint, deviceID: delivery.deviceID)
+                        try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice())
+                        let service = try SelectiveRemoteTeamHostMutationService(
+                            remote: boundClient, snapshots: SelectiveRemoteTeamVaultFileSnapshotStore(), session: owner)
                         return try await service.apply(
                             .organize(updates), to: context, endpoint: endpoint,
                             identity: identity
@@ -1888,11 +1914,14 @@ struct ContentView: View {
                     model.errorMessage = explanation
                     return
                 }
-                teamHosts.replaceVault(with: snapshot)
-                selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
-                    teamID: context.teamID, vaultID: context.vaultID,
-                    recordID: selectedRecordID
-                )
+                let boundSnapshot = try delivery.bind(snapshot)
+                try delivery.commit(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice()) {
+                    teamHosts.replaceVault(with: boundSnapshot)
+                    selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
+                        teamID: context.teamID, vaultID: context.vaultID,
+                        recordID: selectedRecordID
+                    )
+                }
             } catch {
                 model.errorMessage = error.localizedDescription
             }
@@ -2363,8 +2392,10 @@ struct ContentView: View {
             return
         }
         do {
-            cloudSessionAvailable = try SelectiveRemoteCloudKeychainTokenStore()
-                .token(for: endpoint) != nil
+            let token = try SelectiveRemoteCloudKeychainTokenStore().token(for: endpoint)
+            cloudSessionAvailable = token.map {
+                !SelectiveRemotePublicationLifecycle.isRetiredToken(endpoint: endpoint, token: $0)
+            } ?? false
         } catch {
             cloudSessionAvailable = false
         }
@@ -2711,7 +2742,15 @@ struct ContentView: View {
             UpdateLocalization.text(ru: "Поделиться с командой…", en: "Share with Team…"),
             systemImage: "person.2.badge.plus"
         ) {
-            profileToShare = item
+            do {
+                guard let deviceID = UUID(uuidString: cloudDeviceID), deviceID.isSelectiveRemoteCloudUUID
+                else { throw SelectiveRemoteCloudError.authenticationRequired }
+                let delivery = try SelectiveRemoteTeamMutationDelivery(endpoint: cloudEndpoint, deviceID: deviceID)
+                guard let current = model.profiles.first(where: { $0.id == item.id })
+                else { throw SelectiveRemoteCloudError.invalidRequest }
+                try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: deviceID)
+                profileToShare = .init(profile: current, delivery: delivery)
+            } catch { model.errorMessage = error.localizedDescription }
         }
         Divider()
         Button("Удалить", systemImage: "trash", role: .destructive) {

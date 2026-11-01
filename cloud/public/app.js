@@ -11,6 +11,7 @@ import {
   prepareAccountScopedVault,
 } from "./vault-local.js";
 import {
+  capturePersonalVaultSession,
   createAuthenticatedVaultClient,
   loginWithDeviceConflictRetry,
   registerWithDeviceConflictRetry,
@@ -51,7 +52,8 @@ const syncIssueCodes = new Set([
   "team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required",
   "network_unavailable", "remote_revision_regressed", "team_vault_generation_changed",
   "invalid_remote_revision", "invalid_local_team_vault", "team_vault_storage_failed",
-  "wrapper_provisioning_failed", "team_vault_legacy_conflict",
+  "wrapper_provisioning_failed", "team_vault_legacy_conflict", "local_vault_owner_unverified",
+  "legacy_vault_owner_unverified", "remote_wrapped_key_changed",
 ]);
 
 export function publishSyncObservation(documentValue, observation) {
@@ -74,7 +76,7 @@ export function publishSyncObservation(documentValue, observation) {
     const result = observation.result ?? {};
     const status = String(result.status ?? "");
     detail.result = {
-      status: ["empty", "uploaded", "uploaded_with_new_local_changes", "downloaded", "up_to_date",
+      status: ["empty", "uploaded", "uploaded_with_new_local_changes", "downloaded", "downloaded_with_new_local_changes", "up_to_date",
         "initialized", "remote_changed", "conflict"].includes(status) ? status : "unknown",
       ...(Number.isSafeInteger(result.revision) && result.revision >= 0 ? { revision: result.revision } : {}),
       ...(Number.isSafeInteger(result.remoteRevision) && result.remoteRevision >= 0
@@ -118,7 +120,7 @@ export function reduceSyncPresentationState(state, observation) {
   } else if (observation.type === "result") {
     const result = observation.result ?? {};
     const status = result.status === "conflict" ? "conflict"
-      : ["remote_changed", "uploaded_with_new_local_changes"].includes(result.status) ? "attention"
+      : ["remote_changed", "uploaded_with_new_local_changes", "downloaded_with_new_local_changes"].includes(result.status) ? "attention"
         : ["uploaded", "downloaded", "up_to_date", "initialized"].includes(result.status) ? "current"
           : "unknown";
     next = { status, ...(Number.isSafeInteger(result.revision) ? { revision: result.revision } : {}),
@@ -4142,12 +4144,25 @@ export function accountVaultPassphrase(password) {
   return `selective-remote:account-password:v1:${normalized}`;
 }
 
+export function personalVaultLegacyUnverifiedMessage() {
+  return "Найдена локальная копия Personal Vault без подтверждённого владельца. Она сохранена; автоматическая синхронизация остановлена. Не очищайте данные браузера.";
+}
+
+function personalVaultKeyMismatchMessage() {
+  return "Ключ локального Personal Vault не совпадает с Cloud. Синхронизация остановлена; локальные данные сохранены.";
+}
+
+function personalVaultOwnershipError(code) {
+  return code === "legacy_vault_owner_unverified" || code === "local_vault_owner_unverified";
+}
+
 export async function completeInteractivePersonalVaultLogin({
   user,
   password,
   activateAccountVault,
   unlockAndSyncPersonalVault,
   rememberSession,
+  client = null,
 } = {}) {
   if (!user?.id || typeof activateAccountVault !== "function"
       || typeof unlockAndSyncPersonalVault !== "function"
@@ -4155,10 +4170,17 @@ export async function completeInteractivePersonalVaultLogin({
     throw new Error("invalid_personal_vault_login_flow");
   }
   const passphrase = accountVaultPassphrase(password);
-  await activateAccountVault(user, passphrase);
-  const result = await unlockAndSyncPersonalVault(passphrase);
+  const session = client ? capturePersonalVaultSession(client) : null;
+  if (session && session.accountID !== String(user.id).toLowerCase()) throw new Error("authentication_required");
+  const prepared = await activateAccountVault(user, passphrase);
+  session?.requireCurrent();
+  if (prepared?.legacyOwnershipUnverified) throw new Error("legacy_vault_owner_unverified");
+  const targetVault = prepared?.vault ?? null;
+  const result = await unlockAndSyncPersonalVault(passphrase, targetVault);
+  session?.requireCurrent();
   let remembered = false;
-  try { remembered = await rememberSession(user.id) === true; } catch {}
+  try { remembered = await rememberSession(user.id, targetVault) === true; } catch { session?.requireCurrent(); }
+  session?.requireCurrent();
   return { result, remembered };
 }
 
@@ -4215,22 +4237,33 @@ export async function bootstrapPersonalVault({
   }),
 }) {
   if (!vault || !client || typeof passphrase !== "string") throw new Error("invalid_personal_vault_bootstrap");
+  const session = capturePersonalVaultSession(client);
   let status = await vault.status();
+  session.requireCurrent();
   if (status === "locked") {
     try {
       await vault.unlock(passphrase);
     } catch (unlockError) {
+      session.requireCurrent();
       const remote = await client.getVault();
+      session.requireCurrent();
       if (remote.revision === 0) throw unlockError;
       await vault.replaceLockedWithRemote(remote, passphrase);
+      session.requireCurrent();
       return { status: "downloaded", revision: remote.revision };
     }
+    session.requireCurrent();
     status = "unlocked";
   }
   let result = await synchronize({ recoveryPassphrase: passphrase });
+  session.requireCurrent();
   if (status === "empty" && result.status === "empty") {
     await vault.create(passphrase);
+    session.requireCurrent();
+    await vault.bindAccountOwnership(session.accountID);
+    session.requireCurrent();
     result = await synchronize();
+    session.requireCurrent();
   }
   return result;
 }
@@ -4251,10 +4284,11 @@ export async function completeBrowserSessionLogout({ client, vault, clearView, r
   documentValue?.querySelectorAll("#host-detail-dialog, #resource-detail-dialog").forEach(dialog => dialog.close?.());
   clearView();
   const forgotten = Promise.resolve(vault.forgetRememberedSession()).catch(() => {});
-  try { await pending; }
+  let remoteRevoked = false;
+  try { await pending; remoteRevoked = true; }
   finally {
     await forgotten;
-    if (isCurrent()) await restoreView();
+    if (isCurrent()) await restoreView({ remoteRevoked });
   }
 }
 
@@ -4345,62 +4379,93 @@ export async function initializeCloudAccount({
     if (!user?.id || typeof vaultUI.repository?.forAccount !== "function") {
       throw new Error("account_vault_storage_unavailable");
     }
+    const session = capturePersonalVaultSession(client);
+    if (session.accountID !== String(user.id).toLowerCase()) throw new Error("authentication_required");
     const prepared = await prepareAccountScopedVault({
       accountID: user.id,
       accountRepository: vaultUI.repository.forAccount(user.id),
       legacyRepository: vaultUI.repository,
       passphrase,
     });
+    session.requireCurrent();
     vault = prepared.vault;
     vaultUI.useController(vault);
     return prepared;
   }
 
-  async function unlockAndSyncPersonalVault(passphrase) {
+  async function unlockAndSyncPersonalVault(passphrase, targetVault = vault) {
+    if (!targetVault || vault !== targetVault) throw new Error("authentication_required");
+    const session = capturePersonalVaultSession(client);
     const result = await bootstrapPersonalVault({
-      vault,
+      vault: targetVault,
       client,
       passphrase,
-      synchronize: ({ recoveryPassphrase = null } = {}) => synchronizePersonalVault({ recoveryPassphrase }),
+      synchronize: ({ recoveryPassphrase = null } = {}) => synchronizePersonalVault({ recoveryPassphrase, targetVault }),
     });
+    session.requireCurrent();
+    if (vault !== targetVault) throw new Error("authentication_required");
     vaultUI.mode("unlocked");
     vaultUI.render();
     return result;
   }
 
-  async function synchronizePersonalVault({ recoveryPassphrase = null } = {}) {
-    let result = await synchronizeVault({ client, vault, recoveryPassphrase });
+  async function synchronizePersonalVault({ recoveryPassphrase = null, targetVault = vault } = {}) {
+    const session = capturePersonalVaultSession(client);
+    let result = await synchronizeVault({ client, vault: targetVault, recoveryPassphrase });
+    session.requireCurrent();
     if (result.status !== "conflict") return result;
 
     const conflictsResolved = result.conflicts.length;
-    await vault.resolveConflicts({
+    await targetVault.resolveConflicts({
       revision: result.revision,
       resolutions: result.conflicts.map((conflict) => ({
         id: conflict.id,
         choice: newestVaultConflictChoice(conflict),
       })),
     });
-    result = await synchronizeVault({ client, vault });
+    session.requireCurrent();
+    result = await synchronizeVault({ client, vault: targetVault });
+    session.requireCurrent();
     return { ...result, automaticallyResolved: conflictsResolved };
   }
 
   async function backgroundPersonalVaultSync() {
     const recipient = client.session()?.id;
     if (backgroundSyncing || !recipient || await vault.status() !== "unlocked") return;
+    let session;
+    try { session = capturePersonalVaultSession(client); } catch { return; }
+    const identity = client.publicationIdentity();
+    const targetVault = vault;
     backgroundSyncing = true;
     publishSyncObservation(documentValue, { scope: "personal", type: "start", recipient });
     try {
-      let result = await synchronizePersonalVault();
-      if (result.status === "remote_changed") result = await synchronizePersonalVault();
+      let result = await synchronizePersonalVault({ targetVault });
+      if (result.status === "remote_changed") result = await synchronizePersonalVault({ targetVault });
+      session.requireCurrent();
+      if (vault !== targetVault) return;
       publishSyncObservation(documentValue, { scope: "personal", type: "result", result, recipient });
       if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
-      if (Number.isSafeInteger(result.revision)) {
+      if (["uploaded_with_new_local_changes", "downloaded_with_new_local_changes"].includes(result.status)) {
+        setText(vaultMessage, "Есть новые локальные изменения; синхронизация продолжится автоматически.");
+      } else if (Number.isSafeInteger(result.revision)) {
         setVaultSynchronizationMessage(vaultMessage, { documentValue, revision: result.revision });
       }
     } catch (error) {
-      publishSyncObservation(documentValue, { scope: "personal", type: "error", code: String(error?.message ?? ""), recipient });
-      setText(vaultMessage, "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
+      const code = String(error?.message ?? "");
+      if (code === "authentication_required" && !client.session()
+          && error.invalidatedSessionEpoch === identity?.sessionEpoch && vault === targetVault) {
+        targetVault.lock();
+        showSession(null);
+        setAccountMessage("Сеанс Cloud изменился в другой вкладке. Войдите снова; локальные данные сохранены.", "error");
+        return;
+      }
+      try { session.requireCurrent(); } catch { return; }
+      if (vault !== targetVault) return;
+      publishSyncObservation(documentValue, { scope: "personal", type: "error", code, recipient });
+      setText(vaultMessage, personalVaultOwnershipError(code) ? personalVaultLegacyUnverifiedMessage()
+        : code === "remote_wrapped_key_changed" ? personalVaultKeyMismatchMessage()
+        : "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
     } finally {
       backgroundSyncing = false;
     }
@@ -4443,10 +4508,20 @@ export async function initializeCloudAccount({
     if (value.type !== "key" || value.requester !== sessionTabID || value.responder === sessionTabID) return;
     void (async () => {
       try {
-        if (await vault.status() !== "locked") return;
-        await vault.unlockWithSessionKey(value.key);
+        const session = capturePersonalVaultSession(client);
+        const targetVault = vault;
+        if (await targetVault.status() !== "locked") return;
+        session.requireCurrent();
+        await targetVault.unlockWithSessionKey(value.key);
+        session.requireCurrent();
+        if (vault !== targetVault || !await targetVault.hasAccountOwnership(user.id)) {
+          targetVault.lock();
+          return;
+        }
+        session.requireCurrent();
         let remembered = false;
-        try { remembered = await vault.rememberSession(user.id) === true; } catch {}
+        try { remembered = await targetVault.rememberSession(user.id) === true; } catch {}
+        session.requireCurrent();
         vaultUI.mode("unlocked");
         vaultUI.render();
         setText(vaultMessage, remembered
@@ -4640,17 +4715,20 @@ export async function initializeCloudAccount({
       });
       let personalVaultReady = false;
       let personalVaultRemembered = false;
+      let personalVaultError = null;
       try {
         const outcome = await completeInteractivePersonalVaultLogin({
           user,
           password,
+          client,
           activateAccountVault,
           unlockAndSyncPersonalVault,
-          rememberSession: (accountID) => vault.rememberSession(accountID),
+          rememberSession: (accountID, targetVault) => (targetVault ?? vault).rememberSession(accountID),
         });
         personalVaultReady = true;
         personalVaultRemembered = outcome.remembered;
-      } catch {
+      } catch (error) {
+        personalVaultError = String(error?.message ?? "");
         vaultUI.mode("error", { allowReauthentication: true });
       }
       if (identity) {
@@ -4679,7 +4757,11 @@ export async function initializeCloudAccount({
       setText(
         vaultMessage,
         !personalVaultReady
-          ? "Personal Vault пока недоступен. Повторите вход или синхронизацию."
+          ? personalVaultOwnershipError(personalVaultError)
+            ? personalVaultLegacyUnverifiedMessage()
+            : personalVaultError === "remote_wrapped_key_changed"
+              ? personalVaultKeyMismatchMessage()
+            : "Personal Vault пока недоступен. Повторите вход или синхронизацию."
           : personalVaultRemembered
             ? "Personal Vault открыт паролем аккаунта и синхронизируется автоматически."
             : "Personal Vault открыт только для этой страницы; сохранить ключ доверенного браузера не удалось. После перезагрузки потребуется восстановить доступ."
@@ -4699,12 +4781,16 @@ export async function initializeCloudAccount({
     }
   });
 
+  let reauthenticationAttempt = 0, reauthenticationInputRevision = 0;
+  vaultReauthenticateForm?.elements.password?.addEventListener?.("input", () => { reauthenticationInputRevision += 1; });
   vaultReauthenticateForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const currentUser = client.session();
     const button = vaultReauthenticateForm.querySelector('button[type="submit"]');
     const password = vaultReauthenticateForm.elements.password.value;
     if (!currentUser) return;
+    const attempt = ++reauthenticationAttempt, inputRevision = reauthenticationInputRevision;
+    let operationGeneration = client.sessionGeneration();
     button.disabled = true;
     vaultUI.mode("restoring");
     try {
@@ -4714,34 +4800,62 @@ export async function initializeCloudAccount({
       } catch {
         // Team keys are independent from Personal Vault reauthentication.
       }
-      const user = await client.login({
+      if (client.sessionGeneration() !== operationGeneration) return;
+      const pendingLogin = client.login({
         email: currentUser.email,
         password,
         deviceID: client.deviceID(),
         publicKey: identity?.publicKey ?? null,
       });
+      operationGeneration = client.sessionGeneration();
+      const user = await pendingLogin;
+      if (client.sessionGeneration() !== operationGeneration) return;
       const outcome = await completeInteractivePersonalVaultLogin({
         user,
         password,
+        client,
         activateAccountVault,
         unlockAndSyncPersonalVault,
-        rememberSession: (accountID) => vault.rememberSession(accountID),
+        rememberSession: (accountID, targetVault) => (targetVault ?? vault).rememberSession(accountID),
       });
+      if (client.sessionGeneration() !== operationGeneration) return;
       showSession(user);
+      if (client.sessionGeneration() !== operationGeneration) return;
       if (identity) {
         try { await teamWorkspace?.activate(identity); } catch {}
       }
+      if (client.sessionGeneration() !== operationGeneration) return;
       setText(vaultMessage, outcome.remembered
         ? "Personal Vault открыт паролем аккаунта и синхронизируется автоматически."
         : "Personal Vault открыт только для этой страницы; сохранить ключ доверенного браузера не удалось. После перезагрузки потребуется восстановить доступ.");
     } catch (error) {
+      const retiredCurrent = !client.session() && error?.invalidatedSessionEpoch === operationGeneration;
+      if (client.sessionGeneration() !== operationGeneration && !retiredCurrent) return;
+      if (retiredCurrent) {
+        vault.lock();
+        showSession(null);
+        setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+        return;
+      }
+      if (!client.session()) {
+        vault.lock();
+        showSession(null);
+        setAccountMessage("Не удалось подтвердить вход. Войдите в Cloud повторно; Personal Vault не изменён.", "error");
+        return;
+      }
       vaultUI.mode("error", { allowReauthentication: true });
-      setText(vaultMessage, String(error?.message ?? "") === "invalid_credentials"
+      setText(vaultMessage, personalVaultOwnershipError(String(error?.message ?? ""))
+        ? personalVaultLegacyUnverifiedMessage()
+        : String(error?.message ?? "") === "remote_wrapped_key_changed"
+          ? personalVaultKeyMismatchMessage()
+        : String(error?.message ?? "") === "invalid_credentials"
         ? "Пароль не подтверждён. Сессия остаётся активной; Personal Vault не изменён."
         : "Personal Vault не изменён. Повторите подтверждение пароля позже.");
     } finally {
-      vaultReauthenticateForm.elements.password.value = "";
-      button.disabled = false;
+      if (reauthenticationAttempt === attempt) {
+        if (reauthenticationInputRevision === inputRevision) vaultReauthenticateForm.elements.password.value = "";
+        button.disabled = false;
+      }
     }
   });
 
@@ -4759,14 +4873,16 @@ export async function initializeCloudAccount({
           hideConflicts();
           vaultUI.mode("waiting");
         },
-        async restoreView() {
+        async restoreView({ remoteRevoked }) {
           const status = await logoutVault.status();
           if (!isCurrent()) return;
           vaultUI.mode(status === "unlocked" ? "unlocked" : "waiting");
-          setText(message, "Сессия завершена; cookie и ключ доверенного браузера удалены.");
+          setText(message, remoteRevoked ? "Сеанс Cloud завершён на сервере."
+            : "Не удалось подтвердить завершение сеанса Cloud на сервере. Проверьте подключение.");
         },
       });
-    } finally { logoutButton.disabled = false; }
+    } catch { /* The local Vault is locked; restoreView reports remote failure. */ }
+    finally { logoutButton.disabled = false; }
   });
 
   usernameForm.addEventListener("input", async () => {
@@ -4869,17 +4985,24 @@ export async function initializeCloudAccount({
   });
 
   syncButton.addEventListener("click", async () => {
+    let session;
+    try { session = capturePersonalVaultSession(client); } catch { return; }
+    const identity = client.publicationIdentity();
+    const targetVault = vault;
     syncButton.disabled = true;
     const recipient = client.session()?.id;
     publishSyncObservation(documentValue, { scope: "personal", type: "start", recipient });
     try {
-      const result = await synchronizePersonalVault();
+      const result = await synchronizePersonalVault({ targetVault });
+      session.requireCurrent();
+      if (vault !== targetVault) return;
       publishSyncObservation(documentValue, { scope: "personal", type: "result", result, recipient });
       const messages = {
         empty: "Сначала создайте локальный Vault.",
         uploaded: `Зашифрованная ревизия ${result.revision} загружена.`,
         uploaded_with_new_local_changes: `Ревизия ${result.revision} загружена; появились новые локальные изменения — синхронизируйте ещё раз.`,
         downloaded: `Зашифрованная ревизия ${result.revision} загружена и объединена локально.`,
+        downloaded_with_new_local_changes: `Ревизия ${result.revision} получена; новые локальные изменения ожидают синхронизации.`,
         up_to_date: `Vault уже синхронизирован на ревизии ${result.revision}.`,
         remote_changed: `Удалённый Vault изменился до ревизии ${result.remoteRevision}. Повторите синхронизацию для безопасного merge.`,
       };
@@ -4895,20 +5018,33 @@ export async function initializeCloudAccount({
       }
     } catch (error) {
       const code = String(error?.message ?? "");
+      const retiredCurrent = code === "authentication_required" && !client.session()
+        && error.invalidatedSessionEpoch === identity?.sessionEpoch && vault === targetVault;
+      if (!retiredCurrent) {
+        try { session.requireCurrent(); } catch { return; }
+        if (vault !== targetVault) return;
+      }
       publishSyncObservation(documentValue, { scope: "personal", type: "error", code, recipient });
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
       else if (code === "authentication_required") {
+        targetVault.lock();
         showSession(null);
         setText(vaultMessage, "Сессия истекла. Войдите снова.");
       } else if (code === "recovery_passphrase_required") {
         hideConflicts();
         vaultUI.mode("locked", { allowReauthentication: true });
         setText(vaultMessage, "Сессия активна, но ключ Personal Vault не восстановлен. Подтвердите пароль или откройте другую доверенную вкладку.");
+      } else if (personalVaultOwnershipError(code)) {
+        setText(vaultMessage, personalVaultLegacyUnverifiedMessage());
+      } else if (code === "remote_wrapped_key_changed") {
+        setText(vaultMessage, personalVaultKeyMismatchMessage());
       } else {
         setText(vaultMessage, "Локальные данные сохранены. Синхронизация продолжится автоматически.");
       }
     } finally {
-      syncButton.disabled = !client.session();
+      if (client.publicationIdentity()?.sessionEpoch === identity?.sessionEpoch || !client.session()) {
+        syncButton.disabled = !client.session();
+      }
     }
   });
 
@@ -4935,42 +5071,59 @@ export async function initializeCloudAccount({
   });
 
   setAuthMode("login");
+  let startupSession = null;
   try {
     const restoredUser = await client.restoreSession();
+    startupSession = capturePersonalVaultSession(client);
     showSession(restoredUser);
     const prepared = await activateAccountVault(restoredUser);
+    startupSession.requireCurrent();
     let restoredVault = prepared.restored || await vault.status() === "unlocked";
-    if (!restoredVault) restoredVault = await vault.restoreRememberedSession(restoredUser.id);
-    if (restoredVault) {
+    if (!restoredVault && !prepared.legacyOwnershipUnverified) restoredVault = await vault.restoreRememberedSession(restoredUser.id);
+    startupSession.requireCurrent();
+    if (prepared.legacyOwnershipUnverified) {
+      vaultUI.mode("error", { allowReauthentication: true });
+      setText(vaultMessage, personalVaultLegacyUnverifiedMessage());
+    } else if (restoredVault) {
       vaultUI.mode("unlocked");
       vaultUI.render();
       setText(vaultMessage, "Personal Vault восстановлен на этом доверенном браузере. Синхронизируем изменения…");
       await backgroundPersonalVaultSync();
+      startupSession.requireCurrent();
     } else {
       const remote = await client.getVault();
+      startupSession.requireCurrent();
       const state = resolveRestoredPersonalVaultState({
         localStatus: await vault.status(),
         remoteRevision: remote.revision,
         restored: false,
       });
+      startupSession.requireCurrent();
       vaultUI.mode(state, { allowReauthentication: true });
       setText(vaultMessage, state === "uninitialized"
         ? "Сессия активна. Подтвердите пароль, чтобы создать первый зашифрованный Personal Vault."
         : "Сессия активна, но доверенный ключ Personal Vault недоступен. Восстановите доступ паролем аккаунта или откройте другую доверенную вкладку.");
       if (state === "reauthentication_required") await requestUnlockedVaultFromOtherTab();
+      startupSession.requireCurrent();
     }
     let identity = null;
     try {
       identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID: client.deviceID() });
+      startupSession.requireCurrent();
       await teamWorkspace?.activate(identity);
     } catch {
       // A valid account session remains usable when this browser has no approved Team key.
     }
+    startupSession.requireCurrent();
     setAccountMessage(identity
       ? "Сессия восстановлена. Team-раздел готов к работе."
       : "Сессия восстановлена. Для Team Vault может потребоваться одобрение устройства.", "success");
   } catch (error) {
-    if (client.session()) {
+    let stale = false;
+    try { startupSession?.requireCurrent(); } catch { stale = true; }
+    if (stale) {
+      // The newer session, or its own authentication-loss handler, owns the UI.
+    } else if (client.session()) {
       vaultUI.mode("error", { allowReauthentication: true });
       setText(vaultMessage, "Сессия активна, но состояние Personal Vault не удалось проверить.");
     } else {

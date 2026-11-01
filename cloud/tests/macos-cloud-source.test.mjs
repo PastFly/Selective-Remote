@@ -70,7 +70,8 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /localRevision > local\.syncedLocalRevision/);
   assert.match(coordinator, /return \.conflict\(\.init\(local: localVersion, remote: remoteVersion\)\)/);
   assert.match(coordinator, /macos:team-vault:/);
-  assert.match(coordinator, /try snapshots\.save\(staged, endpoint: endpoint\)/);
+  assert.match(coordinator, /try commit\(staged, replacing: current\)/);
+  assert.match(coordinator, /snapshots\.saveIfCurrent\(next, endpoint: endpoint, replacing: expected\)/);
   assert.match(coordinator, /write\.revision == expectedServerRevision/);
   assert.match(coordinator, /func resolveConflict\(/);
   assert.match(coordinator, /latestRemote == conflict\.remote/);
@@ -108,7 +109,7 @@ test("Host context menu opens a real encrypted Team Vault share flow", async () 
   ]);
   assert.match(content, /Share with Team/);
   assert.match(content, /SelectiveRemoteCloudProfileShareView/);
-  assert.match(sharing, /client\.teamKeyDevices/);
+  assert.match(sharing, /boundClient\.teamKeyDevices/);
   assert.match(sharing, /coordinator\.initialize/);
   assert.match(sharing, /coordinator\.stage/);
   assert.match(sharing, /coordinator\.push/);
@@ -394,7 +395,8 @@ test("macOS Team Host controls expose writes only through the encrypted role-awa
   assert.match(hosts, /\.create\(profile, credentials\)/u);
   assert.match(hosts, /\.update\(recordID:/u);
   assert.match(hosts, /\.delete\(recordID:/u);
-  assert.match(hosts, /store\.replaceVault\(with: snapshot\)/u);
+  assert.match(hosts, /delivery\.bind\(snapshot\)/u);
+  assert.match(hosts, /store\.replaceVault\(with: boundSnapshot\)/u);
   assert.doesNotMatch(hosts, /model\.profiles|profiles\.append/u);
   assert.match(editor, /Shared passwords are encrypted inside Team Vault/u);
   assert.match(editor, /SecureField/u);

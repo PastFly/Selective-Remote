@@ -5,9 +5,12 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
     case insecureEndpoint
     case invalidRequest
     case authenticationRequired
+    case logoutUnconfirmed
     case invalidResponse
     case serviceError(Int, String?)
     case incompatibleAPI(Int)
+
+    var isAuthenticationLoss: Bool { self == .authenticationRequired || self == .logoutUnconfirmed }
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +33,11 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
             UpdateLocalization.text(
                 ru: "Сессия Cloud завершена. Войдите снова.",
                 en: "The Cloud session ended. Sign in again."
+            )
+        case .logoutUnconfirmed:
+            UpdateLocalization.text(
+                ru: "Завершение предыдущего сеанса Cloud не подтверждено: он может сохраниться после перезапуска. Можно отозвать этот Mac с другого доверенного устройства; повторное подключение может потребовать помощи администратора, а Team Vault — ротации ключей.",
+                en: "The previous Cloud session may remain after restart. You can revoke this Mac from another trusted device; reconnecting may require administrator assistance, and Team Vault keys may require rotation."
             )
         case .invalidResponse:
             UpdateLocalization.text(
@@ -361,8 +369,19 @@ struct SelectiveRemoteCloudSessionBinding: Sendable {
     }
 }
 
+struct SelectiveRemoteCloudSessionLoss: Sendable, Equatable {
+    let endpoint: URL
+    let epoch: UUID
+    func matches(_ session: SelectiveRemoteCloudSessionBinding) -> Bool {
+        endpoint == session.endpoint && epoch == session.epoch
+    }
+}
+
 actor SelectiveRemoteCloudAPIClient {
     private let dataLoader: SelectiveRemoteCloudDataLoader
+    private let boundPublicationSession: SelectiveRemotePublicationSession?
+    private let cleanupWarning: @Sendable () async -> Void
+    private let sessionLost: @Sendable (SelectiveRemoteCloudSessionLoss) async -> Void
     let tokenStore: any SelectiveRemoteCloudTokenStore
     let publicationStore: @Sendable () throws -> SelectiveRemoteVaultPublicationStore
     var publicationRetirementSessions: [String: SelectiveRemotePublicationSession] = [:]
@@ -373,13 +392,30 @@ actor SelectiveRemoteCloudAPIClient {
         session: URLSession = .shared,
         tokenStore: any SelectiveRemoteCloudTokenStore = SelectiveRemoteCloudKeychainTokenStore(),
         dataLoader: SelectiveRemoteCloudDataLoader? = nil,
+        boundPublicationSession: SelectiveRemotePublicationSession? = nil,
+        cleanupWarning: @escaping @Sendable () async -> Void = {
+            await MainActor.run { SyncPresentationStore.shared.reportUnconfirmedSessionCleanup() }
+        },
+        sessionLost: @escaping @Sendable (SelectiveRemoteCloudSessionLoss) async -> Void = { loss in
+            await MainActor.run { NotificationCenter.default.post(name: .selectiveRemoteCloudSessionLost, object: loss) }
+        },
         publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try SelectiveRemoteVaultPublicationStore() }
     ) {
         self.tokenStore = tokenStore
+        self.boundPublicationSession = boundPublicationSession
+        self.cleanupWarning = cleanupWarning
+        self.sessionLost = sessionLost
         self.publicationStore = publicationStore
         self.dataLoader = dataLoader ?? { request in
             try await session.data(for: request)
         }
+    }
+
+    func bound(to session: SelectiveRemotePublicationSession) -> SelectiveRemoteCloudAPIClient {
+        .init(tokenStore: tokenStore, dataLoader: dataLoader, boundPublicationSession: session,
+              cleanupWarning: cleanupWarning,
+              sessionLost: sessionLost,
+              publicationStore: publicationStore)
     }
 
     func metadata(endpoint: URL) async throws -> SelectiveRemoteCloudMetadata {
@@ -469,6 +505,8 @@ actor SelectiveRemoteCloudAPIClient {
             try tokenStore.saveToken(result.token, for: endpoint)
             return SelectiveRemoteCloudSessionBinding(endpoint: endpoint, epoch: epoch, token: result.token)
         }
+        await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
+        try checkSession(session)
         try rememberPublicationAccount(result.user.id, endpoint: endpoint, token: result.token)
         return (result.user, session)
     }
@@ -481,9 +519,14 @@ actor SelectiveRemoteCloudAPIClient {
     }
 
     func checkSession(_ session: SelectiveRemoteCloudSessionBinding) throws {
+        try checkSessionAuthorization(session)
+        try Task.checkCancellation()
+    }
+
+    func checkSessionAuthorization(_ session: SelectiveRemoteCloudSessionBinding) throws {
         let token = try storedToken(for: session.endpoint)
         try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: session.endpoint, expectedEpoch: session.epoch) {
-            guard !Task.isCancelled, token == session.token else { throw CancellationError() }
+            guard token == session.token else { throw CancellationError() }
         }
     }
 
@@ -1101,29 +1144,51 @@ actor SelectiveRemoteCloudAPIClient {
         )
     }
 
-    func logout(endpoint: URL) async throws {
+    func logout(endpoint: URL, session: SelectiveRemoteCloudSessionBinding? = nil) async throws {
         let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
-        let rawToken = try tokenStore.token(for: endpoint)
-        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+        if let session {
+            guard session.endpoint == endpoint, session.epoch == epoch else { throw CancellationError() }
+        }
+        let rawToken: String?
+        do { rawToken = try tokenStore.token(for: endpoint) }
+        catch {
+            guard SelectiveRemotePublicationLifecycle.blockUnknownSession(endpoint: endpoint, expectedEpoch: epoch, knownToken: session?.token)
+            else { throw CancellationError() }
+            await cleanupWarning()
+            await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
+            if let session { try? await revokeSessionToken(session.token, endpoint: endpoint) }
+            throw SelectiveRemoteCloudError.logoutUnconfirmed
+        }
+        if let session, rawToken != session.token { throw CancellationError() }
+        let removalError = try SelectiveRemotePublicationLifecycle.transitionForLogout(
+            endpoint: endpoint, expectedEpoch: epoch, token: rawToken
+        ) {
             guard try tokenStore.token(for: endpoint) == rawToken else { throw CancellationError() }
             try tokenStore.removeToken(for: endpoint)
         }
+        if removalError != nil { await cleanupWarning() }
         await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
-        guard let token = rawToken, (32...256).contains(token.count) else { return }
-        var request = JSONRequest(
-            url: endpoint.appending(path: "v1/auth/logout"),
-            method: "POST",
-            body: nil
-        ).value
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (data, response) = try await dataLoader(request)
-            let http = try httpResponse(response)
-            guard http.statusCode == 204 || http.statusCode == 401 else {
-                throw serviceError(status: http.statusCode, data: data)
+        var logoutError: (any Error)?
+        if let token = rawToken, (32...256).contains(token.count) {
+            do {
+                try await revokeSessionToken(token, endpoint: endpoint)
+            } catch {
+                logoutError = error
             }
-        } catch {
-            throw error
+        }
+        if removalError != nil || logoutError != nil {
+            if removalError == nil { await cleanupWarning() }
+            throw SelectiveRemoteCloudError.logoutUnconfirmed
+        }
+    }
+
+    private func revokeSessionToken(_ token: String, endpoint: URL) async throws {
+        var request = JSONRequest(url: endpoint.appending(path: "v1/auth/logout"), method: "POST", body: nil).value
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await dataLoader(request)
+        let http = try httpResponse(response)
+        guard http.statusCode == 204 || http.statusCode == 401 else {
+            throw serviceError(status: http.statusCode, data: data)
         }
     }
 
@@ -1153,13 +1218,22 @@ actor SelectiveRemoteCloudAPIClient {
         session: SelectiveRemoteCloudSessionBinding? = nil
     ) async throws -> (Data, HTTPURLResponse) {
         let token: String
+        let boundEpoch: UUID?
+        let startingEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         if let session {
             guard session.endpoint == endpoint else { throw CancellationError() }
             try checkSession(session)
             token = session.token
+            boundEpoch = session.epoch
+        } else if let boundPublicationSession {
+            let authorization = try boundPublicationSession.requestAuthorization(endpoint: endpoint)
+            token = authorization.token
+            boundEpoch = authorization.epoch
         } else {
             guard let stored = try storedToken(for: endpoint) else { throw SelectiveRemoteCloudError.authenticationRequired }
+            guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == startingEpoch else { throw CancellationError() }
             token = stored
+            boundEpoch = nil
         }
         var components = URLComponents(url: endpoint.appending(path: path), resolvingAgainstBaseURL: false)
         components?.queryItems = queryItems.isEmpty ? nil : queryItems
@@ -1173,24 +1247,40 @@ actor SelectiveRemoteCloudAPIClient {
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        let requestEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        let requestEpoch = boundEpoch ?? startingEpoch
         let retirement = try publicationRetirementSession(endpoint: endpoint, token: token)?.retirementSnapshot()
         let (data, response) = try await dataLoader(request)
         let http = try httpResponse(response)
-        if let session { try checkSession(session) }
-        else { guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == requestEpoch, try storedToken(for: endpoint) == token else { throw CancellationError() } }
+        var validationError: (any Error)?
+        do {
+            if let session { try checkSession(session) }
+            else if let boundPublicationSession { try boundPublicationSession.check() }
+            else { guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == requestEpoch,
+                         try storedToken(for: endpoint) == token else { throw CancellationError() } }
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            guard http.statusCode == 401 else { throw error }
+            validationError = error
+        }
         if http.statusCode == 401 {
-            try SelectiveRemotePublicationLifecycle.loseAuthentication(endpoint: endpoint, expectedEpoch: requestEpoch) {
-                guard try tokenStore.token(for: endpoint) == token else { throw CancellationError() }
-                try? tokenStore.removeToken(for: endpoint)
+            var removalError: (any Error)? = validationError
+            try SelectiveRemotePublicationLifecycle.loseAuthentication(endpoint: endpoint, expectedEpoch: requestEpoch, token: token) {
+                do {
+                    guard try tokenStore.token(for: endpoint) == token else { throw CancellationError() }
+                    try tokenStore.removeToken(for: endpoint)
+                    removalError = nil
+                } catch is CancellationError { throw CancellationError() }
+                catch { removalError = error }
             }
+            if removalError != nil { await cleanupWarning() }
+            await sessionLost(.init(endpoint: endpoint, epoch: requestEpoch))
             if let retirement {
                 // Payload deletion precedes protected receipt writes; retirement attempts every captured owner.
                 try? retirement.prepareAuthenticationLossRetirement()
                 try? await retirePublications(session: retirement, selection: .all)
             }
             await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
-            throw SelectiveRemoteCloudError.authenticationRequired
+            throw removalError == nil ? SelectiveRemoteCloudError.authenticationRequired : .logoutUnconfirmed
         }
         return (data, http)
     }
@@ -1538,7 +1628,8 @@ actor SelectiveRemoteCloudAPIClient {
 
     private func storedToken(for endpoint: URL) throws -> String? {
         guard let token = try tokenStore.token(for: endpoint) else { return nil }
-        guard (32...256).contains(token.count) else {
+        guard (32...256).contains(token.count),
+              !SelectiveRemotePublicationLifecycle.isRetiredToken(endpoint: endpoint, token: token) else {
             return nil
         }
         return token
