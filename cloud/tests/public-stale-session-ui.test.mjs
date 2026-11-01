@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory } from "./approved-idb-fixture.mjs";
 import { initializeCloudAccount } from "../public/app.js";
 import { createIndexedDBVaultRepository, createLocalVaultController } from "../public/vault-local.js";
 
@@ -11,6 +11,7 @@ const device = "11111111-1111-4111-8111-111111111111";
 class Element {
   constructor() {
     this.handlers = {};
+    this.children = [];
     this.classList = { toggle() {}, remove() {}, add() {} };
     this.elements = new Proxy({}, { get: (object, key) => object[key] ??= { value: "" } });
   }
@@ -18,9 +19,54 @@ class Element {
   setAttribute() {}
   querySelector() { return this.button ??= new Element(); }
   querySelectorAll() { return []; }
-  replaceChildren() {}
+  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = children; }
   reset() {}
 }
+
+test("a retired session clears its Personal conflict data before the next login", async () => {
+  globalThis.indexedDB = new IDBFactory();
+  globalThis.BroadcastChannel = undefined;
+  const nodes = new Map(), documentValue = {
+    documentElement: { lang: "en" }, defaultView: {}, addEventListener() {}, querySelectorAll() { return []; },
+    createElement() { return new Element(); },
+    querySelector(selector) {
+      if (selector === "#team-vault") return null;
+      if (!nodes.has(selector)) nodes.set(selector, new Element());
+      return nodes.get(selector);
+    },
+  };
+  let reads = 0, clears = 0;
+  const fetchValue = async (path, options = {}) => {
+    if (path === "/v1/me") return Response.json({ error: "unauthorized" }, { status: 401 });
+    if (path === "/v1/auth/login") return Response.json({ token: "a".repeat(43),
+      user: { id: accountA, email: "a@example.invalid", username: "a" }, deviceID: device });
+    if (path === "/v1/vault" && ++reads === 1) return Response.json({
+      id: "99999999-9999-4999-8999-999999999999", revision: 2, envelopeVersion: 1,
+      wrappedKey: {}, ciphertext: "aaa", nonce: "aaa", authTag: "aaa", contentHash: "aaa", updatedAt: null });
+    if (path === "/v1/vault") return Response.json({ error: "unauthorized" }, { status: 401 });
+    throw Error("unexpected_test_request");
+  };
+  const entity = { kind: "record", value: { type: "host", data: { title: "Synthetic private host" },
+    modifiedAt: "2026-01-01T00:00:00.000Z" } };
+  const vault = { lock() {}, status: async () => "unlocked", syncState: async () => ({ serverRevision: 1, dirty: true }),
+    requireConfirmedSyncHistory: async () => {}, verifyRemoteWrapper() {},
+    mergeRemote: async () => ({ conflicts: [{ id: "record-a", local: entity, remote: entity }] }) };
+  const vaultUI = { controller: vault, repository: {}, setConflictResetListener() {}, setLockListener() {},
+    setConflictMode() {}, mode() {}, render() {}, clearConflictUI() {
+      clears++; nodes.get("#local-vault-conflicts").hidden = true; nodes.get("#local-vault-conflicts-list").replaceChildren();
+    } };
+  const app = await initializeCloudAccount({ documentValue, vaultUI, fetchValue });
+  await app.client.login({ email: "a@example.invalid", password: "synthetic password", deviceID: device });
+  await nodes.get("#cloud-vault-sync").handlers.click({});
+  assert.equal(nodes.get("#local-vault-conflicts").hidden, false);
+  assert.equal(nodes.get("#local-vault-conflicts-list").children.length, 1);
+  await assert.rejects(app.client.getVault(), /authentication_required/u);
+  assert.equal(app.client.session(), null);
+  assert.equal(clears, 1);
+  assert.equal(nodes.get("#local-vault-conflicts").hidden, true);
+  assert.equal(nodes.get("#local-vault-conflicts-list").children.length, 0);
+});
 
 test("an obsolete manual sync cannot sign out the newer session presentation", async () => {
   globalThis.indexedDB = new IDBFactory();

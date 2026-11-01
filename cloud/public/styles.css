@@ -6,11 +6,18 @@
 body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--text-primary); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
 .app-booting body { overflow:hidden; }
 .app-booting .shell { visibility:hidden; }
+html[data-account-action-only="true"] .shell > :not(.verification) { display:none !important; }
 .app-boot-screen { position:fixed; inset:0; z-index:1000; display:none; place-items:center; padding:24px; background:var(--body-bg); color:var(--ink); }
 .app-booting .app-boot-screen { display:grid; }
+.vault-storage-deferred { display:grid; place-items:center; padding:24px; }
+.vault-storage-deferred>div { width:min(520px,100%); padding:26px; border:1px solid var(--line); border-radius:20px; background:var(--panel); color:var(--ink); }
+.vault-storage-deferred h1 { margin:0 0 12px; font-size:24px; }
+.vault-storage-deferred p { margin:0 0 20px; color:var(--muted); line-height:1.5; }
+.vault-conflict-details { max-height:18rem; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
 .app-boot-card { position:relative; display:grid; grid-template-columns:54px minmax(0,1fr); align-items:center; gap:15px; width:min(390px,100%); overflow:hidden; padding:22px; border:1px solid var(--line); border-radius:20px; background:color-mix(in srgb,var(--panel) 94%,transparent); box-shadow:0 28px 90px #0007; }
 .app-boot-mark { width:54px; height:54px; display:grid; place-items:center; grid-row:1; border:1px solid var(--accent); border-radius:16px; color:var(--accent); font-weight:850; letter-spacing:.04em; box-shadow:0 0 28px #75e0b420; }
 .app-boot-card>div { display:grid; gap:5px; min-width:0; }.app-boot-card strong { font-size:17px; }.app-boot-card div span { color:var(--muted); font-size:13px; line-height:1.4; }
+.app-boot-card #vault-storage-wait-cancel { grid-column:1/-1; }
 .app-boot-progress { position:absolute; left:0; right:0; bottom:0; height:2px; overflow:hidden; background:#75e0b414; }
 .app-boot-progress::after { content:""; position:absolute; inset:0; width:42%; background:linear-gradient(90deg,transparent,var(--accent),transparent); animation:app-boot-progress 1.15s ease-in-out infinite; }
 .shell { width:min(1180px,calc(100% - 40px)); margin:0 auto; padding:38px 0 60px; }
@@ -248,6 +255,7 @@ body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--text-p
 .team-record-editor { order:4; margin-top:24px; padding:16px 20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
 .team-record-editor summary { cursor:pointer; font-weight:750; }
 #team-vault-workspace { display:flex; flex-direction:column; }
+#team-vault-workspace[data-draft-recovery="true"] > :not(#team-record-editor) { display:none !important; }
 #team-vault-workspace>.vault-toolbar { order:1; }
 #team-vault-workspace>.team-host-browser { order:2; }
 #team-vault-workspace>.vault-records { order:3; }

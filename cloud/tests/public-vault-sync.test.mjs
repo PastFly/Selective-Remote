@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import test from "node:test";
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory } from "./approved-idb-fixture.mjs";
 import { createIndexedDBVaultRepository, createLocalVaultController } from "../public/vault-local.js";
+import { encryptVaultPayload } from "../public/vault-crypto.js";
 import {
   createAuthenticatedVaultClient,
   personalVaultScope,
@@ -39,7 +40,7 @@ function memoryRepository() {
   };
 }
 
-test("verified remote snapshot replaces an incompatible locked browser snapshot and keeps a backup", async () => {
+test("a verified remote snapshot cannot replace an inaccessible locked browser snapshot", async () => {
   const oldRepository = memoryRepository();
   const oldVault = localVault(oldRepository, [deviceA]);
   await oldVault.create("an older local wrapper password");
@@ -53,11 +54,11 @@ test("verified remote snapshot replaces an incompatible locked browser snapshot 
   const remote = await cloudVault.prepareUpload(4);
   const previousSnapshot = oldRepository.snapshot();
 
-  await oldVault.replaceLockedWithRemote({ revision: 5, envelope: remote.envelope }, passphrase);
-
-  assert.equal(oldVault.document().records[0].data.address, "cloud.invalid");
-  assert.deepEqual(oldRepository.previous(), previousSnapshot);
-  assert.deepEqual(await oldVault.syncState(), { localRevision: 5, serverRevision: 5, dirty: false });
+  await assert.rejects(oldVault.replaceLockedWithRemote({ revision: 5, envelope: remote.envelope }, passphrase), /local_vault_recovery_required/u);
+  assert.deepEqual(oldRepository.snapshot(), previousSnapshot);
+  assert.equal(oldRepository.previous(), null);
+  await oldVault.unlock("an older local wrapper password");
+  assert.equal(oldVault.document().records[0].data.address, "old.invalid");
 });
 
 test("an invalid account wrapper cannot replace or back up the locked browser snapshot", async () => {
@@ -573,7 +574,7 @@ test("an edit after a matching remote merge remains dirty and is not reported as
   const vault = localVault(repository, [deviceA, recordA, recordB]);
   await vault.create(passphrase);
   const initial = await vault.prepareUpload(0);
-  await vault.markSynced({ serverRevision: 1, localRevision: 1 });
+  await vault.markSynced({ serverRevision: 1, localRevision: 1, serverContentHash: initial.envelope.contentHash });
   const remoteVault = localVault(memoryRepository(), [deviceB, recordA]);
   await remoteVault.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
   await remoteVault.upsert({ id: recordA, type: "host", data: { title: "Remote", address: "remote.invalid" } });
@@ -697,7 +698,7 @@ test("remote and offline local changes merge locally before one conditional uplo
   const vaultB = localVault(repoB, [deviceB]);
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
-  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision, serverContentHash: initial.envelope.contentHash });
   await vaultB.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
 
   await vaultA.upsert({ id: recordA, type: "host", data: { title: "A", address: "a.invalid" } });
@@ -719,14 +720,14 @@ test("remote and offline local changes merge locally before one conditional uplo
   assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 3, dirty: false });
 });
 
-test("concurrent records automatically keep the newer version and upload the joined history", async () => {
+test("concurrent records require an explicit choice before uploading the joined history", async () => {
   const repoA = memoryRepository();
   const repoB = memoryRepository();
   const vaultA = localVault(repoA, [deviceA], "2026-09-04T01:00:00.000Z");
   const vaultB = localVault(repoB, [deviceB], "2026-09-04T02:00:00.000Z");
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
-  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision, serverContentHash: initial.envelope.contentHash });
   await vaultB.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
 
   await vaultA.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
@@ -744,20 +745,24 @@ test("concurrent records automatically keep the newer version and upload the joi
   };
 
   const result = await synchronizeVault({ client, vault: vaultA });
-  assert.deepEqual(result, { status: "uploaded", revision: 3 });
+  assert.equal(result.status, "conflict");
+  assert.equal(putCalls, 0);
+  assert.equal(vaultA.document().records[0].data.address, "local.invalid");
+  await vaultA.resolveConflicts({ revision: 2, resolutions: [{ id: recordA, choice: "remote" }] });
+  assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
   assert.equal(putCalls, 1);
   assert.equal(vaultA.document().records[0].data.address, "remote.invalid");
   assert.deepEqual(vaultA.document().records[0].version, { [deviceA]: 2, [deviceB]: 1 });
 });
 
-test("automatic newest resolution includes unrelated remote records in one conditional upload", async () => {
+test("explicit conflict resolution includes unrelated remote records in one conditional upload", async () => {
   const repoA = memoryRepository();
   const repoB = memoryRepository();
   const vaultA = localVault(repoA, [deviceA], "2026-09-04T01:00:00.000Z");
   const vaultB = localVault(repoB, [deviceB], "2026-09-04T02:00:00.000Z");
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
-  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision, serverContentHash: initial.envelope.contentHash });
   await vaultB.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
 
   await vaultA.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
@@ -776,6 +781,9 @@ test("automatic newest resolution includes unrelated remote records in one condi
     },
   };
 
+  assert.equal((await synchronizeVault({ client, vault: vaultA })).status, "conflict");
+  assert.equal(uploadedBase, null);
+  await vaultA.resolveConflicts({ revision: 2, resolutions: [{ id: recordA, choice: "remote" }] });
   assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
   assert.equal(vaultA.pendingConflicts(), null);
   assert.deepEqual(vaultA.document().records.map((record) => record.id), [recordA, recordB]);
@@ -784,14 +792,14 @@ test("automatic newest resolution includes unrelated remote records in one condi
   assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 3, dirty: false });
 });
 
-test("a local edit after automatic resolution starts a fresh dirty revision", async () => {
+test("a local edit after explicit resolution starts a fresh dirty revision", async () => {
   const repoA = memoryRepository();
   const repoB = memoryRepository();
   const vaultA = localVault(repoA, [deviceA], "2026-09-04T01:00:00.000Z");
   const vaultB = localVault(repoB, [deviceB], "2026-09-04T02:00:00.000Z");
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
-  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision, serverContentHash: initial.envelope.contentHash });
   await vaultB.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
   await vaultA.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
   await vaultB.upsert({ id: recordA, type: "host", data: { title: "Remote", address: "remote.invalid" } });
@@ -802,6 +810,8 @@ test("a local edit after automatic resolution starts a fresh dirty revision", as
     putVault: async () => ({ conflict: false, revision: 3 }),
   };
 
+  assert.equal((await synchronizeVault({ client, vault: vaultA })).status, "conflict");
+  await vaultA.resolveConflicts({ revision: 2, resolutions: [{ id: recordA, choice: "remote" }] });
   assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
   await vaultA.upsert({ id: recordB, type: "snippet", data: { title: "New local edit", body: "date" } });
   assert.equal(vaultA.pendingConflicts(), null);
@@ -850,7 +860,8 @@ test("an unexpected remote recovery wrapper fails closed before local state chan
   const vault = localVault(repository, [deviceA]);
   await vault.create(passphrase);
   const prepared = await vault.prepareUpload(0);
-  await vault.markSynced({ serverRevision: 1, localRevision: prepared.localRevision });
+  await vault.markSynced({ serverRevision: 1, localRevision: prepared.localRevision,
+    serverContentHash: prepared.envelope.contentHash });
   const salt = prepared.envelope.wrappedKey.salt;
   const changedSalt = `${salt[0] === "A" ? "B" : "A"}${salt.slice(1)}`;
   const remoteEnvelope = {
@@ -872,7 +883,8 @@ test("equal revisions with different Vault keys never confirm or upload foreign 
   const local = localVault(localRepository, [deviceA, recordA]);
   await local.create(passphrase);
   const localInitial = await local.prepareUpload(0);
-  await local.markSynced({ serverRevision: 1, localRevision: localInitial.localRevision });
+  await local.markSynced({ serverRevision: 1, localRevision: localInitial.localRevision,
+    serverContentHash: localInitial.envelope.contentHash });
   await local.upsert({ id: recordA, type: "host", data: { title: "Local only", address: "local.invalid" } });
   const before = localRepository.snapshot();
 
@@ -890,6 +902,286 @@ test("equal revisions with different Vault keys never confirm or upload foreign 
   assert.equal(uploads, 0);
   assert.deepEqual(localRepository.snapshot(), before);
   assert.equal((await local.syncState()).dirty, true);
+});
+
+for (const recomputeHash of [false, true]) {
+  test(`a damaged Cloud copy at the same revision is not overwritten (${recomputeHash ? "AEAD failure" : "hash mismatch"})`, async () => {
+    const repository = memoryRepository();
+    const vault = localVault(repository, [deviceA, recordA]);
+    await vault.create(passphrase);
+    const initial = await vault.prepareUpload(0);
+    await vault.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+      serverContentHash: initial.envelope.contentHash });
+    await vault.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+    const before = repository.snapshot();
+    const envelope = structuredClone(initial.envelope);
+    const ciphertext = Buffer.from(envelope.ciphertext, "base64url");
+    ciphertext[0] ^= 1;
+    envelope.ciphertext = ciphertext.toString("base64url");
+    if (recomputeHash) {
+      envelope.contentHash = createHash("sha256").update(Buffer.concat([
+        Buffer.from([1]), Buffer.from(envelope.nonce, "base64url"), ciphertext,
+        Buffer.from(envelope.authTag, "base64url"),
+      ])).digest("base64url");
+    }
+    let uploads = 0;
+    const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(1, envelope),
+      putVault: async () => { uploads++; return { conflict: false, revision: 2 }; } };
+    await assert.rejects(synchronizeVault({ client, vault }), recomputeHash ? /vault_decryption_failed/u : /vault_content_hash_mismatch/u);
+    assert.equal(uploads, 0);
+    assert.deepEqual(repository.snapshot(), before);
+    assert.equal((await vault.syncState()).dirty, true);
+  });
+}
+
+test("different valid contents at an unchanged Cloud revision cannot be silently overwritten", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA]);
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  const other = localVault(memoryRepository(), [deviceB, recordB]);
+  await other.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
+  await other.upsert({ id: recordB, type: "snippet", data: { title: "Cloud only", body: "echo remote" } });
+  const changedAtSameRevision = await other.prepareUpload(0);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Local only", address: "local.invalid" } });
+  const before = repository.snapshot();
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(1, changedAtSameRevision.envelope),
+    putVault: async () => { uploads++; return { conflict: false, revision: 2 }; } };
+  await assert.rejects(synchronizeVault({ client, vault: local }), /remote_same_revision_changed/u);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+  assert.equal((await local.syncState()).dirty, true);
+});
+
+test("a same-revision changed record cannot be overwritten even when local version dominates", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA]);
+  await local.create(passphrase);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Original", address: "original.invalid" } });
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  const altered = local.document();
+  altered.records[0].data.address = "other.invalid";
+  const envelope = await encryptVaultPayload({ vaultKey: local.sessionKey(), payload: altered,
+    baseRevision: 0, wrappedKey: initial.envelope.wrappedKey, cryptoValue: webcrypto });
+  await local.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+  const before = repository.snapshot();
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(1, envelope),
+    putVault: async () => { uploads++; return { conflict: false, revision: 2 }; } };
+  await assert.rejects(synchronizeVault({ client, vault: local }), /remote_same_revision_changed/u);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+});
+
+test("legacy dirty metadata without a confirmed Cloud fingerprint never authorizes an upload", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA]);
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await local.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+  const before = repository.snapshot();
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(1, initial.envelope),
+    putVault: async () => { uploads++; return { conflict: false, revision: 2 }; } };
+  await assert.rejects(synchronizeVault({ client, vault: local }), /remote_history_unverified/u);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+});
+
+test("legacy dirty metadata stops before merging a newer Cloud revision", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA]);
+  await local.create(passphrase);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Original", address: "original.invalid" } });
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  const other = localVault(memoryRepository(), [deviceB]);
+  await other.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  await other.upsert({ id: recordA, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  const remote = await other.prepareUpload(1), before = repository.snapshot();
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(2, remote.envelope),
+    putVault: async () => { uploads++; return { conflict: false, revision: 3 }; } };
+  await assert.rejects(synchronizeVault({ client, vault: local }), /remote_history_unverified/u);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+  assert.equal(local.document().records[0].data.address, "offline.invalid");
+});
+
+test("a newer Cloud revision is not overwritten when clean legacy metadata has no fingerprint", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA]);
+  await local.create(passphrase);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Old", address: "cloud.invalid" } });
+  const older = await local.prepareUpload(0);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+  await local.markSynced({ serverRevision: 1, localRevision: (await local.prepareUpload(0)).localRevision });
+  const before = repository.snapshot();
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }),
+    getVault: async () => remoteValue(2, { ...older.envelope, baseRevision: 1 }),
+    putVault: async () => { uploads++; return { conflict: false, revision: 3 }; } };
+  await assert.rejects(synchronizeVault({ client, vault: local }), /remote_history_unverified/u);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+});
+
+test("an offline edit during remote decrypt cannot invalidate a confirmed snapshot", async () => {
+  const repository = memoryRepository();
+  let holdDecrypt = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const cryptoValue = { getRandomValues: webcrypto.getRandomValues.bind(webcrypto),
+    subtle: new Proxy(webcrypto.subtle, { get(target, key) {
+      if (key === "decrypt") return async (...args) => { if (holdDecrypt) { entered(); await held; } return target.decrypt(...args); };
+      const value = target[key]; return typeof value === "function" ? value.bind(target) : value;
+    } }) };
+  const local = createLocalVaultController({ repository, cryptoValue, randomUUID: () => deviceA,
+    now: () => "2026-09-04T00:00:00.000Z" });
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  const other = localVault(memoryRepository(), [deviceB]);
+  await other.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
+  await other.upsert({ id: recordB, type: "snippet", data: { title: "Remote", body: "echo remote" } });
+  const remote = await other.prepareUpload(1);
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(2, remote.envelope),
+    putVault: async () => { uploads++; return { conflict: false, revision: 3 }; } };
+  holdDecrypt = true;
+  const pending = synchronizeVault({ client, vault: local });
+  await started;
+  await local.upsert({ id: recordA, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  const before = repository.snapshot();
+  release();
+  await assert.rejects(pending, /local_vault_changed/u);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+});
+
+test("concurrent offline edits are preserved until the user explicitly resolves the conflict", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA], "2026-09-04T01:00:00.000Z");
+  await local.create(passphrase);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Original", address: "original.invalid" } });
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  const other = localVault(memoryRepository(), [deviceB], "2026-09-04T02:00:00.000Z");
+  await other.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  await other.upsert({ id: recordA, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  const remote = await other.prepareUpload(1), before = repository.snapshot();
+  let uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => remoteValue(2, remote.envelope),
+    putVault: async (_scope, envelope) => { uploads++; assert.equal(envelope.baseRevision, 2); return { conflict: false, revision: 3 }; } };
+  const result = await synchronizeVault({ client, vault: local });
+  assert.equal(result.status, "conflict");
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(uploads, 0);
+  assert.deepEqual(repository.snapshot(), before);
+  assert.equal(local.document().records[0].data.address, "offline.invalid");
+  await local.resolveConflicts({ revision: 2, resolutions: [{ id: recordA, choice: "local" }] });
+  assert.equal(local.document().records[0].data.address, "offline.invalid");
+  assert.deepEqual(await synchronizeVault({ client, vault: local }), { status: "uploaded", revision: 3 });
+  assert.equal(uploads, 1);
+});
+
+test("a clean legacy snapshot establishes its Cloud fingerprint before later edits upload", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA, recordA]);
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  let remote = remoteValue(1, initial.envelope), uploads = 0;
+  const client = { session: () => ({ id: userID }), getVault: async () => structuredClone(remote),
+    putVault: async (_scope, envelope) => {
+      uploads++; remote = remoteValue(2, envelope); return { conflict: false, revision: 2 };
+    } };
+  assert.deepEqual(await synchronizeVault({ client, vault: local }), { status: "up_to_date", revision: 1 });
+  assert.equal((await repository.loadSync()).serverContentHash, initial.envelope.contentHash);
+  await local.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+  assert.deepEqual(await synchronizeVault({ client, vault: local }), { status: "uploaded", revision: 2 });
+  assert.equal(uploads, 1);
+  assert.equal((await repository.loadSync()).serverContentHash, remote.envelope.contentHash);
+});
+
+test("locking during fingerprint metadata lookup does not write stale sync state", async () => {
+  const repository = memoryRepository();
+  const local = localVault(repository, [deviceA]);
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  const priorLoad = repository.loadSync, priorSave = repository.saveSync;
+  let enter, release, saves = 0;
+  const started = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  repository.loadSync = async () => { enter(); await held; return priorLoad(); };
+  repository.saveSync = async value => { saves++; return priorSave(value); };
+  const pending = local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  await started;
+  local.lock();
+  release();
+  await assert.rejects(pending, /local_vault_locked/u);
+  assert.equal(saves, 0);
+  assert.equal(await priorLoad(), null);
+});
+
+test("a changed account session cannot commit delayed upload metadata", async () => {
+  const indexedDB = new IDBFactory(), repository = createIndexedDBVaultRepository(indexedDB).forAccount(userID);
+  let armed = false, enter, release, epoch = "1";
+  const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, async saveSyncIfCurrent(...args) {
+    if (armed) { enter(); await held; }
+    return repository.saveSyncIfCurrent(...args);
+  } };
+  const vault = localVault(delayed, [deviceA]);
+  await vault.create(passphrase);
+  await vault.bindAccountOwnership(userID);
+  const client = { session: () => ({ id: userID }),
+    publicationIdentity: () => ({ accountID: userID, deviceID: deviceA, sessionEpoch: epoch }),
+    getVault: async () => remoteValue(0),
+    putVault: async () => ({ conflict: false, revision: 1 }) };
+  armed = true;
+  const pending = synchronizeVault({ client, vault });
+  await started;
+  epoch = "2";
+  release();
+  await assert.rejects(pending, /authentication_required/u);
+  assert.equal(await repository.loadSync(), null);
+});
+
+test("a changed session cannot pin a delayed legacy Personal fingerprint", async () => {
+  const indexedDB = new IDBFactory(), repository = createIndexedDBVaultRepository(indexedDB).forAccount(userID);
+  let armed = false, enter, release, epoch = "1";
+  const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, async saveSyncIfCurrent(...args) {
+    if (armed) { enter(); await held; }
+    return repository.saveSyncIfCurrent(...args);
+  } };
+  const vault = localVault(delayed, [deviceA]);
+  await vault.create(passphrase);
+  const initial = await vault.prepareUpload(0);
+  await vault.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  const before = await repository.loadSync();
+  const client = { session: () => ({ id: userID }),
+    publicationIdentity: () => ({ accountID: userID, deviceID: deviceA, sessionEpoch: epoch }),
+    getVault: async () => remoteValue(1, initial.envelope) };
+  armed = true;
+  const pending = synchronizeVault({ client, vault });
+  await started;
+  epoch = "2";
+  release();
+  await assert.rejects(pending, /authentication_required/u);
+  assert.deepEqual(await repository.loadSync(), before);
 });
 
 test("an existing local Vault cannot upload to an empty account without fresh ownership proof", async () => {

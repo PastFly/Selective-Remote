@@ -94,6 +94,10 @@ async function uploadedBrowserFixture(){
  v.remote={...v.remote,scope,id:scope.vaultID,teamID:scope.teamID};
  const initialClient={session:()=>({id:o.userID}),getTeamVault:async()=>structuredClone(v.remote),putTeamVault:async(s,next)=>{v.remote={...v.remote,...next,revision:2};return {revision:2,keyGeneration:1,conflict:false};}};
  const owner=team.createTeamVaultController({repository:repo,identity:o.identity,scope});await owner.unlock();
+ // This fixture starts with a clean legacy cache. Authenticate and pin that
+ // server revision before making local edits, as the current client requires.
+ assert.deepEqual(await team.synchronizeTeamVault({client:initialClient,controller:owner,role:'owner'}),{status:'up_to_date',revision:1});
+ assert.equal(v.local.serverContentHash,v.remote.contentHash);
  for(const record of lifecycle.stagingV1Records())await owner.upsert(record);
  await team.synchronizeTeamVault({client:initialClient,controller:owner,role:'owner'});
  const document=owner.document();owner.lock();

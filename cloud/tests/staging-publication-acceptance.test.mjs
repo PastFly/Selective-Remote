@@ -8,6 +8,11 @@ import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {validateRunConfig,validateOperatorRequest,redactedEvidence,readProtectedJSON,operatorArguments,createOperatorBridge,createProtectedRunDirectory,assertProtectedDirectory,lifecycleModules} from '../scripts/staging-publication-acceptance.mjs';
 const id=()=>randomUUID(),hash='a'.repeat(64);
+test('acceptance binds the shared local Vault storage module',()=>{
+ assert.ok(lifecycleModules.includes('vault-storage'));
+ const c=config();delete c.moduleHashes['/vault-storage.js'];
+ assert.throws(()=>validateRunConfig(c),/invalid_real_run_config/);
+});
 function config(){return {version:1,runID:'20261003-a1',origin:'https://cloud.pastfly.ru',emails:['owner@example.test','member@example.test'],expectedSourceSHA:'a'.repeat(40),approvedVaultIDs:[],moduleHashes:Object.fromEntries(lifecycleModules.map(name=>['/'+name+'.js',hash])),operator:{sshHost:'root@142.252.220.33',remoteWrapperPath:'/opt/selective-remote-controller/scripts/staging-migration-operator.sh',identityFile:'/Users/kadaevleonid/.ssh/id_ed25519_selectiveremote'}};}
 function scope(){return {teamID:id(),vaultID:id(),attemptID:id(),actorUserID:id(),actorDeviceID:id(),name:'TEST-ONLY-CODEX-20261003-a1-populated'};}
 test('real runner requires exact origin fixed operator and explicit scoped enrollment',()=>{

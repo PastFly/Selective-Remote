@@ -9,13 +9,12 @@ import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
-  resolveVaultConflictsByNewest,
   resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
 } from "./vault-model.js";
+import { openVaultStorage } from "./vault-storage.js";
 
-const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
 const snapshotKey = "personal";
 const syncKey = "personal-sync";
@@ -56,15 +55,25 @@ function validatedSnapshot(value) {
   return { revision: value.revision, deviceID, envelope: value.envelope };
 }
 
+function validatedRemoteSnapshot(value) {
+  try { return validatedSnapshot(value); }
+  catch { throw new Error("invalid_remote_vault"); }
+}
+
 function validatedSyncMetadata(value) {
-  exactKeys(value, syncKeys, "invalid_local_vault_sync");
+  const hasServerHash = Object.hasOwn(value ?? {}, "serverContentHash");
+  exactKeys(value, hasServerHash ? [...syncKeys, "serverContentHash"] : syncKeys, "invalid_local_vault_sync");
   if (!Number.isSafeInteger(value.localRevision) || value.localRevision < 1) {
     throw new Error("invalid_local_vault_sync");
   }
   if (!Number.isSafeInteger(value.serverRevision) || value.serverRevision < 0) {
     throw new Error("invalid_local_vault_sync");
   }
-  return { localRevision: value.localRevision, serverRevision: value.serverRevision };
+  if (hasServerHash && (value.serverRevision < 1 || !base64URLDigest.test(value.serverContentHash))) {
+    throw new Error("invalid_local_vault_sync");
+  }
+  return { localRevision: value.localRevision, serverRevision: value.serverRevision,
+    ...(hasServerHash ? { serverContentHash: value.serverContentHash } : {}) };
 }
 
 function normalizedDeviceID(value) {
@@ -219,16 +228,7 @@ function clone(value) {
 }
 
 function openDatabase(indexedDBValue) {
-  if (!indexedDBValue?.open) return Promise.reject(new Error("local_vault_storage_unavailable"));
-  return new Promise((resolve, reject) => {
-    const request = indexedDBValue.open(databaseName, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(storeName)) request.result.createObjectStore(storeName);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("local_vault_storage_unavailable"));
-    request.onblocked = () => reject(new Error("local_vault_storage_unavailable"));
-  });
+  return openVaultStorage(indexedDBValue, "local_vault_storage_unavailable");
 }
 
 async function transaction(indexedDBValue, mode, operation) {
@@ -285,7 +285,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
         });
       } finally { database.close(); }
     },
-    async saveIfCurrent(expectedValue, nextValue, { backup = false, sync = null } = {}) {
+    async saveIfCurrent(expectedValue, nextValue, { backup = false, sync = null, requireCurrent = () => {} } = {}) {
       const expected = validatedSnapshot(expectedValue), next = validatedSnapshot(nextValue);
       const metadata = sync === null ? null : validatedSyncMetadata(sync);
       const database = await openDatabase(indexedDBValue);
@@ -298,6 +298,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
           for (const request of [current, owner]) request.onsuccess = () => {
             if (--remaining) return;
             try {
+              requireCurrent();
               if (!current.result || JSON.stringify(validatedSnapshot(current.result)) !== JSON.stringify(expected)) {
                 throw new Error("local_vault_changed");
               }
@@ -317,7 +318,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
         });
       } finally { database.close(); }
     },
-    async saveSyncIfCurrent(expectedValue, syncValue) {
+    async saveSyncIfCurrent(expectedValue, syncValue, { requireCurrent = () => {} } = {}) {
       const expected = validatedSnapshot(expectedValue), metadata = validatedSyncMetadata(syncValue);
       const database = await openDatabase(indexedDBValue);
       try {
@@ -329,12 +330,16 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
           for (const request of [current, prior]) request.onsuccess = () => {
             if (--remaining) return;
             try {
+              requireCurrent();
               if (!current.result || JSON.stringify(validatedSnapshot(current.result)) !== JSON.stringify(expected)) {
                 throw new Error("local_vault_changed");
               }
               if (prior.result && validatedSyncMetadata(prior.result).serverRevision > metadata.serverRevision) {
                 throw new Error("local_vault_sync_changed");
               }
+              const previous = prior.result && validatedSyncMetadata(prior.result);
+              if (previous && previous.serverRevision === metadata.serverRevision && previous.serverContentHash
+                  && previous.serverContentHash !== metadata.serverContentHash) throw new Error("local_vault_sync_changed");
               store.put(metadata, keys.sync);
             } catch (error) { failure = error; tx.abort(); }
           };
@@ -875,7 +880,6 @@ export function createLocalVaultController({
   let vaultKey = null;
   let document = null;
   let pendingConflicts = null;
-  let lastFailedUnlockSnapshot = null;
   let lockGeneration = 0;
   let observedUnlockState = initialUnlockState ? clone(initialUnlockState) : null;
   let observedUnlockGeneration = observedUnlockState?.generation ?? -1;
@@ -922,19 +926,34 @@ export function createLocalVaultController({
     return value ? validatedSyncMetadata(value) : null;
   }
 
-  async function saveSyncMetadata(value) {
+  async function saveSyncMetadata(value, { requireCurrent = () => {} } = {}) {
     if (typeof repository.saveSync !== "function") throw new Error("local_vault_sync_storage_unavailable");
+    const generation = lockGeneration, expected = snapshot;
     const metadata = validatedSyncMetadata(value);
-    if (snapshot && typeof repository.saveSyncIfCurrent === "function") await repository.saveSyncIfCurrent(snapshot, metadata);
+    const previous = await syncMetadata();
+    requireCurrent();
+    requireGeneration(generation);
+    if (snapshot !== expected) throw new Error("local_vault_changed");
+    if (previous && previous.serverRevision === metadata.serverRevision && previous.serverContentHash) {
+      if (metadata.serverContentHash && previous.serverContentHash !== metadata.serverContentHash) {
+        throw new Error("local_vault_sync_changed");
+      }
+      metadata.serverContentHash = previous.serverContentHash;
+    }
+    if (expected && typeof repository.saveSyncIfCurrent === "function") await repository.saveSyncIfCurrent(expected, metadata, { requireCurrent });
     else await repository.saveSync(metadata);
+    requireCurrent();
+    requireGeneration(generation);
+    if (snapshot !== expected) throw new Error("local_vault_changed");
   }
 
   function requireUnlocked() {
     if (!snapshot || !vaultKey || !document) throw new Error("local_vault_locked");
   }
 
-  async function persist(nextDocument, { returnSnapshot = false } = {}) {
+  async function persist(nextDocument, { returnSnapshot = false, requireCurrent = () => {} } = {}) {
     requireUnlocked();
+    requireCurrent();
     const generation = lockGeneration;
     const expected = snapshot;
     const normalized = validateVaultDocument(nextDocument);
@@ -951,9 +970,11 @@ export function createLocalVaultController({
       envelope,
     });
     requireGeneration(generation);
-    if (typeof repository.saveIfCurrent === "function") await repository.saveIfCurrent(expected, nextSnapshot);
+    requireCurrent();
+    if (typeof repository.saveIfCurrent === "function") await repository.saveIfCurrent(expected, nextSnapshot, { requireCurrent });
     else await repository.save(nextSnapshot);
     requireGeneration(generation);
+    requireCurrent();
     snapshot = nextSnapshot;
     document = normalized;
     return returnSnapshot ? clone(nextSnapshot) : clone(document);
@@ -1025,7 +1046,6 @@ export function createLocalVaultController({
       requireGeneration(generation);
       if (!stored) throw new Error("local_vault_missing");
       const nextSnapshot = validatedSnapshot(stored);
-      lastFailedUnlockSnapshot = nextSnapshot;
       const nextVaultKey = await unwrapVaultKey(nextSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
       const nextDocument = validateVaultDocument(
         await decryptVaultEnvelope(nextVaultKey, nextSnapshot.envelope, cryptoValue),
@@ -1035,7 +1055,6 @@ export function createLocalVaultController({
       vaultKey = nextVaultKey;
       document = nextDocument;
       pendingConflicts = null;
-      lastFailedUnlockSnapshot = null;
       return clone(document);
     },
 
@@ -1205,7 +1224,6 @@ export function createLocalVaultController({
       vaultKey = null;
       document = null;
       pendingConflicts = null;
-      lastFailedUnlockSnapshot = null;
     },
 
     async rewrap(passphrase) {
@@ -1252,6 +1270,19 @@ export function createLocalVaultController({
       };
     },
 
+    async requireConfirmedSyncHistory({ remoteRevision = null } = {}) {
+      requireUnlocked();
+      const generation = lockGeneration, current = snapshot;
+      const metadata = await syncMetadata();
+      requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
+      if (metadata?.serverRevision > 0 && !metadata.serverContentHash
+          && (metadata.localRevision !== current.revision
+            || (remoteRevision !== null && remoteRevision !== metadata.serverRevision))) {
+        throw new Error("remote_history_unverified");
+      }
+    },
+
     async prepareUpload(baseRevision) {
       requireUnlocked();
       const generation = lockGeneration, current = snapshot;
@@ -1264,21 +1295,22 @@ export function createLocalVaultController({
         cryptoValue,
       });
       requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
       return {
         localRevision: current.revision,
         envelope,
       };
     },
 
-    async markSynced({ serverRevision, localRevision }) {
+    async markSynced({ serverRevision, localRevision, serverContentHash = null, requireCurrent = () => {} }) {
       requireUnlocked();
+      requireCurrent();
       if (!Number.isSafeInteger(localRevision) || localRevision < 1 || localRevision > snapshot.revision) {
         throw new Error("invalid_local_vault_sync");
       }
-      const expected = snapshot;
-      const metadata = { serverRevision, localRevision };
-      if (typeof repository.saveSyncIfCurrent === "function") await repository.saveSyncIfCurrent(expected, metadata);
-      else await saveSyncMetadata(metadata);
+      const metadata = { serverRevision, localRevision,
+        ...(serverContentHash ? { serverContentHash } : {}) };
+      await saveSyncMetadata(metadata, { requireCurrent });
       return {
         localRevision: snapshot.revision,
         serverRevision,
@@ -1288,30 +1320,67 @@ export function createLocalVaultController({
 
     verifyRemoteWrapper({ revision, envelope }) {
       requireUnlocked();
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
       if (!sameWrappedKey(remoteSnapshot.envelope.wrappedKey, snapshot.envelope.wrappedKey)) {
         throw new Error("remote_wrapped_key_changed");
+      }
+    },
+
+    async verifySameRevisionRemote({ revision, envelope }, { dirty, requireCurrent = () => {} }) {
+      requireUnlocked();
+      requireCurrent();
+      const generation = lockGeneration;
+      const current = snapshot;
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      if (!sameWrappedKey(remoteSnapshot.envelope.wrappedKey, snapshot.envelope.wrappedKey)) {
+        throw new Error("remote_wrapped_key_changed");
+      }
+      const remoteDocument = validateVaultDocument(
+        await decryptVaultEnvelope(vaultKey, remoteSnapshot.envelope, cryptoValue),
+      );
+      requireGeneration(generation);
+      requireCurrent();
+      if (snapshot !== current) throw new Error("local_vault_changed");
+      const metadata = await syncMetadata();
+      requireGeneration(generation);
+      requireCurrent();
+      if (snapshot !== current || !metadata || metadata.serverRevision !== revision
+          || (metadata.localRevision !== current.revision) !== dirty) throw new Error("local_vault_sync_changed");
+      if (metadata.serverContentHash && metadata.serverContentHash !== envelope.contentHash) {
+        throw new Error("remote_same_revision_changed");
+      }
+      if (!metadata.serverContentHash && dirty) throw new Error("remote_history_unverified");
+      if (!dirty && JSON.stringify(remoteDocument) !== JSON.stringify(document)) throw new Error("remote_same_revision_changed");
+      if (!metadata.serverContentHash) {
+        await saveSyncMetadata({ ...metadata, serverContentHash: envelope.contentHash }, { requireCurrent });
+        requireGeneration(generation);
+        requireCurrent();
+        if (snapshot !== current) throw new Error("local_vault_changed");
       }
     },
 
     async mergeRemote({ revision, envelope }) {
       requireUnlocked();
       const generation = lockGeneration;
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      const current = snapshot;
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
       const remoteDocument = validateVaultDocument(
         await decryptVaultEnvelope(vaultKey, remoteSnapshot.envelope, cryptoValue),
       );
       requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
+      await this.requireConfirmedSyncHistory({ remoteRevision: revision });
+      requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
       if (!sameWrappedKey(remoteSnapshot.envelope.wrappedKey, snapshot.envelope.wrappedKey)) {
         throw new Error("remote_wrapped_key_changed");
       }
       const merged = mergeVaultDocuments(document, remoteDocument);
-      const automaticallyResolved = merged.conflicts.length;
-      if (automaticallyResolved > 0) {
-        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
-          deviceID: snapshot.deviceID,
-          resolvedAt: now(),
-        });
+      if (merged.conflicts.length > 0) {
+        pendingConflicts = { revision, document: merged.document, conflicts: merged.conflicts,
+          sourceSnapshot: snapshot, remoteContentHash: envelope.contentHash };
+        return { conflicts: clone(merged.conflicts), matchesRemote: false,
+          localRevision: snapshot.revision, localChanged: false };
       }
       pendingConflicts = null;
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
@@ -1319,7 +1388,6 @@ export function createLocalVaultController({
       const matchedSnapshot = localChanged ? await persist(merged.document, { returnSnapshot: true }) : clone(snapshot);
       return {
         conflicts: [],
-        automaticallyResolved,
         matchesRemote,
         localRevision: matchedSnapshot.revision,
         localChanged,
@@ -1333,11 +1401,13 @@ export function createLocalVaultController({
         : null;
     },
 
-    async resolveConflicts({ revision, resolutions }) {
+    async resolveConflicts({ revision, resolutions, requireCurrent = () => {} }) {
       requireUnlocked();
+      requireCurrent();
       if (!pendingConflicts || revision !== pendingConflicts.revision || !Array.isArray(resolutions)) {
         throw new Error("invalid_pending_conflicts");
       }
+      if (snapshot !== pendingConflicts.sourceSnapshot) throw new Error("invalid_pending_conflicts");
       if (resolutions.length !== pendingConflicts.conflicts.length) {
         throw new Error("incomplete_conflict_resolution");
       }
@@ -1366,9 +1436,11 @@ export function createLocalVaultController({
         });
       }
       const previousLocalRevision = snapshot.revision;
-      await persist(resolvedDocument);
+      const remoteContentHash = pendingConflicts.remoteContentHash;
+      await persist(resolvedDocument, { requireCurrent });
+      requireCurrent();
       pendingConflicts = null;
-      await saveSyncMetadata({ serverRevision: revision, localRevision: previousLocalRevision });
+      await saveSyncMetadata({ serverRevision: revision, localRevision: previousLocalRevision, serverContentHash: remoteContentHash }, { requireCurrent });
       return {
         revision,
         localRevision: snapshot.revision,
@@ -1380,17 +1452,18 @@ export function createLocalVaultController({
       const generation = lockGeneration;
       if (await repository.load()) throw new Error("local_vault_exists");
       const deviceID = await stableDeviceID();
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID, envelope });
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID, envelope });
       const nextVaultKey = await unwrapVaultKey(remoteSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
       const nextDocument = validateVaultDocument(
         await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
       );
       requireGeneration(generation);
       if (typeof repository.saveInitial === "function") {
-        await repository.saveInitial(remoteSnapshot, { serverRevision: revision, localRevision: revision });
+        await repository.saveInitial(remoteSnapshot, { serverRevision: revision, localRevision: revision,
+          serverContentHash: envelope.contentHash });
       } else {
         await repository.save(remoteSnapshot);
-        await saveSyncMetadata({ serverRevision: revision, localRevision: revision });
+        await saveSyncMetadata({ serverRevision: revision, localRevision: revision, serverContentHash: envelope.contentHash });
       }
       requireGeneration(generation);
       snapshot = remoteSnapshot;
@@ -1400,34 +1473,11 @@ export function createLocalVaultController({
       return clone(document);
     },
 
-    async replaceLockedWithRemote({ revision, envelope }, passphrase) {
-      const generation = lockGeneration;
+    async replaceLockedWithRemote() {
       if (snapshot || vaultKey || document) throw new Error("local_vault_not_locked");
-      const stored = lastFailedUnlockSnapshot ?? await repository.load();
-      if (!stored) throw new Error("local_vault_not_locked");
-      const previousSnapshot = validatedSnapshot(stored);
-      const deviceID = await stableDeviceID();
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID, envelope });
-      const nextVaultKey = await unwrapVaultKey(remoteSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
-      const nextDocument = validateVaultDocument(
-        await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
-      );
-      requireGeneration(generation);
-      if (typeof repository.saveIfCurrent === "function") {
-        await repository.saveIfCurrent(previousSnapshot, remoteSnapshot,
-          { backup: true, sync: { serverRevision: revision, localRevision: revision } });
-      } else {
-        if (typeof repository.savePrevious === "function") await repository.savePrevious(previousSnapshot);
-        await repository.save(remoteSnapshot);
-        await saveSyncMetadata({ serverRevision: revision, localRevision: revision });
-      }
-      requireGeneration(generation);
-      snapshot = remoteSnapshot;
-      vaultKey = nextVaultKey;
-      document = nextDocument;
-      pendingConflicts = null;
-      lastFailedUnlockSnapshot = null;
-      return clone(document);
+      // A decryptable remote copy does not prove that an inaccessible local
+      // copy has no unsynchronized changes. Preserve it for recovery.
+      throw new Error("local_vault_recovery_required");
     },
 
     async upsert({ id = randomUUID(), type, data }) {

@@ -44,12 +44,23 @@ export async function publicationRuntimeFixture(databaseURL) {
 
 // Real HTTP suites need separate DBs: other suites deliberately corrupt active
 // projections to test fail-closed behavior, which must also stop the controller.
+export async function dropDisposablePublicationDatabase(admin, name, {delay=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
+  if (!/^prc_http_[0-9]+_[a-f0-9]{32}_test$/u.test(name)) throw Error('disposable_test_database_required');
+  for (let attempt=0; attempt<6; attempt++) {
+    try { await admin.query(`DROP DATABASE "${name}"`); return; }
+    catch (error) {
+      if (error?.code !== '55006' || attempt === 5) throw error;
+      await delay(Math.min(100 * (2 ** attempt), 1000));
+    }
+  }
+}
+
 export async function isolatedPublicationDatabase(databaseURL) {
   const base=new URL(databaseURL);
   if(!['127.0.0.1','localhost','[::1]'].includes(base.hostname)||!base.pathname.endsWith('_test'))throw Error('disposable_test_database_required');
   const name=`prc_http_${process.pid}_${randomUUID().replaceAll('-','')}_test`;
   const admin=new pg.Pool({connectionString:databaseURL,max:1});let pool,created=false;
-  const cleanup=async()=>{await pool?.end();try{if(created)await admin.query(`DROP DATABASE "${name}"`);}finally{await admin.end();}};
+  const cleanup=async()=>{try{await pool?.end();if(created)await dropDisposablePublicationDatabase(admin,name);}finally{await admin.end();}};
   try{
     await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created=true;base.pathname='/'+name;
     pool=new pg.Pool({connectionString:base.href});

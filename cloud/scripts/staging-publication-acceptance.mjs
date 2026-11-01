@@ -11,7 +11,7 @@ export const STAGING_ORIGIN='https://cloud.pastfly.ru';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const hash=/^[a-f0-9]{64}$/,sha=/^[a-f0-9]{40}$/;
 const runIDPattern=/^[a-z0-9][a-z0-9-]{5,39}$/;
-export const lifecycleModules=['vault-sync','team-vault-crypto','team-vault-sync','device-trust-flow','device-trust-v1','vault-v2-migration','vault-publication-client','whole-publication-flow','whole-publication-client','whole-publication-api','vault-publication-v1','resource-crypto-v2','access-model','legacy-resource-mapping'];
+export const lifecycleModules=['vault-sync','vault-storage','team-vault-crypto','team-vault-sync','device-trust-flow','device-trust-v1','vault-v2-migration','vault-publication-client','whole-publication-flow','whole-publication-client','whole-publication-api','vault-publication-v1','resource-crypto-v2','access-model','legacy-resource-mapping'];
 const fail=code=>{throw Error(code);};
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const exact=(value,keys)=>object(value)&&Object.keys(value).every(key=>keys.includes(key));

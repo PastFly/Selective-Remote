@@ -1,9 +1,9 @@
 import { generateVaultKey } from "./vault-crypto.js";
+import { openVaultStorage } from "./vault-storage.js";
 import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
-  resolveVaultConflictsByNewest,
   resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
@@ -16,7 +16,6 @@ import {
   wrapTeamVaultKeyForDevice,
 } from "./team-vault-crypto.js";
 
-const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
 const recordTypes = new Set(["host", "credential", "snippet", "forwarding", "sshKey"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -61,9 +60,13 @@ function normalizedEnvelope(value) {
 }
 
 function normalizedSnapshot(value, expectedScope = null) {
-  exactKeys(value, snapshotKeys, "invalid_local_team_vault");
+  const hasServerHash = Object.hasOwn(value ?? {}, "serverContentHash");
+  exactKeys(value, hasServerHash ? [...snapshotKeys, "serverContentHash"] : snapshotKeys, "invalid_local_team_vault");
   const scope = normalizeTeamVaultScope(value.scope);
   if (expectedScope && (scope.teamID !== expectedScope.teamID || scope.vaultID !== expectedScope.vaultID)) {
+    throw new Error("invalid_local_team_vault");
+  }
+  if (hasServerHash && (value.serverRevision < 1 || !/^[A-Za-z0-9_-]{43}$/u.test(value.serverContentHash))) {
     throw new Error("invalid_local_team_vault");
   }
   const envelope = normalizedEnvelope(value.envelope);
@@ -82,6 +85,7 @@ function normalizedSnapshot(value, expectedScope = null) {
     localRevision: value.localRevision,
     serverRevision: value.serverRevision,
     syncedLocalRevision: value.syncedLocalRevision,
+    ...(hasServerHash ? { serverContentHash: value.serverContentHash } : {}),
     envelope,
     wrapper: clone(value.wrapper),
   };
@@ -93,16 +97,7 @@ function snapshotKey(scope) {
 }
 
 function openDatabase(indexedDBValue) {
-  if (!indexedDBValue?.open) return Promise.reject(new Error("team_vault_storage_unavailable"));
-  return new Promise((resolve, reject) => {
-    const request = indexedDBValue.open(databaseName, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(storeName)) request.result.createObjectStore(storeName);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("team_vault_storage_unavailable"));
-    request.onblocked = () => reject(new Error("team_vault_storage_unavailable"));
-  });
+  return openVaultStorage(indexedDBValue, "team_vault_storage_unavailable");
 }
 
 async function transaction(indexedDBValue, mode, operation) {
@@ -157,15 +152,16 @@ export function createIndexedDBTeamVaultRepository(scope, indexedDBValue = globa
       if (device && snapshot.deviceID !== device) throw new Error("invalid_local_team_vault");
       return snapshot;
     },
-    async save(value, deviceID = null, expectedSnapshot = undefined) {
+    async save(value, deviceID = null, expectedSnapshot = undefined, requireCurrent = () => {}) {
       const snapshot = normalizedSnapshot(value, normalizedScope);
       const device = deviceID === null ? null : normalizedUUID(deviceID, "invalid_team_device_identity");
       if (device && snapshot.deviceID !== device) throw new Error("invalid_local_team_vault");
       const expected = expectedSnapshot == null ? expectedSnapshot : normalizedSnapshot(expectedSnapshot, normalizedScope);
       if (expected && expected.deviceID !== device) throw new Error("invalid_local_team_vault");
       await transaction(indexedDBValue, "readwrite", (store, done, abort) => {
-        if (!device) return store.put(clone(snapshot), key);
+        if (!device) { requireCurrent(); return store.put(clone(snapshot), key); }
         readDeviceSnapshots(store, device, done, abort, (scoped, legacy, finish) => {
+          requireCurrent();
           if (expected !== undefined && JSON.stringify(scoped ?? legacy) !== JSON.stringify(expected)) {
             throw new Error("team_vault_stale_snapshot");
           }
@@ -175,13 +171,14 @@ export function createIndexedDBTeamVaultRepository(scope, indexedDBValue = globa
         });
       });
     },
-    async remove(deviceID = null, expectedSnapshot = undefined) {
+    async remove(deviceID = null, expectedSnapshot = undefined, requireCurrent = () => {}) {
       const device = deviceID === null ? null : normalizedUUID(deviceID, "invalid_team_device_identity");
       const expected = expectedSnapshot == null ? expectedSnapshot : normalizedSnapshot(expectedSnapshot, normalizedScope);
       if (expected && expected.deviceID !== device) throw new Error("invalid_local_team_vault");
       await transaction(indexedDBValue, "readwrite", (store, done, abort) => {
-        if (!device) return store.delete(key);
+        if (!device) { requireCurrent(); return store.delete(key); }
         readDeviceSnapshots(store, device, done, abort, (scoped, legacy, finish) => {
+          requireCurrent();
           if (expected !== undefined && JSON.stringify(scoped ?? legacy) !== JSON.stringify(expected)) {
             throw new Error("team_vault_stale_snapshot");
           }
@@ -261,10 +258,14 @@ export function createTeamVaultController({
     pendingGeneration = null;
   }
 
-  async function save(nextSnapshot, expectedSnapshot = snapshot) {
+  async function save(nextSnapshot, expectedSnapshot = snapshot, requireSession = () => {}) {
     const normalized = normalizedSnapshot(nextSnapshot, normalizedScope);
+    const generation = lockGeneration;
+    const requireCurrent = () => { requireGeneration(generation); requireSession(); };
     requireMutationCurrent();
-    await repository.save(normalized, deviceID, expectedSnapshot);
+    requireCurrent();
+    await repository.save(normalized, deviceID, expectedSnapshot, requireCurrent);
+    requireCurrent();
     requireMutationCurrent();
     snapshot = normalized;
   }
@@ -445,7 +446,8 @@ export function createTeamVaultController({
         throw new Error("team_vault_initialization_committed");
       }
       if (typeof repository.remove !== "function") throw new Error("team_vault_storage_unavailable");
-      await repository.remove(deviceID, snapshot);
+      const generation = lockGeneration;
+      await repository.remove(deviceID, snapshot, () => requireGeneration(generation));
       requireMutationCurrent();
       clearState();
     },
@@ -476,6 +478,7 @@ export function createTeamVaultController({
         localRevision: 1,
         serverRevision: remote.revision,
         syncedLocalRevision: 1,
+        serverContentHash: envelope.contentHash,
         envelope,
         wrapper: remote.wrapper,
       };
@@ -496,6 +499,82 @@ export function createTeamVaultController({
         keyGeneration: snapshot.keyGeneration,
         dirty: snapshot.syncedLocalRevision !== snapshot.localRevision,
       };
+    },
+
+    async verifyRemoteAccess(remote, { requireCurrent = () => {} } = {}) {
+      const generation = lockGeneration;
+      requireCurrent();
+      if (!remote?.wrapper) throw new Error("team_vault_key_unavailable");
+      let remoteKey;
+      try {
+        remoteKey = await unwrapTeamVaultKeyForDevice({ privateKey: identity.privateKey, wrapper: remote.wrapper,
+          ...normalizedScope, keyGeneration: remote.keyGeneration, deviceID, cryptoValue });
+      } catch {
+        requireCurrent();
+        requireGeneration(generation);
+        throw new Error("team_vault_key_unavailable");
+      }
+      requireCurrent();
+      requireGeneration(generation);
+      if (snapshot && (normalizedUUID(snapshot.wrapper.membershipID, "invalid_team_vault_wrapper")
+          !== normalizedUUID(remote.wrapper.membershipID, "invalid_team_vault_wrapper")
+          || snapshot.wrapper.membershipEpoch !== remote.wrapper.membershipEpoch)) {
+        throw new Error("team_vault_membership_changed");
+      }
+      // An uncommitted initialization can legitimately use a different key from
+      // the first revision created concurrently by another authorized device.
+      if (snapshot && snapshot.serverRevision > 0 && vaultKey && snapshot.keyGeneration === remote.keyGeneration) {
+        const expected = snapshot, localKey = vaultKey;
+        const localBytes = new Uint8Array(await cryptoValue.subtle.exportKey("raw", localKey));
+        let remoteBytes;
+        try {
+          remoteBytes = new Uint8Array(await cryptoValue.subtle.exportKey("raw", remoteKey));
+          requireCurrent();
+          requireGeneration(generation);
+          if (snapshot !== expected || vaultKey !== localKey) throw new Error("team_vault_stale_snapshot");
+          let difference = localBytes.length ^ remoteBytes.length;
+          for (let index = 0; index < Math.min(localBytes.length, remoteBytes.length); index++) {
+            difference |= localBytes[index] ^ remoteBytes[index];
+          }
+          if (difference !== 0) throw new Error("team_vault_key_unavailable");
+        } finally { localBytes.fill(0); remoteBytes?.fill(0); }
+      }
+    },
+
+    async requireConfirmedSyncHistory({ remoteRevision = null } = {}) {
+      requireUnlocked();
+      const expected = snapshot, generation = lockGeneration;
+      await currentSnapshot(expected, generation);
+      if (snapshot.serverRevision > 0 && !snapshot.serverContentHash
+          && (snapshot.syncedLocalRevision !== snapshot.localRevision
+            || (remoteRevision !== null && remoteRevision !== snapshot.serverRevision))) {
+        throw new Error("team_vault_history_unverified");
+      }
+    },
+
+    async verifySameRevisionRemote(remote, { requireCurrent = () => {} } = {}) {
+      requireUnlocked();
+      requireCurrent();
+      const expected = snapshot, generation = lockGeneration, currentKey = vaultKey;
+      const envelope = remoteEnvelope(remote);
+      const remoteDocument = validateVaultDocument(await decryptTeamVaultPayload({
+        vaultKey: currentKey, envelope, scope: normalizedScope, cryptoValue,
+      }));
+      await currentSnapshot(expected, generation);
+      requireCurrent();
+      if (remote.revision !== expected.serverRevision || remote.keyGeneration !== expected.keyGeneration) {
+        throw new Error("team_vault_stale_snapshot");
+      }
+      if (expected.serverContentHash && expected.serverContentHash !== envelope.contentHash) {
+        throw new Error("team_vault_same_revision_changed");
+      }
+      const dirty = expected.syncedLocalRevision !== expected.localRevision;
+      if (!expected.serverContentHash && dirty) throw new Error("team_vault_history_unverified");
+      if (!dirty && JSON.stringify(remoteDocument) !== JSON.stringify(document)) {
+        throw new Error("team_vault_same_revision_changed");
+      }
+      if (!expected.serverContentHash) await save({ ...expected, serverContentHash: envelope.contentHash }, expected, requireCurrent);
+      requireCurrent();
     },
 
     async prepareUpload(baseRevision) {
@@ -555,6 +634,10 @@ export function createTeamVaultController({
       if (status === "unlocked") {
         if (snapshot.keyGeneration !== remote.keyGeneration) throw new Error("team_vault_generation_changed");
         if (snapshot.serverRevision > remote.revision) throw new Error("remote_revision_regressed");
+        await this.requireConfirmedSyncHistory({ remoteRevision: remote.revision });
+        requireMutationCurrent();
+        await this.verifyRemoteAccess(remote);
+        requireMutationCurrent();
       } else if (status === "empty") {
         if (!remote.wrapper) throw new Error("team_vault_key_unavailable");
         currentKey = await unwrapTeamVaultKeyForDevice({
@@ -575,14 +658,23 @@ export function createTeamVaultController({
         scope: normalizedScope,
         cryptoValue,
       }));
+      if (sourceSnapshot && remote.revision === sourceSnapshot.serverRevision) {
+        if (sourceSnapshot.serverContentHash && sourceSnapshot.serverContentHash !== encryptedRemote.contentHash) {
+          throw new Error("team_vault_same_revision_changed");
+        }
+        if (!sourceSnapshot.serverContentHash && JSON.stringify(remoteDocument) !== JSON.stringify(localDocument)) {
+          throw new Error("team_vault_same_revision_changed");
+        }
+      }
       let nextDocument = remoteDocument;
       if (localDocument) {
         const merged = mergeVaultDocuments(localDocument, remoteDocument);
         if (merged.conflicts.length > 0) {
-          merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
-            deviceID,
-            resolvedAt: now(),
-          });
+          await currentSnapshot(sourceSnapshot, generation);
+          pendingConflicts = { revision: remote.revision, document: merged.document,
+            conflicts: merged.conflicts, sourceSnapshot: snapshot, remoteContentHash: encryptedRemote.contentHash };
+          pendingGeneration = null;
+          return { revision: remote.revision, conflicts: clone(merged.conflicts) };
         }
         nextDocument = merged.document;
       }
@@ -651,6 +743,7 @@ export function createTeamVaultController({
         localRevision: nextLocalRevision,
         serverRevision,
         syncedLocalRevision: nextLocalRevision,
+        serverContentHash: prepared.uploadEnvelope.contentHash,
         envelope: prepared.envelope,
         wrapper: prepared.wrapper,
       });
@@ -665,7 +758,7 @@ export function createTeamVaultController({
       if (pendingRotation?.token === token) pendingRotation = null;
     },
 
-    async markSynced({ serverRevision, localRevision }) {
+    async markSynced({ serverRevision, localRevision, serverContentHash = null }) {
       requireUnlocked();
       if (!Number.isSafeInteger(serverRevision) || serverRevision < 1
         || !Number.isSafeInteger(localRevision) || localRevision < 1 || localRevision > snapshot.localRevision) {
@@ -677,11 +770,15 @@ export function createTeamVaultController({
       if (serverRevision === snapshot.serverRevision && localRevision !== snapshot.syncedLocalRevision) {
         return { ...await this.syncState(), superseded: true };
       }
-      await save({
+      const contentHash = serverContentHash ?? (serverRevision === snapshot.serverRevision ? snapshot.serverContentHash : undefined);
+      const next = {
         ...snapshot,
         serverRevision,
         syncedLocalRevision: localRevision,
-      });
+      };
+      if (contentHash) next.serverContentHash = contentHash;
+      else delete next.serverContentHash;
+      await save(next);
       return { dirty: snapshot.syncedLocalRevision !== snapshot.localRevision, ...await this.syncState() };
     },
 
@@ -697,13 +794,14 @@ export function createTeamVaultController({
         cryptoValue,
       }));
       requireMutationCurrent();
+      await this.requireConfirmedSyncHistory({ remoteRevision: remote.revision });
+      requireMutationCurrent();
       const merged = mergeVaultDocuments(document, remoteDocument);
-      const automaticallyResolved = merged.conflicts.length;
-      if (automaticallyResolved > 0) {
-        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
-          deviceID,
-          resolvedAt: now(),
-        });
+      if (merged.conflicts.length > 0) {
+        pendingConflicts = { revision: remote.revision, document: merged.document,
+          conflicts: merged.conflicts, sourceSnapshot: snapshot, remoteContentHash: envelope.contentHash };
+        pendingGeneration = null;
+        return { conflicts: clone(merged.conflicts), matchesRemote: false, localChanged: false };
       }
       pendingConflicts = null;
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
@@ -715,15 +813,17 @@ export function createTeamVaultController({
           localRevision: nextLocalRevision,
           serverRevision: remote.revision,
           syncedLocalRevision: nextLocalRevision,
+          serverContentHash: envelope.contentHash,
           envelope,
           wrapper: remote.wrapper ?? snapshot.wrapper,
         });
         document = remoteDocument;
       } else if (localChanged) {
         await persist(merged.document);
-        await save({ ...snapshot, serverRevision: remote.revision, wrapper: remote.wrapper ?? snapshot.wrapper });
+        await save({ ...snapshot, serverRevision: remote.revision, serverContentHash: envelope.contentHash,
+          wrapper: remote.wrapper ?? snapshot.wrapper });
       }
-      return { conflicts: [], automaticallyResolved, matchesRemote, localChanged };
+      return { conflicts: [], matchesRemote, localChanged };
     },
 
     async mergeRemoteGeneration(remote) {
@@ -749,13 +849,14 @@ export function createTeamVaultController({
         cryptoValue,
       }));
       requireMutationCurrent();
+      await this.requireConfirmedSyncHistory({ remoteRevision: remote.revision });
+      requireMutationCurrent();
       const merged = mergeVaultDocuments(document, remoteDocument);
-      const automaticallyResolved = merged.conflicts.length;
-      if (automaticallyResolved > 0) {
-        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
-          deviceID,
-          resolvedAt: now(),
-        });
+      if (merged.conflicts.length > 0) {
+        pendingConflicts = { revision: remote.revision, document: merged.document,
+          conflicts: merged.conflicts, sourceSnapshot: snapshot, remoteContentHash: envelope.contentHash };
+        pendingGeneration = { vaultKey: nextKey, remote, wrapper: remote.wrapper };
+        return { conflicts: clone(merged.conflicts), matchesRemote: false };
       }
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
       const nextLocalRevision = snapshot.localRevision + 1;
@@ -776,6 +877,7 @@ export function createTeamVaultController({
         keyGeneration: remote.keyGeneration,
         localRevision: nextLocalRevision,
         serverRevision: remote.revision,
+        serverContentHash: envelope.contentHash,
         syncedLocalRevision: matchesRemote ? nextLocalRevision : snapshot.syncedLocalRevision,
         envelope: nextEnvelope,
         wrapper: remote.wrapper,
@@ -784,7 +886,7 @@ export function createTeamVaultController({
       document = merged.document;
       pendingConflicts = null;
       pendingGeneration = null;
-      return { conflicts: [], automaticallyResolved, matchesRemote };
+      return { conflicts: [], matchesRemote };
     },
 
     pendingConflicts() {
@@ -798,6 +900,7 @@ export function createTeamVaultController({
         || resolutions.length !== pendingConflicts.conflicts.length) {
         throw new Error("invalid_pending_conflicts");
       }
+      if (snapshot !== pendingConflicts.sourceSnapshot) throw new Error("invalid_pending_conflicts");
       const choices = new Map();
       for (const resolution of resolutions) {
         exactKeys(resolution, ["choice", "id"], "invalid_conflict_resolution");
@@ -811,6 +914,7 @@ export function createTeamVaultController({
         throw new Error("incomplete_conflict_resolution");
       }
       let resolved = pendingConflicts.document;
+      const remoteContentHash = pendingConflicts.remoteContentHash;
       for (const conflict of pendingConflicts.conflicts) {
         resolved = resolveVaultConflict(resolved, conflict, {
           choice: choices.get(conflict.id),
@@ -835,6 +939,7 @@ export function createTeamVaultController({
           keyGeneration: generation.remote.keyGeneration,
           localRevision: nextLocalRevision,
           serverRevision: revision,
+          serverContentHash: remoteContentHash,
           envelope,
           wrapper: generation.wrapper,
         });
@@ -843,7 +948,7 @@ export function createTeamVaultController({
         pendingGeneration = null;
       } else {
         await persist(resolved);
-        await save({ ...snapshot, serverRevision: revision });
+        await save({ ...snapshot, serverRevision: revision, serverContentHash: remoteContentHash });
       }
       const count = pendingConflicts?.conflicts.length ?? resolutions.length;
       pendingConflicts = null;
@@ -912,8 +1017,35 @@ function captureTeamOperation(client, controller) {
   return requireCurrent;
 }
 
+async function verifyTeamRemoteAccess({ controller, remote, requireCurrent }) {
+  if (remote.revision === 0) return;
+  try {
+    if (typeof controller.verifyRemoteAccess !== "function") throw new Error("team_vault_key_unavailable");
+    await controller.verifyRemoteAccess(remote, { requireCurrent });
+    requireCurrent();
+  } catch (error) {
+    requireCurrent();
+    controller.lock();
+    throw error;
+  }
+}
+
+async function readTeamVaultOrLock({ client, controller, scope, requireCurrent }) {
+  try {
+    return await client.getTeamVault(scope);
+  } catch (error) {
+    if (error?.message === "team_vault_access_denied") {
+      requireCurrent();
+      controller.lock();
+    }
+    throw error;
+  }
+}
+
 async function uploadCurrent({ client, controller, scope, baseRevision, requireCurrent }) {
   const prepared = await controller.prepareUpload(baseRevision);
+  requireCurrent();
+  await controller.requireConfirmedSyncHistory({ remoteRevision: baseRevision });
   requireCurrent();
   const result = await client.putTeamVault(
     scope,
@@ -923,7 +1055,8 @@ async function uploadCurrent({ client, controller, scope, baseRevision, requireC
   requireCurrent();
   if (result.conflict) return { status: "remote_changed", remoteRevision: result.revision };
   if (result.revision !== baseRevision + 1) throw new Error("invalid_remote_revision");
-  const state = await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision });
+  const state = await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision,
+    serverContentHash: prepared.envelope.contentHash });
   requireCurrent();
   if (state.superseded) return { status: state.dirty ? "uploaded_with_new_local_changes" : "up_to_date", revision: state.serverRevision };
   return { status: state.dirty ? "uploaded_with_new_local_changes" : "uploaded", revision: result.revision };
@@ -971,13 +1104,17 @@ export async function synchronizeTeamVault({ client, controller, role } = {}) {
   if (!controller || typeof controller.status !== "function") throw new Error("invalid_team_vault_controller");
   const requireCurrent = captureTeamOperation(client, controller);
   const scope = controller.scope;
-  const remote = await client.getTeamVault(scope);
+  const remote = await readTeamVaultOrLock({ client, controller, scope, requireCurrent });
+  requireCurrent();
+  await verifyTeamRemoteAccess({ controller, remote, requireCurrent });
   requireCurrent();
   if (remote.rotationRequired) throw new Error("team_vault_rotation_required");
   let status = await controller.status();
   requireCurrent();
   if (status === "locked") {
     await controller.unlock();
+    requireCurrent();
+    await verifyTeamRemoteAccess({ controller, remote, requireCurrent });
     requireCurrent();
     status = "unlocked";
   }
@@ -1003,7 +1140,8 @@ export async function synchronizeTeamVault({ client, controller, role } = {}) {
       requireCurrent();
       return { status: "remote_changed", remoteRevision: result.revision };
     }
-    await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision });
+    await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision,
+      serverContentHash: prepared.envelope.contentHash });
     requireCurrent();
     return { status: "initialized", revision: result.revision };
   }
@@ -1030,12 +1168,20 @@ export async function synchronizeTeamVault({ client, controller, role } = {}) {
     );
     requireCurrent();
     if (result.conflict) return { status: "remote_changed", remoteRevision: result.revision };
-    await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision });
+    await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision,
+      serverContentHash: prepared.envelope.contentHash });
     requireCurrent();
     return { status: "initialized", revision: result.revision };
   }
   if (remote.revision < state.serverRevision) throw new Error("remote_revision_regressed");
   if (remote.keyGeneration < state.keyGeneration) throw new Error("team_vault_generation_changed");
+  try { await controller.requireConfirmedSyncHistory({ remoteRevision: remote.revision }); }
+  catch (error) {
+    requireCurrent();
+    if (error?.message === "team_vault_history_unverified") controller.lock();
+    throw error;
+  }
+  requireCurrent();
   if (remote.keyGeneration > state.keyGeneration) {
     const merged = await controller.mergeRemoteGeneration(remote);
     requireCurrent();
@@ -1046,6 +1192,8 @@ export async function synchronizeTeamVault({ client, controller, role } = {}) {
     return uploadCurrent({ client, controller, scope, baseRevision: remote.revision, requireCurrent });
   }
   if (remote.revision === state.serverRevision) {
+    await controller.verifySameRevisionRemote(remote, { requireCurrent });
+    requireCurrent();
     return state.dirty
       ? uploadCurrent({ client, controller, scope, baseRevision: remote.revision, requireCurrent })
       : { status: "up_to_date", revision: remote.revision };
@@ -1067,7 +1215,9 @@ export async function rotateTeamVault({ client, controller, role } = {}) {
   if (!["owner", "admin"].includes(role)) throw new Error("team_vault_rotation_forbidden");
   const requireCurrent = captureTeamOperation(client, controller);
   const scope = controller.scope;
-  const remote = await client.getTeamVault(scope);
+  const remote = await readTeamVaultOrLock({ client, controller, scope, requireCurrent });
+  requireCurrent();
+  await verifyTeamRemoteAccess({ controller, remote, requireCurrent });
   requireCurrent();
   let prepared = controller.rotationPreparation();
   if (prepared && !remote.rotationRequired) {

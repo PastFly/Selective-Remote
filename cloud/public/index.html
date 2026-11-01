@@ -23,8 +23,16 @@
         <span>Открываем защищённое пространство…</span>
       </div>
       <span class="app-boot-progress" aria-hidden="true"></span>
+      <button type="button" id="vault-storage-wait-cancel" hidden>Продолжить без локального Vault</button>
     </div>
   </div>
+  <section class="vault-storage-deferred" id="vault-storage-deferred" aria-labelledby="vault-storage-deferred-title" hidden>
+    <div>
+      <h1 id="vault-storage-deferred-title">Локальное хранилище Cloud не открыто</h1>
+      <p id="vault-storage-deferred-detail">Сохраните или скопируйте незавершённые изменения в других вкладках Selective Remote Cloud и закройте их. Затем повторите открытие. Сохранённые данные не изменены; восстановление аккаунта доступно ниже.</p>
+      <button type="button" id="vault-storage-retry">Повторить</button>
+    </div>
+  </section>
   <main class="shell">
     <header class="brand" id="site-brand">
       <div class="mark" aria-hidden="true">SR</div>

@@ -44,7 +44,7 @@ function fixture() {
     transientTeamControllers: new Set(), recordSavePending: false, recordSaveOperation: null,
     inviteForm: null, recordForm: null,
     sessionRetiredByError, onSessionRetired: () => effects.push("session retired"),
-    teamSyncTargetMatches, workspace: {}, recordCreate: {},
+    teamSyncTargetMatches, workspace: { dataset: {} }, recordCreate: {}, recordEditor: null,
     documentValue: {}, vaults: [firstVault], vaultSelect: {}, workspaceStatus: {},
     records: { replaceChildren() { effects.push("records cleared"); } },
     lockButton: {}, rotateButton: {}, activeConflicts: null, vaultOperation: null,
@@ -102,7 +102,7 @@ function installTeamLock(context) {
 }
 
 function installLockCurrentVault(context) {
-  const start = source.indexOf("  function lockCurrentVault()");
+  const start = source.indexOf("  function lockCurrentVault(");
   const end = source.indexOf("\n  function setView(", start);
   assert.ok(start >= 0 && end > start);
   runInNewContext(source.slice(start, end) + "\nglobalThis.closeSelection = lockCurrentVault;", context);
@@ -153,7 +153,7 @@ function installTeamView(context) {
 
 test("Team session retirement locks Personal data and shows sign-in only for the retired session", () => {
   const start = source.indexOf("  function retireCurrentTeamSession(error, generation)");
-  const end = source.indexOf("\n  const teamWorkspace = initializeTeamWorkspace", start);
+  const end = source.indexOf("\n  const teamWorkspace =", start);
   assert.ok(start >= 0 && end > start);
   let generation = "2", session = null;
   const effects = [];
@@ -162,6 +162,7 @@ test("Team session retirement locks Personal data and shows sign-in only for the
     sessionRetiredByError,
     retiredSessionGeneration: null,
     vault: { lock() { effects.push("vault locked"); } },
+    hideConflicts() { effects.push("conflicts hidden"); },
     vaultUI: { mode(value) { effects.push(`mode:${value}`); } },
     showSession(value) { effects.push(`session:${value}`); },
     setAccountMessage(value) { effects.push(value); },
@@ -169,8 +170,8 @@ test("Team session retirement locks Personal data and shows sign-in only for the
   runInNewContext(source.slice(start, end) + "\nglobalThis.retire = retireCurrentTeamSession;", context);
   const error = Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "1" });
   context.retire(error, "1");
-  assert.deepEqual(effects.slice(0, 3), ["vault locked", "mode:waiting", "session:null"]);
-  assert.match(effects[3], /истекла/iu);
+  assert.deepEqual(effects.slice(0, 4), ["vault locked", "conflicts hidden", "mode:waiting", "session:null"]);
+  assert.match(effects[4], /истекла/iu);
   effects.length = 0;
   session = { id: "new-account" };
   generation = "3";
@@ -192,18 +193,19 @@ test("a first 401 from background Team refresh closes the actual browser session
   await client.login({ email: "synthetic@example.invalid", password: "synthetic-password", deviceID });
   const effects = [], context = { client, sessionRetiredByError, retiredSessionGeneration: null,
     vault: { lock() { effects.push("vault locked"); } },
+    hideConflicts() { effects.push("conflicts hidden"); },
     vaultUI: { mode(value) { effects.push(`mode:${value}`); } },
     showSession(value) { effects.push(`session:${value}`); },
     setAccountMessage(value) { effects.push(value); } };
   const functionStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
-  const functionEnd = source.indexOf("\n  const teamWorkspace = initializeTeamWorkspace", functionStart);
+  const functionEnd = source.indexOf("\n  const teamWorkspace =", functionStart);
   const listenerStart = source.indexOf("  client.subscribePublicationIdentity((cause) => {", functionEnd);
   const listenerEnd = source.indexOf("\n  const accountDevices", listenerStart);
   assert.ok(functionStart >= 0 && functionEnd > functionStart && listenerStart > functionEnd && listenerEnd > listenerStart);
   runInNewContext(source.slice(functionStart, functionEnd) + source.slice(listenerStart, listenerEnd), context);
   await assert.rejects(client.listPendingTeamInvitations(), /authentication_required/u);
   assert.equal(client.session(), null);
-  assert.deepEqual(effects.slice(0, 3), ["vault locked", "mode:waiting", "session:null"]);
+  assert.deepEqual(effects.slice(0, 4), ["vault locked", "conflicts hidden", "mode:waiting", "session:null"]);
   assert.equal(effects.filter((value) => value === "vault locked").length, 1);
 });
 
@@ -213,9 +215,10 @@ test("an anonymous startup 401 does not announce an expired signed-in session", 
   ) });
   const effects = [], context = { client, sessionRetiredByError, retiredSessionGeneration: null,
     vault: { lock() { effects.push("vault locked"); } }, vaultUI: { mode() { effects.push("mode"); } },
+    hideConflicts() { effects.push("conflicts hidden"); },
     showSession() { effects.push("show session"); }, setAccountMessage() { effects.push("message"); } };
   const functionStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
-  const functionEnd = source.indexOf("\n  const teamWorkspace = initializeTeamWorkspace", functionStart);
+  const functionEnd = source.indexOf("\n  const teamWorkspace =", functionStart);
   const listenerStart = source.indexOf("  client.subscribePublicationIdentity((cause) => {", functionEnd);
   const listenerEnd = source.indexOf("\n  const accountDevices", listenerStart);
   assert.ok(functionStart >= 0 && functionEnd > functionStart && listenerStart > functionEnd && listenerEnd > listenerStart);

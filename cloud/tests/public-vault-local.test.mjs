@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import test from "node:test";
-import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { IDBObjectStore } from "fake-indexeddb";
+import { IDBFactory } from "./approved-idb-fixture.mjs";
 import * as vaultLocal from "../public/vault-local.js";
 
 const {
@@ -54,7 +55,7 @@ function memoryRepository(initial = null, sharedSessionDevice = { key: null }) {
 // Seed an already verified binding in synthetic fixtures; production never
 // promotes an unverified snapshot merely because a password or wrapper works.
 async function markLegacyOwner(indexedDB, accountID) {
-  const request = indexedDB.open("selective-remote-cloud", 1);
+  const request = indexedDB.open("selective-remote-cloud");
   const database = await new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
@@ -274,7 +275,7 @@ test("password unlock can replace an unchanged malformed remembered record", asy
   await seed.create(passphrase);
   assert.equal(await seed.rememberSession(accountID), true);
   const malformed = { ...await repository.loadSessionUnlock(), ciphertext: new Uint8Array([1]) };
-  const request = indexedDB.open("selective-remote-cloud", 1);
+  const request = indexedDB.open("selective-remote-cloud");
   const db = await new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
@@ -298,7 +299,7 @@ test("a changed malformed remembered record is not overwritten by a stale save",
   await seed.create(passphrase);
   await seed.rememberSession(accountID);
   const valid = await repository.loadSessionUnlock();
-  const request = indexedDB.open("selective-remote-cloud", 1);
+  const request = indexedDB.open("selective-remote-cloud");
   const db = await new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
@@ -335,7 +336,7 @@ for (const scenario of ["logout before save", "logout after save", "newer sessio
     await seed.create(passphrase);
     await seed.rememberSession(accountID);
     const malformed = { ...await repository.loadSessionUnlock(), ciphertext: new Uint8Array([1]) };
-    const request = indexedDB.open("selective-remote-cloud", 1);
+    const request = indexedDB.open("selective-remote-cloud");
     const db = await new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
     });
@@ -1072,7 +1073,7 @@ test("a failed ownership write aborts the new snapshot and permits a clean retry
   const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const idb = new IDBFactory(), repository = createIndexedDBVaultRepository(idb).forAccount(accountID);
   const keys = accountVaultStorageKeys(accountID);
-  const opened = idb.open("selective-remote-cloud", 1);
+  const opened = idb.open("selective-remote-cloud");
   opened.onupgradeneeded = () => opened.result.createObjectStore("local-vault");
   const database = await new Promise((resolve, reject) => {
     opened.onsuccess = () => resolve(opened.result); opened.onerror = () => reject(opened.error);
@@ -1137,7 +1138,7 @@ test("a remote replacement cannot overwrite edits made after the failed local un
   const replacement = controller(repository);
   await assert.rejects(replacement.unlock(newPassphrase));
   await concurrent.upsert({ type: "host", data: { title: "Keep", address: "keep.invalid" } });
-  await assert.rejects(replacement.replaceLockedWithRemote({ revision: 1, envelope }, newPassphrase), /local_vault_changed/);
+  await assert.rejects(replacement.replaceLockedWithRemote({ revision: 1, envelope }, newPassphrase), /local_vault_recovery_required/);
   const reloaded = controller(repository);
   await reloaded.unlock(passphrase);
   assert.equal(reloaded.document().records[0].data.address, "keep.invalid");
@@ -1400,7 +1401,7 @@ test("legacy migration stops if its ownership proof disappears before commit", a
   const before = await root.load(), target = root.forAccount(accountID);
   await markLegacyOwner(idb, accountID);
   const racing = { ...target, importLegacyStateIfAbsent: async (...args) => {
-    const request = idb.open("selective-remote-cloud", 1);
+    const request = idb.open("selective-remote-cloud");
     const database = await new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
     });

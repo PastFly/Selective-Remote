@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import test from "node:test";
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory } from "./approved-idb-fixture.mjs";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
+import { createAuthenticatedVaultClient } from "../public/vault-sync.js";
 import {
   createIndexedDBTeamVaultRepository,
   createTeamVaultController,
@@ -182,7 +183,8 @@ async function prepareAcceptedAcknowledgement({ server, client, controller }) {
   const prepared = await controller.prepareUpload(server.revision());
   const accepted = await client.putTeamVault(scope, prepared.envelope);
   assert.equal(accepted.conflict, false);
-  return { serverRevision: accepted.revision, localRevision: prepared.localRevision };
+  return { serverRevision: accepted.revision, localRevision: prepared.localRevision,
+    serverContentHash: prepared.envelope.contentHash };
 }
 
 async function readFromFreshDeviceStore({ a, client }) {
@@ -369,7 +371,7 @@ test("locking after a batch commits may reject its acknowledgement but preserves
   assert.equal(reloaded.records.find(record => record.id === credentialID).data.sourceID, recordID);
 });
 
-test("a batch already handed to storage can commit after lock but remains complete", async () => {
+test("a batch waiting outside its storage transaction cannot commit after lock", async () => {
   const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
   const base = createIndexedDBTeamVaultRepository(scope, new IDBFactory());
   let armed = false, entered, release;
@@ -385,7 +387,7 @@ test("a batch already handed to storage can commit after lock but remains comple
   try { await started; controller.lock(); } finally { release(); }
   await assert.rejects(saving, /team_vault_locked/u);
   const reloaded = await controller.unlock();
-  assert.deepEqual(reloaded.records.map(record => record.id).sort(), [recordID, credentialID].sort());
+  assert.deepEqual(reloaded.records, []);
 });
 
 test("a Team editor opened before a remote merge cannot overwrite the merged record", async () => {
@@ -724,7 +726,7 @@ test("a changed uncommitted initialization is never discarded for a concurrent r
   assert.equal(controllerA.document().records[0].data.title, "Local");
 });
 
-test("two Team devices automatically keep the newer concurrent record", async () => {
+test("two Team devices preserve concurrent records until explicit conflict resolution", async () => {
   const a = await device(deviceA, membershipA);
   const b = await device(deviceB, membershipB);
   const server = sharedServer([a.keyDevice, b.keyDevice]);
@@ -759,11 +761,107 @@ test("two Team devices automatically keep the newer concurrent record", async ()
     { status: "uploaded", revision: 2 },
   );
 
-  assert.deepEqual(
-    await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" }),
-    { status: "uploaded", revision: 3 },
-  );
+  const before = repositoryB.inspect();
+  const conflict = await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(server.revision(), 2);
+  assert.deepEqual(repositoryB.inspect(), before);
+  await controllerB.resolveConflicts({ revision: 2, resolutions: [{ id: recordID, choice: "local" }] });
+  assert.deepEqual(await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" }),
+    { status: "uploaded", revision: 3 });
   assert.equal(controllerB.document().records[0].data.title, "B");
+});
+
+test("a damaged same-revision Team Cloud copy is not overwritten", async () => {
+  const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
+  const repository = memoryRepository();
+  const controller = createTeamVaultController({ repository, identity: a.identity, scope, cryptoValue: webcrypto });
+  const client = server.clientFor(deviceA);
+  await synchronizeTeamVault({ client, controller, role: "owner" });
+  await controller.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  const before = repository.inspect(), envelope = server.inspect().envelope;
+  envelope.ciphertext = (envelope.ciphertext[0] === "A" ? "B" : "A") + envelope.ciphertext.slice(1);
+  await assert.rejects(synchronizeTeamVault({ client, controller, role: "owner" }), /team_vault_content_hash_mismatch/u);
+  assert.equal(server.revision(), 1);
+  assert.deepEqual(repository.inspect(), before);
+});
+
+test("legacy dirty Team metadata without a fingerprint never authorizes a write", async () => {
+  const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
+  const repository = memoryRepository();
+  const controller = createTeamVaultController({ repository, identity: a.identity, scope, cryptoValue: webcrypto });
+  const client = server.clientFor(deviceA);
+  await synchronizeTeamVault({ client, controller, role: "owner" });
+  const legacy = repository.inspect();
+  delete legacy.serverContentHash;
+  await repository.save(legacy);
+  controller.lock();
+  await controller.unlock();
+  await controller.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  const before = repository.inspect();
+  await assert.rejects(synchronizeTeamVault({ client, controller, role: "owner" }), /team_vault_history_unverified/u);
+  assert.equal(server.revision(), 1);
+  assert.deepEqual(repository.inspect(), before);
+});
+
+test("a different valid Team document at the same Cloud revision cannot be overwritten", async () => {
+  const a = await device(deviceA, membershipA), b = await device(deviceB, membershipB);
+  const server = sharedServer([a.keyDevice, b.keyDevice]), repositoryA = memoryRepository();
+  const local = createTeamVaultController({ repository: repositoryA, identity: a.identity, scope, cryptoValue: webcrypto });
+  const other = createTeamVaultController({ repository: memoryRepository(), identity: b.identity, scope, cryptoValue: webcrypto });
+  const clientA = server.clientFor(deviceA), clientB = server.clientFor(deviceB);
+  await synchronizeTeamVault({ client: clientA, controller: local, role: "owner" });
+  await synchronizeTeamVault({ client: clientB, controller: other, role: "editor" });
+  await local.upsert({ id: recordID, type: "host", data: { title: "Local", address: "local.invalid" } });
+  await other.upsert({ id: recordID, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  const changed = await other.prepareUpload(0), before = repositoryA.inspect();
+  Object.assign(server.inspect().envelope, changed.envelope);
+  await assert.rejects(synchronizeTeamVault({ client: clientA, controller: local, role: "owner" }), /team_vault_same_revision_changed/u);
+  assert.equal(server.revision(), 1);
+  assert.deepEqual(repositoryA.inspect(), before);
+});
+
+test("a clean legacy Team copy pins the matching Cloud fingerprint before later edits", async () => {
+  const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
+  const repository = memoryRepository();
+  const controller = createTeamVaultController({ repository, identity: a.identity, scope, cryptoValue: webcrypto });
+  const client = server.clientFor(deviceA);
+  await synchronizeTeamVault({ client, controller, role: "owner" });
+  const legacy = repository.inspect();
+  delete legacy.serverContentHash;
+  await repository.save(legacy);
+  controller.lock();
+  await controller.unlock();
+  assert.deepEqual(await synchronizeTeamVault({ client, controller, role: "owner" }), { status: "up_to_date", revision: 1 });
+  assert.equal(repository.inspect().serverContentHash, server.inspect().envelope.contentHash);
+  await controller.upsert({ id: recordID, type: "host", data: { title: "Local", address: "local.invalid" } });
+  assert.deepEqual(await synchronizeTeamVault({ client, controller, role: "owner" }), { status: "uploaded", revision: 2 });
+});
+
+test("a changed session cannot pin a delayed legacy Team fingerprint", async () => {
+  const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
+  const repository = createIndexedDBTeamVaultRepository(scope, new IDBFactory());
+  let armed = false, enter, release, epoch = "1";
+  const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, async save(...args) {
+    if (armed) { enter(); await held; }
+    return repository.save(...args);
+  } };
+  const controller = createTeamVaultController({ repository: delayed, identity: a.identity, scope, cryptoValue: webcrypto });
+  const client = { ...server.clientFor(deviceA), sessionGeneration: () => epoch, deviceID: () => deviceA };
+  await synchronizeTeamVault({ client, controller, role: "owner" });
+  const snapshot = await repository.load(deviceA), legacy = structuredClone(snapshot);
+  delete legacy.serverContentHash;
+  await repository.save(legacy, deviceA, snapshot);
+  controller.lock();
+  await controller.unlock();
+  armed = true;
+  const pending = synchronizeTeamVault({ client, controller, role: "owner" });
+  await started;
+  epoch = "2";
+  release();
+  await assert.rejects(pending, /authentication_required/u);
+  assert.deepEqual(await repository.load(deviceA), legacy);
 });
 
 test("rotation and unapproved-device states fail closed without replacing local ciphertext", async () => {
@@ -784,7 +882,7 @@ test("rotation and unapproved-device states fail closed without replacing local 
   };
   await assert.rejects(
     synchronizeTeamVault({ client, controller, role: "viewer" }),
-    /team_vault_rotation_required/,
+    /team_vault_key_unavailable/,
   );
   assert.equal(repository.inspect(), null);
 });
@@ -857,7 +955,7 @@ test("competing rotations commit once and never replace the losing local snapsho
   assert.equal(server.inspect().keyGeneration, 2);
 });
 
-test("rotation automatically resolves a causal conflict before replacing the key", async () => {
+test("rotation waits for explicit conflict resolution before replacing the key", async () => {
   const a = await device(deviceA, membershipA);
   const b = await device(deviceB, membershipB);
   const server = sharedServer([a.keyDevice, b.keyDevice]);
@@ -878,11 +976,173 @@ test("rotation automatically resolves a causal conflict before replacing the key
   await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
   server.requireRotation([a.keyDevice, b.keyDevice]);
 
-  assert.deepEqual(
-    await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" }),
-    { status: "rotated", revision: 3, keyGeneration: 2 },
-  );
+  const conflict = await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(server.revision(), 2);
   assert.equal(controllerB.document().records[0].data.title, "B");
+  await controllerB.resolveConflicts({ revision: 2, resolutions: [{ id: recordID, choice: "local" }] });
+  assert.deepEqual(await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" }),
+    { status: "rotated", revision: 3, keyGeneration: 2 });
+  assert.equal(controllerB.document().records[0].data.title, "B");
+});
+
+test("a rotated Team generation preserves concurrent offline edits until explicit resolution", async () => {
+  const a = await device(deviceA, membershipA), b = await device(deviceB, membershipB);
+  const server = sharedServer([a.keyDevice, b.keyDevice]);
+  const controllerA = createTeamVaultController({ repository: memoryRepository(), identity: a.identity, scope, cryptoValue: webcrypto });
+  const repositoryB = memoryRepository();
+  const controllerB = createTeamVaultController({ repository: repositoryB, identity: b.identity, scope, cryptoValue: webcrypto });
+  const clientA = server.clientFor(deviceA), clientB = server.clientFor(deviceB);
+  await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+  await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" });
+  await controllerA.upsert({ id: recordID, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  await controllerB.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+  server.requireRotation([a.keyDevice, b.keyDevice]);
+  await rotateTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+  const before = repositoryB.inspect();
+  const result = await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" });
+  assert.equal(result.status, "conflict");
+  assert.equal(server.revision(), 3);
+  assert.deepEqual(repositoryB.inspect(), before);
+  assert.equal(controllerB.document().records[0].data.title, "Offline");
+  await controllerB.resolveConflicts({ revision: 3, resolutions: [{ id: recordID, choice: "local" }] });
+  assert.deepEqual(await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" }),
+    { status: "uploaded", revision: 4 });
+});
+
+test("a device without a current Team wrapper is locked before legacy history is examined", async () => {
+  const a = await device(deviceA, membershipA), b = await device(deviceB, membershipB);
+  const server = sharedServer([a.keyDevice, b.keyDevice]), repositoryA = memoryRepository();
+  const controllerA = createTeamVaultController({ repository: repositoryA, identity: a.identity, scope, cryptoValue: webcrypto });
+  const controllerB = createTeamVaultController({ repository: memoryRepository(), identity: b.identity, scope, cryptoValue: webcrypto });
+  const clientA = server.clientFor(deviceA), clientB = server.clientFor(deviceB);
+  await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+  await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "admin" });
+  await controllerA.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  const legacy = repositoryA.inspect();
+  delete legacy.serverContentHash;
+  await repositoryA.save(legacy);
+  controllerA.lock();
+  await controllerA.unlock();
+  server.requireRotation([b.keyDevice]);
+  await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" });
+  const remote = await clientA.getTeamVault(scope);
+  assert.equal(remote.wrapper, null);
+  await assert.rejects(synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" }), /team_vault_key_unavailable/u);
+  assert.equal(await controllerA.status(), "locked");
+  assert.deepEqual(repositoryA.inspect(), legacy);
+  assert.throws(() => controllerA.document(), /team_vault_locked/u);
+});
+
+test("an unusable Team wrapper locks an already open local Vault", async () => {
+  const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
+  const repository = memoryRepository();
+  const controller = createTeamVaultController({ repository, identity: a.identity, scope, cryptoValue: webcrypto });
+  const goodClient = server.clientFor(deviceA);
+  await synchronizeTeamVault({ client: goodClient, controller, role: "owner" });
+  const before = repository.inspect();
+  const client = { ...goodClient, async getTeamVault() {
+    const remote = await goodClient.getTeamVault();
+    const wrapper = structuredClone(remote.wrapper);
+    wrapper.ciphertext = (wrapper.ciphertext[0] === "A" ? "B" : "A") + wrapper.ciphertext.slice(1);
+    return { ...remote, wrapper };
+  } };
+  await assert.rejects(synchronizeTeamVault({ client, controller, role: "owner" }), /team_vault_key_unavailable/u);
+  assert.equal(await controller.status(), "locked");
+  assert.deepEqual(repository.inspect(), before);
+});
+
+for (const replacement of ["new epoch", "new membership"]) {
+  test(`a ${replacement} cannot publish offline changes from the previous Team membership`, async () => {
+    const a = await device(deviceA, membershipA), b = await device(deviceB, membershipB);
+    const server = sharedServer([a.keyDevice, b.keyDevice]), repositoryA = memoryRepository();
+    const controllerA = createTeamVaultController({ repository: repositoryA, identity: a.identity, scope, cryptoValue: webcrypto });
+    const controllerB = createTeamVaultController({ repository: memoryRepository(), identity: b.identity, scope, cryptoValue: webcrypto });
+    const clientA = server.clientFor(deviceA), clientB = server.clientFor(deviceB);
+    await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+    await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "admin" });
+    await controllerA.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+    const before = structuredClone(repositoryA.inspect());
+    server.requireRotation([b.keyDevice]);
+    await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" });
+    server.addKeyDevice({ ...a.keyDevice,
+      ...(replacement === "new epoch" ? { membershipEpoch: 2 }
+        : { membershipID: "ffffffff-ffff-4fff-8fff-ffffffffffff" }) });
+    await provisionTeamVaultWrappers({ client: clientB, controller: controllerB });
+    assert.ok((await clientA.getTeamVault(scope)).wrapper);
+    await assert.rejects(synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" }), /team_vault_membership_changed/u);
+    assert.equal(server.revision(), 2);
+    assert.equal(await controllerA.status(), "locked");
+    assert.deepEqual(repositoryA.inspect(), before);
+  });
+}
+
+for (const status of [403, 404, 503]) {
+  test(`Team GET ${status} ${status === 503 ? "preserves an open Vault on a temporary failure" : "locks an already open Vault after access denial"}`, async () => {
+    const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]), repository = memoryRepository();
+    const controller = createTeamVaultController({ repository, identity: a.identity, scope, cryptoValue: webcrypto });
+    await synchronizeTeamVault({ client: server.clientFor(deviceA), controller, role: "owner" });
+    await controller.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+    const before = structuredClone(repository.inspect());
+    const client = createAuthenticatedVaultClient({ fetchValue: async path => path === "/v1/auth/login"
+      ? Response.json({ token: "a".repeat(43), user: { id: membershipA, email: "a@example.invalid" }, deviceID: deviceA })
+      : Response.json({ error: "team_not_found" }, { status }) });
+    await client.login({ email: "a@example.invalid", password: "synthetic password", deviceID: deviceA });
+    await assert.rejects(synchronizeTeamVault({ client, controller, role: "owner" }),
+      status === 503 ? /team_vault_download_failed/u : /team_vault_access_denied/u);
+    assert.equal(await controller.status(), status === 503 ? "unlocked" : "locked");
+    assert.deepEqual(repository.inspect(), before);
+  });
+}
+
+test("a delayed Team access denial from an old session cannot lock a new session", async () => {
+  const a = await device(deviceA, membershipA), server = sharedServer([a.keyDevice]);
+  const controller = createTeamVaultController({ repository: memoryRepository(), identity: a.identity, scope, cryptoValue: webcrypto });
+  const stable = server.clientFor(deviceA);
+  await synchronizeTeamVault({ client: stable, controller, role: "owner" });
+  let epoch = "1", enter, release;
+  const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { ...stable, sessionGeneration: () => epoch, async getTeamVault() {
+    enter(); await held; throw new Error("team_vault_access_denied");
+  } };
+  const pending = synchronizeTeamVault({ client, controller, role: "owner" });
+  await started;
+  epoch = "2";
+  release();
+  await assert.rejects(pending, /authentication_required/u);
+  assert.equal(await controller.status(), "unlocked");
+});
+
+test("locking while conflict resolution waits to save does not change the local Team snapshot", async () => {
+  const a = await device(deviceA, membershipA), b = await device(deviceB, membershipB);
+  const server = sharedServer([a.keyDevice, b.keyDevice]);
+  const repository = createIndexedDBTeamVaultRepository(scope, new IDBFactory());
+  let armed = false, enter, release;
+  const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, async save(...args) {
+    if (armed) { enter(); await held; }
+    return repository.save(...args);
+  } };
+  const controllerA = createTeamVaultController({ repository: memoryRepository(), identity: a.identity, scope, cryptoValue: webcrypto });
+  const controllerB = createTeamVaultController({ repository: delayed, identity: b.identity, scope, cryptoValue: webcrypto });
+  const clientA = server.clientFor(deviceA), clientB = server.clientFor(deviceB);
+  await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+  await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" });
+  await controllerA.upsert({ id: recordID, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  await controllerB.upsert({ id: recordID, type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
+  assert.equal((await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" })).status, "conflict");
+  const before = await repository.load(deviceB);
+  armed = true;
+  const pending = controllerB.resolveConflicts({ revision: 2, resolutions: [{ id: recordID, choice: "remote" }] });
+  await started;
+  controllerB.lock();
+  release();
+  await assert.rejects(pending, /team_vault_locked/u);
+  assert.deepEqual(await repository.load(deviceB), before);
+  const fresh = createTeamVaultController({ repository, identity: b.identity, scope, cryptoValue: webcrypto });
+  assert.equal((await fresh.unlock()).records[0].data.address, "offline.invalid");
 });
 
 test("a retained device adopts the rotated generation and uploads its causal local changes", async () => {

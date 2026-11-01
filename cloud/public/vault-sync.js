@@ -1458,6 +1458,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       const response = await authorizedRequest(
         `/v1/teams/${normalized.teamID}/vaults/${normalized.vaultID}`,
       );
+      if (response.status === 403 || response.status === 404) throw new Error("team_vault_access_denied");
       if (!response.ok) throw new Error("team_vault_download_failed");
       return normalizedRemoteTeamVault(
         await responseJSON(response, "team_vault_download_failed"),
@@ -1544,6 +1545,10 @@ export function capturePersonalVaultSession(client) {
 async function uploadCurrent(client, vault, scope, baseRevision, requireCurrentSession) {
   const prepared = await vault.prepareUpload(baseRevision);
   requireCurrentSession();
+  if (typeof vault.requireConfirmedSyncHistory === "function") await vault.requireConfirmedSyncHistory({ remoteRevision: baseRevision });
+  requireCurrentSession();
+  if ((await vault.syncState()).localRevision !== prepared.localRevision) throw new Error("local_vault_changed");
+  requireCurrentSession();
   const result = await client.putVault(scope, prepared.envelope);
   requireCurrentSession();
   if (result.conflict) return { status: "remote_changed", remoteRevision: result.revision };
@@ -1551,6 +1556,8 @@ async function uploadCurrent(client, vault, scope, baseRevision, requireCurrentS
   const state = await vault.markSynced({
     serverRevision: result.revision,
     localRevision: prepared.localRevision,
+    serverContentHash: prepared.envelope.contentHash,
+    requireCurrent: requireCurrentSession,
   });
   requireCurrentSession();
   return { status: state.dirty ? "uploaded_with_new_local_changes" : "uploaded", revision: result.revision };
@@ -1590,9 +1597,15 @@ export async function synchronizeVault({
     requireCurrentSession();
     return uploadCurrent(client, vault, scope, 0, requireCurrentSession);
   }
+  if (typeof vault.requireConfirmedSyncHistory !== "function") throw new Error("invalid_local_vault");
+  await vault.requireConfirmedSyncHistory({ remoteRevision: remote.revision });
+  requireCurrentSession();
   if (typeof vault.verifyRemoteWrapper !== "function") throw new Error("invalid_local_vault");
   vault.verifyRemoteWrapper(remote);
   if (remote.revision === state.serverRevision) {
+    if (typeof vault.verifySameRevisionRemote !== "function") throw new Error("invalid_local_vault");
+    await vault.verifySameRevisionRemote(remote, { dirty: state.dirty, requireCurrent: requireCurrentSession });
+    requireCurrentSession();
     return state.dirty
       ? uploadCurrent(client, vault, scope, remote.revision, requireCurrentSession)
       : { status: "up_to_date", revision: remote.revision };
@@ -1604,7 +1617,8 @@ export async function synchronizeVault({
     return { status: "conflict", revision: remote.revision, conflicts: merged.conflicts };
   }
   if (merged.matchesRemote) {
-    const confirmed = await vault.markSynced({ serverRevision: remote.revision, localRevision: merged.localRevision });
+    const confirmed = await vault.markSynced({ serverRevision: remote.revision, localRevision: merged.localRevision,
+      serverContentHash: remote.envelope.contentHash, requireCurrent: requireCurrentSession });
     requireCurrentSession();
     return { status: confirmed.dirty ? "downloaded_with_new_local_changes" : "downloaded", revision: remote.revision };
   }
