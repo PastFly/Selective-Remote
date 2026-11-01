@@ -53,6 +53,658 @@ test("Team role labels follow the active RU and EN locale", () => {
   );
 });
 
+test("Personal Vault lock drops in-memory access before uncertain remembered-key cleanup finishes", async () => {
+  assert.equal(typeof application.lockPersonalVault, "function");
+  let release, locked = false, viewLocked = false;
+  const cleanup = new Promise(resolve => { release = resolve; });
+  const operation = application.lockPersonalVault({ controller: { lock() { locked = true; } },
+    cleanup: () => cleanup, onLocked() { viewLocked = true; } });
+  assert.equal(locked, true);
+  assert.equal(viewLocked, true);
+  release(false);
+  assert.equal(await operation, false);
+  assert.equal(await application.lockPersonalVault({ controller: { lock() { locked = true; } },
+    cleanup() { throw new Error("synthetic_storage_failure"); } }), false);
+});
+
+test("logout reports server and local cleanup results even if Vault status is unavailable", async () => {
+  assert.equal(typeof application.createBrowserLogoutRestoreView, "function");
+  let current = true;
+  const message = { textContent: "" };
+  const restoreView = application.createBrowserLogoutRestoreView({ message, isCurrent: () => current });
+  const vault = { lock() {}, async status() { throw new Error("synthetic_storage_failure"); },
+    async forgetTrackedRememberedSession() { return false; } };
+  await application.completeBrowserSessionLogout({ client: { logout: async () => {}, session: () => null }, vault,
+    clearView() {}, restoreView });
+  assert.match(message.textContent, /завершён на сервере/u);
+  assert.match(message.textContent, /не удалось подтвердить удаление локального ключа/iu);
+  const oldMessage = message.textContent;
+  current = false;
+  restoreView({ remoteRevoked: false, localCleanupConfirmed: false });
+  assert.equal(message.textContent, oldMessage);
+});
+
+test("confirmed deletion of account A does not alter a newer session B", async () => {
+  assert.equal(typeof application.completeBrowserAccountDeletion, "function");
+  let session = { id: "a" }, generation = "a", release, locked = 0, cleaned = 0, cleared = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { await held; return { deleted: true, sessionChanged: true }; } };
+  const operation = application.completeBrowserAccountDeletion({ client,
+    vault: { lock() { locked++; }, async forgetTrackedRememberedSession() { cleaned++; } },
+    email: "synthetic@example.invalid", password: "synthetic",
+    isBeforeCurrent: () => generation === "a", isViewCurrent: () => generation === "a",
+    cancelPendingActivations() { cleaned++; }, clearView() { cleared++; } });
+  session = { id: "b" }; generation = "b"; release();
+  assert.deepEqual(await operation, { deleted: true, sessionChanged: true });
+  assert.deepEqual({ session, locked, cleaned, cleared }, { session: { id: "b" }, locked: 0, cleaned: 0, cleared: 0 });
+});
+
+test("confirmed account deletion remains successful if local cleanup fails", async () => {
+  assert.equal(typeof application.completeBrowserAccountDeletion, "function");
+  let session = { id: "a" }, generation = "a", locked = 0, cleared = 0;
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { session = null; generation = "retired"; return { deleted: true }; } };
+  const result = await application.completeBrowserAccountDeletion({ client,
+    vault: { lock() { locked++; }, async forgetTrackedRememberedSession() { throw new Error("synthetic_storage_failure"); } },
+    email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => generation === "a",
+    isViewCurrent: () => true, cancelPendingActivations: () => true, clearView() { cleared++; } });
+  assert.deepEqual(result, { deleted: true, localCleanupConfirmed: false, sessionChanged: false });
+  assert.equal(locked, 1);
+  assert.equal(cleared, 1);
+});
+
+test("account A cleanup finishing after a login to B does not restore A's view", async () => {
+  let session = { id: "a" }, generation = "a", release, entered, locked = 0, cleared = 0;
+  const held = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { session = null; generation = "retired"; return { deleted: true }; } };
+  const operation = application.completeBrowserAccountDeletion({ client,
+    vault: { lock() { locked++; }, async forgetTrackedRememberedSession() { entered(); await held; return false; } },
+    email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => generation === "a",
+    isViewCurrent: () => generation !== "b", cancelPendingActivations: () => true, clearView() { cleared++; } });
+  await started;
+  session = { id: "b" }; generation = "b"; release();
+  assert.deepEqual(await operation, { deleted: true, localCleanupConfirmed: false, sessionChanged: true });
+  assert.equal(locked, 1);
+  assert.equal(cleared, 1);
+  assert.equal(session.id, "b");
+});
+
+test("a view cleanup failure does not misreport confirmed account deletion or key cleanup", async () => {
+  let session = { id: "a" }, generation = "a";
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { session = null; generation = "retired"; return { deleted: true }; } };
+  const result = await application.completeBrowserAccountDeletion({ client,
+    vault: { lock() {}, async forgetTrackedRememberedSession() { return true; } },
+    email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => generation === "a",
+    isViewCurrent: () => true, cancelPendingActivations: () => true, clearView() { throw new Error("synthetic_ui_failure"); } });
+  assert.equal(result.deleted, true);
+  assert.equal(result.localCleanupConfirmed, true);
+  assert.equal(result.viewCleared, false);
+});
+
+test("account deletion stops before requesting DELETE when the captured session changed", async () => {
+  assert.equal(typeof application.completeBrowserAccountDeletion, "function");
+  let requested = false;
+  const result = await application.completeBrowserAccountDeletion({ client: { async deleteAccount() { requested = true; } },
+    vault: {}, email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => false });
+  assert.deepEqual(result, { deleted: false, sessionChanged: true });
+  assert.equal(requested, false);
+});
+
+for (const failed of [false, true]) test(`a late username update ${failed ? "error" : "success"} cannot alter the newer session's view`, async () => {
+  assert.equal(typeof application.completeBrowserUsernameUpdate, "function");
+  let generation = "a", release, applied = 0, errors = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const operation = application.completeBrowserUsernameUpdate({ client: { async updateUsername() {
+    await held;
+    if (failed) throw new Error("synthetic_username_failure");
+    return { id: "a", username: "synthetic", sessionChanged: true };
+  } }, username: "synthetic", password: "synthetic", isCurrent: () => generation === "a",
+    onSuccess() { applied++; }, onError() { errors++; } });
+  generation = "b"; release();
+  await operation;
+  assert.deepEqual({ applied, errors }, { applied: 0, errors: 0 });
+});
+
+for (const failed of [false, true]) test(`a late password update ${failed ? "error" : "success"} cannot alter the newer session's view`, async () => {
+  assert.equal(typeof application.completeBrowserPasswordUpdate, "function");
+  let generation = "a", release, applied = 0, errors = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const operation = application.completeBrowserPasswordUpdate({ client: { async changePassword() {
+    await held;
+    if (failed) throw new Error("synthetic_password_failure");
+    return { changed: true };
+  } }, currentPassword: "synthetic", newPassword: "synthetic-new", isCurrent: () => generation === "a",
+    onSuccess() { applied++; }, onError() { errors++; } });
+  generation = "b"; release();
+  await operation;
+  assert.deepEqual({ applied, errors }, { applied: 0, errors: 0 });
+});
+
+async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccepted = async () => {} }) {
+  const { createAuthenticatedVaultClient, loginWithDeviceConflictRetry } = await import("../public/vault-sync.js");
+  const { runInNewContext } = await import("node:vm");
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const deviceID = "11111111-1111-4111-8111-111111111111", password = "synthetic testing password";
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options) => {
+    if (path === "/v1/auth/login") {
+      const email = JSON.parse(options.body).email;
+      const id = email.startsWith("b@") ? accountB : accountA;
+      return new Response(JSON.stringify({ token: "a".repeat(43), user: { id, email, username: "synthetic" }, deviceID }), { status: 200 });
+    }
+    if (path === "/v1/vault") return onVaultRequest();
+    throw new Error(`unexpected_synthetic_request:${path}`);
+  } });
+  let submit;
+  const form = { elements: { email: { value: "a@example.invalid" }, password: { value: password } },
+    querySelector: () => ({ disabled: false }), addEventListener(_event, listener) { submit = listener; } };
+  const calls = { sessions: [], modes: [], accountMessages: [], text: [], locks: 0, personal: 0, team: 0,
+    deactivations: 0, teamOwner: "previous-account", ownerWhenShown: [] };
+  const accountDevices = { deviceID: async () => deviceID, remember: async (_email, id) => id,
+    accepted: onAccepted, replaceAfterConflict: async () => null };
+  const context = { form, client, accountDevices, loginWithDeviceConflictRetry, crypto: webcrypto,
+    loginAttempt: 0, loginInputRevision: 0, completeInteractivePersonalVaultLogin: application.completeInteractivePersonalVaultLogin,
+    ensureTeamDeviceIdentity: async () => identity, teamDeviceRepository: {},
+    activateAccountVault: async () => ({ vault: { rememberSession: async () => true } }),
+    unlockAndSyncPersonalVault: async () => { calls.personal++; return client.getVault(); },
+    vaultUI: { mode(value) { calls.modes.push(value); } }, vault: { lock() { calls.locks++; } },
+    showSession(user) { calls.sessions.push(user); calls.ownerWhenShown.push(calls.teamOwner); },
+    teamWorkspace: { async activate() { calls.team++; }, deactivate() { calls.deactivations++; calls.teamOwner = null; } },
+    message: {}, vaultMessage: {}, setText(element, value) { element.textContent = value; calls.text.push(value); },
+    setAccountMessage(value) { calls.accountMessages.push(value); },
+    personalVaultOwnershipError: () => false, personalVaultLegacyUnverifiedMessage: () => "legacy",
+    personalVaultKeyMismatchMessage: () => "mismatch", sessionRetiredByError: application.sessionRetiredByError };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  form.addEventListener("submit", async (event) => {', source.indexOf("export async function initializeCloudAccount"));
+  const end = source.indexOf("\n  let reauthenticationAttempt", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  return { client, calls, context, submit: () => submit({ preventDefault() {} }), accountB, deviceID, password };
+}
+
+test("a 401 during Personal Vault login leaves the expired session signed out", async () => {
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 }) });
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.equal(fixture.calls.locks, 1);
+  assert.equal(fixture.calls.team, 0);
+  assert.equal(fixture.calls.teamOwner, null);
+  assert.ok(fixture.calls.deactivations >= 1);
+  assert.match(fixture.calls.accountMessages.at(-1), /сессия cloud истекла/iu);
+});
+
+test("a late 401 from account A cannot repaint or lock account B", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => {
+    entered(); await held; return new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 });
+  } });
+  const pending = fixture.submit();
+  await started;
+  await fixture.client.login({ email: "b@example.invalid", password: fixture.password, deviceID: fixture.deviceID });
+  fixture.calls.teamOwner = "account-b";
+  release();
+  await pending;
+  assert.equal(fixture.client.session().id, fixture.accountB);
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.deepEqual(fixture.calls.modes, []);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+  assert.equal(fixture.calls.locks, 0);
+  assert.equal(fixture.calls.team, 0);
+  assert.equal(fixture.calls.teamOwner, "account-b");
+});
+
+test("a 401 during Team key bootstrap cannot restore an expired login", async () => {
+  const fixture = await loginLifecycleFixture({ identity: { publicKey: null },
+    onVaultRequest: async () => new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 }) });
+  fixture.context.unlockAndSyncPersonalVault = async () => ({});
+  fixture.client.bootstrapDeviceKey = async () => fixture.client.getVault();
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.equal(fixture.calls.locks, 1);
+  assert.equal(fixture.calls.team, 0);
+  assert.match(fixture.calls.accountMessages.at(-1), /сессия cloud истекла/iu);
+});
+
+test("a replaced session during device acceptance cannot continue the older login", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => { throw new Error("unexpected_vault_request"); },
+    onAccepted: async () => { entered(); await held; } });
+  const pending = fixture.submit();
+  await started;
+  await fixture.client.login({ email: "b@example.invalid", password: fixture.password, deviceID: fixture.deviceID });
+  release();
+  await pending;
+  assert.equal(fixture.client.session().id, fixture.accountB);
+  assert.equal(fixture.calls.personal, 0);
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.equal(fixture.calls.team, 0);
+});
+
+test("a new login clears the prior Team view before showing the new account", async () => {
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => new Response("{}", { status: 500 }) });
+  await fixture.submit();
+  assert.equal(fixture.calls.sessions.length, 1);
+  assert.equal(fixture.calls.sessions[0].email, "a@example.invalid");
+  assert.deepEqual(fixture.calls.ownerWhenShown, [null]);
+  assert.ok(fixture.calls.deactivations >= 1);
+});
+
+test("authentication loss belongs only to its exact retired session generation", () => {
+  const error = Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "5" });
+  let generation = "6", session = null;
+  const client = { session: () => session, sessionGeneration: () => generation };
+  assert.equal(application.sessionRetiredByError(client, error, "5"), true);
+  generation = "7";
+  assert.equal(application.sessionRetiredByError(client, error, "5"), false);
+  generation = "6"; session = { id: "new" };
+  assert.equal(application.sessionRetiredByError(client, error, "5"), false);
+});
+
+test("session presentation clears the previous Team before displaying another account", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  let sessionPresentationEpoch = ");
+  const end = source.indexOf("\n  function setSettingsMessage", start);
+  assert.ok(start >= 0 && end > start);
+  let generation = "a", teamOwner = "initial", deactivations = 0;
+  const observations = [];
+  const context = { client: { sessionGeneration: () => generation },
+    teamWorkspace: { deactivate() { deactivations++; teamOwner = null; } },
+    tabs: {}, form: {}, registrationForm: {}, recoveryFormAccount: {}, registrationSuccess: {}, signedIn: {},
+    syncButton: {}, accountName: {}, usernameForm: { elements: { username: {} } },
+    setText(element, value) { element.textContent = value; }, onSessionChange(user) { observations.push({ user, teamOwner }); } };
+  runInNewContext(`${source.slice(start, end)}\nthis.showCapturedSession = showSession;`, context);
+  context.showCapturedSession({ id: "a", username: "synthetic-a" });
+  teamOwner = "account-a"; generation = "b";
+  context.showCapturedSession({ id: "b", username: "synthetic-b" });
+  assert.equal(observations.at(-1).teamOwner, null);
+  const count = deactivations;
+  teamOwner = "account-b";
+  context.showCapturedSession({ id: "b", username: "synthetic-b-renamed" });
+  assert.equal(deactivations, count);
+  assert.equal(observations.at(-1).teamOwner, "account-b");
+});
+
+async function startupLifecycleFixture({ requestVault, failRestore = false, onRestore = null }) {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  setAuthMode("login");\n  let startupSession');
+  const end = source.indexOf("\n  return {\n    client,", start);
+  assert.ok(start >= 0 && end > start);
+  let session = null, generation = "0";
+  const calls = { sessions: [], modes: [], accountMessages: [], locks: 0 };
+  const error = () => Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "1" });
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async restoreSession() {
+      generation = "1";
+      if (onRestore) await onRestore();
+      if (failRestore) { generation = "2"; throw error(); }
+      session = { id: "a" }; return session;
+    },
+    async getVault() { return requestVault({ expire() { session = null; generation = "2"; return error(); } }); } };
+  const context = { client, setAuthMode() {}, showSession(user) { calls.sessions.push(user?.id ?? null); },
+    capturePersonalVaultSession() { const id = session.id, prior = generation;
+      return { requireCurrent() { if (session?.id !== id || generation !== prior) throw new Error("authentication_required"); } }; },
+    async activateAccountVault() { return { restored: false, legacyOwnershipUnverified: false }; },
+    vault: { async status() { return "locked"; }, async restoreRememberedSession() { return false; }, lock() { calls.locks++; } },
+    vaultUI: { mode(value) { calls.modes.push(value); }, render() {} }, vaultMessage: {}, setText() {},
+    setAccountMessage(value) { calls.accountMessages.push(value); }, sessionRetiredByError: application.sessionRetiredByError };
+  const pending = runInNewContext(`(async () => {${source.slice(start, end)}\n})()`, context);
+  return { pending, calls, client, replaceSession() { session = { id: "b" }; generation = "2"; } };
+}
+
+test("a current 401 during restored Personal Vault startup clears the signed-in view", async () => {
+  const fixture = await startupLifecycleFixture({ requestVault: async ({ expire }) => { throw expire(); } });
+  await fixture.pending;
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, ["a", null]);
+  assert.equal(fixture.calls.locks, 1);
+  assert.match(fixture.calls.accountMessages.at(-1), /сессия cloud истекла/iu);
+});
+
+test("a late startup 401 does not clear the newer signed-in session", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await startupLifecycleFixture({ requestVault: async () => {
+    entered(); await held; throw new Error("authentication_required");
+  } });
+  await started;
+  fixture.replaceSession(); release();
+  await fixture.pending;
+  assert.equal(fixture.client.session().id, "b");
+  assert.deepEqual(fixture.calls.sessions, ["a"]);
+  assert.equal(fixture.calls.locks, 0);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+});
+
+test("an ordinary signed-out startup does not report an expired restored session", async () => {
+  const fixture = await startupLifecycleFixture({ failRestore: true, requestVault: async () => { throw new Error("unexpected_request"); } });
+  await fixture.pending;
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.equal(fixture.calls.locks, 0);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+});
+
+test("a late failed session restore cannot show an error over a newer login", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await startupLifecycleFixture({ requestVault: async () => { throw new Error("unexpected_request"); },
+    onRestore: async () => { entered(); await held; throw new Error("authentication_required"); } });
+  await started;
+  fixture.replaceSession(); release();
+  await fixture.pending;
+  assert.equal(fixture.client.session().id, "b");
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.deepEqual(fixture.calls.modes, []);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+});
+
+for (const failed of [false, true]) test(`an old Team list ${failed ? "error" : "response"} cannot replace the newer session's Team`, async () => {
+  assert.equal(typeof application.captureTeamWorkspaceContext, "function");
+  assert.equal(typeof application.teamWorkspaceContextMatches, "function");
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadTeams(");
+  const end = source.indexOf("\n  createTeamForm.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  let session = { id: "a" }, deviceID = "device-a", generation = "1", identity = { deviceID }, epoch = 1;
+  let entered, release, locked = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => session, deviceID: () => deviceID, sessionGeneration: () => generation,
+    async listTeams() {
+      const account = session.id;
+      if (account === "a") { entered(); await held; if (failed) throw new Error("synthetic_stale_failure"); }
+      return [{ id: `team-${account}`, name: `Synthetic ${account}`, role: "owner" }];
+    } };
+  const select = { value: "", options: [], replaceChildren() { this.options = []; this.value = ""; },
+    append(option) { this.options.push(option); if (!this.value) this.value = option.value; } };
+  const context = { client, teams: [], selectedTeam: null, controller: null, teamListRequestGeneration: 0,
+    teamSelect: select, teamInvitations: [], selectedPanel: {}, message: {}, documentValue: { createElement: () => ({}) },
+    renderOverviewSummary() {}, renderTeamInvitations() {}, teamRoleLabel: () => "owner", setText() {},
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }),
+    async loadSelectedTeam(captured) {
+      if (!context.workspaceContextCurrent(captured)) return;
+      context.controller?.lock();
+      context.selectedTeam = context.teams.find(team => team.id === select.value);
+    } };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCapturedTeams = loadTeams;`, context);
+  const old = context.loadCapturedTeams();
+  await started;
+  session = { id: "b" }; deviceID = "device-b"; generation = "2"; identity = { deviceID }; epoch++;
+  await context.loadCapturedTeams();
+  context.controller = { lock() { locked++; } };
+  release();
+  await old;
+  assert.equal(context.selectedTeam.id, "team-b");
+  assert.deepEqual(select.options.map(value => value.value), ["team-b"]);
+  assert.equal(locked, 0);
+});
+
+for (const failed of [false, true]) test(`an old selected-Team ${failed ? "error" : "response"} cannot update a newer session of the same Team`, async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadSelectedTeam(");
+  const end = source.indexOf("\n  async function loadTeams(", start);
+  assert.ok(start >= 0 && end > start);
+  let session = { id: "a" }, deviceID = "device-a", generation = "1", identity = { deviceID }, epoch = 1;
+  let entered, release, backgroundStarted = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => session, deviceID: () => deviceID, sessionGeneration: () => generation,
+    async listTeamMembersPage() { entered(); await held; if (failed) throw new Error("synthetic_stale_failure"); return { members: [], nextCursor: null, total: 0 }; },
+    async listSharedVaults() { return [{ id: "vault-a" }]; }, async listTeamInvitations() { return []; },
+    async getTeamDeviceAdmissionPolicy() { return {}; } };
+  const element = () => ({ hidden: false, disabled: false, value: "", reset() {}, replaceChildren() {}, querySelector: () => element() });
+  const shared = { id: "shared-team", role: "owner", name: "Synthetic" };
+  const context = { client, teams: [shared], selectedTeam: null, selectedVault: null, memberRequestGeneration: 0, selectedTeamRequestGeneration: 0,
+    accessManager: null, activeView: "teams", teamSelect: { value: shared.id }, lockCurrentVault() {},
+    teamMembers: [], ownershipMembers: [], memberNextCursor: null, memberTotal: 0, renderMembers() {},
+    teamInvitations: [], renderTeamInvitations() {}, selectedPanel: element(), deviceAdmissionPolicy: null,
+    renderDeviceAdmissionPolicy() {}, deviceAdmissionPolicyPanel: element(), teamRole: element(), teamRoleLabel: () => "owner",
+    inviteForm: { hidden: false, elements: { role: { value: "viewer", options: [{ value: "admin" }] } } },
+    canManage: () => true, createVaultForm: element(), lifecyclePanel: element(), renameTeamForm: { elements: { name: element() } },
+    archiveTeamForm: element(), archiveTeamMessage: element(), transferOwnershipForm: element(), transferOwnershipMember: element(),
+    memberSearch: element(), memberRoleFilter: element(), vaults: [], populateVaults() {}, updateTeamMessage() {},
+    startBackgroundSync() { backgroundStarted++; }, runBackgroundTeamVaultSync: async () => {}, setText() {},
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }) };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCapturedTeam = loadSelectedTeam;`, context);
+  const old = context.loadCapturedTeam();
+  await started;
+  session = { id: "b" }; deviceID = "device-b"; generation = "2"; identity = { deviceID }; epoch++;
+  context.selectedTeam = { ...shared, name: "Synthetic B" };
+  context.memberRequestGeneration++;
+  context.vaults = [{ id: "vault-b" }];
+  release();
+  await old;
+  assert.equal(context.selectedTeam.name, "Synthetic B");
+  assert.equal(context.vaults[0].id, "vault-b");
+  assert.equal(backgroundStarted, 0);
+});
+
+test("a member search does not cancel the current Team's vault-list load", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadSelectedTeam("), end = source.indexOf("\n  async function loadTeams(", start);
+  let entered, release, backgroundStarted = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const identity = { deviceID: "device" }, client = { session: () => ({ id: "a" }), deviceID: () => "device", sessionGeneration: () => "1",
+    async listTeamMembersPage() { entered(); await held; return { members: [], nextCursor: null, total: 0 }; },
+    async listSharedVaults() { return [{ id: "vault-a" }]; }, async listTeamInvitations() { return []; },
+    async getTeamDeviceAdmissionPolicy() { return {}; } };
+  const element = () => ({ hidden: false, disabled: false, value: "", reset() {}, replaceChildren() {}, querySelector: () => element() });
+  const team = { id: "team-a", role: "owner", name: "Synthetic" };
+  const context = { client, teams: [team], selectedTeam: null, selectedVault: null, memberRequestGeneration: 0, selectedTeamRequestGeneration: 0,
+    accessManager: null, activeView: "teams", teamSelect: { value: team.id }, lockCurrentVault() {},
+    teamMembers: [], ownershipMembers: [], memberNextCursor: null, memberTotal: 0, renderMembers() {}, teamInvitations: [],
+    renderTeamInvitations() {}, selectedPanel: element(), deviceAdmissionPolicy: null, renderDeviceAdmissionPolicy() {},
+    deviceAdmissionPolicyPanel: element(), teamRole: element(), teamRoleLabel: () => "owner",
+    inviteForm: { hidden: false, elements: { role: { value: "viewer", options: [{ value: "admin" }] } } }, canManage: () => true,
+    createVaultForm: element(), lifecyclePanel: element(), renameTeamForm: { elements: { name: element() } }, archiveTeamForm: element(),
+    archiveTeamMessage: element(), transferOwnershipForm: element(), transferOwnershipMember: element(), memberSearch: element(), memberRoleFilter: element(),
+    vaults: [], populateVaults() {}, updateTeamMessage() {}, startBackgroundSync() { backgroundStarted++; }, runBackgroundTeamVaultSync: async () => {}, setText() {},
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: 1 }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: 1 }) };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCapturedTeam = loadSelectedTeam;`, context);
+  const pending = context.loadCapturedTeam();
+  await started;
+  context.memberRequestGeneration++;
+  release();
+  await pending;
+  assert.equal(context.vaults[0]?.id, "vault-a");
+  assert.equal(backgroundStarted, 1);
+});
+
+for (const kind of ["devices", "invitations"]) for (const failed of [false, true]) {
+  test(`old Team ${kind} ${failed ? "error" : "response"} cannot repaint the newer session`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const startMarker = kind === "devices" ? "  async function loadDevices(" : "  async function loadPendingInvitations(";
+    const endMarker = kind === "devices" ? "\n  function renderMembers(" : "\n  async function refreshWorkspaceActivity(";
+    const start = source.indexOf(startMarker), end = source.indexOf(endMarker, start);
+    assert.ok(start >= 0 && end > start);
+    let generation = "1", identity = { deviceID: "same-device" }, epoch = 1, entered, release, paints = 0;
+    const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+    const delayed = async () => { entered(); await held; if (failed) throw new Error("synthetic_stale_failure"); return []; };
+    const client = { session: () => ({ id: "same-account" }), deviceID: () => "same-device", sessionGeneration: () => generation,
+      listDevices: delayed, listPendingTeamInvitations: delayed };
+    const context = { client, identity, notificationSourceSequence: 0, documentValue: {}, deviceTrustContainer: null,
+      deviceTrustRepository: null, devices: { replaceChildren() { paints++; } }, deviceOrbit: null,
+      accountInvitations: [{ id: "new" }], renderPendingInvitations() { paints++; }, renderOverviewSummary() { paints++; },
+      activeInterfaceLocale: () => "ru",
+      captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+      workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }) };
+    runInNewContext(`${source.slice(start, end)}\nthis.loadCaptured = ${kind === "devices" ? "loadDevices" : "loadPendingInvitations"};`, context);
+    const old = context.loadCaptured();
+    await started;
+    generation = "2"; identity = { deviceID: "same-device" }; context.identity = identity; epoch++;
+    release();
+    await old;
+    assert.equal(paints, 0);
+    if (kind === "invitations") assert.equal(context.accountInvitations[0].id, "new");
+  });
+}
+
+test("a delayed old device-trust panel can only render into its detached container", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadDevices("), end = source.indexOf("\n  function renderMembers(", start);
+  let generation = "1", identity = { deviceID: "device" }, epoch = 1, entered, release, reloads = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => ({ id: "account" }), deviceID: () => "device", sessionGeneration: () => generation, async listDevices() { return []; } };
+  const panel = { children: [], replaceChildren(...items) { this.children = items; } };
+  const context = { client, identity, notificationSourceSequence: 0, documentValue: { createElement: () => ({ style: {} }) },
+    deviceTrustContainer: panel, deviceTrustRepository: {}, teamIdentityRepository: {}, trustPanel: null,
+    location: { origin: "https://synthetic.invalid", reload() { reloads++; } },
+    devices: { replaceChildren() {} }, deviceOrbit: null, activeInterfaceLocale: () => "ru",
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }),
+    createBrowserDeviceTrustPanel({ container, onRekeyCommitted }) { return { async refresh() {
+      entered(); await held; container.value = "old"; onRekeyCommitted();
+    } }; } };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCaptured = loadDevices;`, context);
+  const old = context.loadCaptured();
+  await started;
+  generation = "2"; identity = { deviceID: "device" }; context.identity = identity; epoch++;
+  const current = { value: "new" };
+  panel.replaceChildren(current);
+  release();
+  await old;
+  assert.equal(panel.children[0], current);
+  assert.equal(panel.children[0].value, "new");
+  assert.equal(reloads, 0);
+});
+
+for (const stage of ["confirmation", "revoke", "selection", "maintenance", "vaults"]) {
+  for (const failed of stage === "confirmation" ? [false] : [false, true]) {
+    test(`Team revoke ${stage} ${failed ? "error" : "response"} cannot affect a replacement session`, async () => {
+      const { runInNewContext } = await import("node:vm");
+      const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+      const start = source.indexOf('      revoke.addEventListener("click", async () => {', source.indexOf("  function renderMembers("));
+      const end = source.indexOf("\n      actions.className", start);
+      assert.ok(start >= 0 && end > start);
+      let entered, release, switched = false, callback, messagesAfterSwitch = 0, selectionsAfterSwitch = 0;
+      const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+      const gate = async name => {
+        if (name !== stage) return;
+        entered(); await held;
+        if (failed) throw new Error("synthetic_stale_failure");
+      };
+      const requests = [], revoke = { disabled: false, addEventListener(_type, handler) { callback = handler; } };
+      const teamA = { id: "team-a" }, teamB = { id: "team-b" };
+      const context = { revoke, member: { id: "member-a", username: "synthetic" }, selectedTeam: teamA,
+        selectedTeamRequestGeneration: 1, activeSession: "a", ownershipMembers: ["a"], vaults: [{ id: "a" }],
+        message: {}, editableByActor: true, self: false,
+        captureWorkspaceContext() { return context.activeSession; }, workspaceContextCurrent: captured => captured === context.activeSession,
+        async requestConfirmation() { await gate("confirmation"); return true; },
+        client: { async revokeTeamMember(input) { requests.push(input); await gate("revoke"); return { rotationRequiredVaults: 1 }; },
+          async listSharedVaults(id) { requests.push({ list: id }); await gate("vaults"); return [{ id: "a", rotationRequired: false }]; } },
+        async loadSelectedTeam() { context.selectedTeamRequestGeneration++; if (switched) selectionsAfterSwitch++; await gate("selection"); },
+        async maintainSelectedTeamVaults() { await gate("maintenance"); return { rotated: 1 }; },
+        populateVaults() { if (switched) messagesAfterSwitch++; }, setText() { if (switched) messagesAfterSwitch++; } };
+      runInNewContext(source.slice(start, end), context);
+      const operation = callback();
+      await started;
+      switched = true; context.activeSession = "b"; context.selectedTeam = teamB; context.selectedTeamRequestGeneration++;
+      context.ownershipMembers = ["b"]; context.vaults = [{ id: "b" }];
+      release();
+      await operation;
+      assert.equal(context.selectedTeam, teamB);
+      assert.deepEqual(context.ownershipMembers, ["b"]);
+      assert.equal(context.vaults[0].id, "b");
+      assert.equal(selectionsAfterSwitch, 0);
+      assert.equal(messagesAfterSwitch, 0);
+      assert.equal(requests.some(request => request.teamID === "team-b" || request.list === "team-b"), false);
+    });
+  }
+}
+
+for (const stage of ["format", "synchronize"]) test(`Team maintenance stops after its ${stage} result becomes stale`, async () => {
+  let current = true, entered, release, controllers = 0, provisions = 0, locks = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const gate = async name => { if (name === stage) { entered(); await held; } };
+  const client = { accessClient() { return { async getContext() { await gate("format"); return { formatState: "V1_ACTIVE" }; } }; } };
+  const operation = application.maintainAccessibleTeamVaultWrappers({ client, identity: {}, team: { id: "team-a", role: "owner" },
+    vaults: [{ id: "vault-a", rotationRequired: false }], isCurrent: () => current,
+    repositoryFactory: () => ({}), controllerFactory() { controllers++; return { lock() { locks++; } }; },
+    async synchronize() { await gate("synchronize"); return { status: "up_to_date" }; },
+    async provision() { provisions++; return { granted: 1 }; } });
+  await started;
+  current = false; release();
+  await operation;
+  assert.equal(provisions, 0);
+  assert.equal(controllers, stage === "format" ? 0 : 1);
+  assert.equal(locks, stage === "format" ? 0 : 1);
+});
+
+test("a previous Team maintenance promise is not reused by a newer session", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function maintainSelectedTeamVaults("), end = source.indexOf("\n  async function synchronizeAndProvision(", start);
+  assert.ok(start >= 0 && end > start);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const calls = [];
+  const teamA = { id: "shared-team", role: "owner", account: "a" }, teamB = { ...teamA, account: "b" };
+  const context = { activeSession: "a", identity: {}, selectedTeam: teamA, selectedVault: null,
+    selectedTeamRequestGeneration: 1, vaults: [{ id: "vault-a", rotationRequired: true }], vaultSelect: {},
+    backgroundMaintenanceOperation: null, captureWorkspaceContext() { return context.activeSession; },
+    workspaceContextCurrent: captured => captured === context.activeSession,
+    async maintainAccessibleTeamVaultWrappers({ team }) {
+      calls.push(`maintenance-${team.account}`);
+      if (team.account === "a") { entered(); await held; }
+      return { rotated: 1 };
+    },
+    client: { async listSharedVaults() { calls.push(`refresh-${context.activeSession}`); return [{ id: `vault-${context.activeSession}` }]; } },
+    populateVaults() {} };
+  runInNewContext(`${source.slice(start, end)}\nthis.maintainCaptured = maintainSelectedTeamVaults;`, context);
+  const old = context.maintainCaptured();
+  await started;
+  context.activeSession = "b"; context.selectedTeam = teamB; context.selectedTeamRequestGeneration++;
+  context.vaults = [{ id: "vault-b", rotationRequired: true }];
+  await context.maintainCaptured();
+  release();
+  await old;
+  assert.deepEqual(calls, ["maintenance-a", "maintenance-b", "refresh-b"]);
+  assert.equal(context.vaults[0].id, "vault-b");
+});
+
+for (const outcome of ["success", "post-confirm-failure", "unconfirmed"]) {
+  test(`current Team revoke reports ${outcome} without crossing accounts`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const start = source.indexOf('      revoke.addEventListener("click", async () => {', source.indexOf("  function renderMembers("));
+    const end = source.indexOf("\n      actions.className", start);
+    assert.ok(start >= 0 && end > start);
+    let callback, lastMessage = "", loadedTeam = "";
+    const revoke = { disabled: false, addEventListener(_type, handler) { callback = handler; } };
+    const team = { id: "team-a" };
+    const context = { revoke, member: { id: "member-a", username: "synthetic" }, selectedTeam: team,
+      selectedTeamRequestGeneration: 1, ownershipMembers: ["old"], vaults: [], message: {}, editableByActor: true, self: false,
+      captureWorkspaceContext: () => "a", workspaceContextCurrent: captured => captured === "a",
+      requestConfirmation: async () => true,
+      client: { async revokeTeamMember(input) {
+        assert.equal(input.teamID, "team-a");
+        if (outcome === "unconfirmed") throw new Error("synthetic_failure");
+        return { rotationRequiredVaults: 1 };
+      }, async listSharedVaults(id) { loadedTeam = id; return [{ id: "vault-a", rotationRequired: false }]; } },
+      async loadSelectedTeam() { context.selectedTeamRequestGeneration++; },
+      async maintainSelectedTeamVaults() { if (outcome === "post-confirm-failure") throw new Error("synthetic_failure"); return { rotated: 1 }; },
+      populateVaults() {}, setText(_element, value) { lastMessage = value; } };
+    runInNewContext(source.slice(start, end), context);
+    await callback();
+    if (outcome === "success") { assert.equal(loadedTeam, "team-a"); assert.match(lastMessage, /доступ отозван.*ключи обновлены/iu); }
+    else if (outcome === "post-confirm-failure") assert.match(lastMessage, /доступ отозван.*не удалось подтвердить/iu);
+    else assert.match(lastMessage, /не удалось подтвердить отзыв/iu);
+  });
+}
+
 test("Team sync reports an up-to-date Vault without requiring conflict details", async () => {
   const { teamSyncOutcomeMessage } = await import("../public/app.js");
   assert.equal(typeof teamSyncOutcomeMessage, "function");
@@ -94,7 +746,7 @@ test("Team locale rerender refreshes pending invitations and Team switches clear
   const localeRerender = application.match(/renderLocaleSensitive\(\) \{([\s\S]*?)\n    \},\n    async activate/u)?.[1] ?? "";
   assert.match(localeRerender, /renderPendingInvitations\(\)/u);
 
-  const selectedTeamLoad = application.match(/async function loadSelectedTeam\(\) \{([\s\S]*?)\n  async function loadTeams/u)?.[1] ?? "";
+  const selectedTeamLoad = application.match(/async function loadSelectedTeam\([^\n]*\) \{([\s\S]*?)\n  async function loadTeams/u)?.[1] ?? "";
   assert.match(selectedTeamLoad, /archiveTeamForm\.reset\(\);\s*setText\(archiveTeamMessage, ""\)/u);
 });
 

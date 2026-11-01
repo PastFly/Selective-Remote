@@ -80,3 +80,15 @@ test("partial and unconfirmed Team device admissions are understandable in Engli
   assert.equal(t("Допущено устройств: 2. Проверьте синхронизацию и выдачу ключей."),
     "Devices approved: 2. Check synchronization and key delivery.");
 });
+
+test("unconfirmed local logout cleanup is clear in English for either server result", () => {
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(i18n, browser);
+  const t = browser.window.SelectiveRemoteI18n.t;
+  assert.equal(t("Сеанс Cloud завершён на сервере. Не удалось подтвердить удаление локального ключа доверенного браузера."),
+    "The Cloud session ended on the server. Removal of the local trusted-browser key could not be confirmed.");
+  assert.equal(t("Не удалось подтвердить завершение сеанса Cloud на сервере. Проверьте подключение. Не удалось подтвердить удаление локального ключа доверенного браузера."),
+    "The Cloud session could not be confirmed ended on the server. Check your connection. Removal of the local trusted-browser key could not be confirmed.");
+});

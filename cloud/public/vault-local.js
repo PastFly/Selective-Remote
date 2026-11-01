@@ -608,7 +608,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
         });
       } finally { database.close(); }
     },
-    async deleteSessionUnlockIfCurrent(expected, pending = []) {
+    async deleteSessionUnlockIfCurrent(expected, pending = [], { strictGeneration = false } = {}) {
       if (expected !== null && (!Number.isSafeInteger(expected.generation) || expected.generation < 0)) {
         throw new Error("local_vault_storage_failed");
       }
@@ -624,10 +624,12 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
             if (!Number.isSafeInteger(current) || current < 0 || current === Number.MAX_SAFE_INTEGER) {
               failure = new Error("local_vault_storage_failed"); tx.abort(); return;
             }
-            const observedMatch = expected && (expected.unlock
+            const observedMatch = expected && (!strictGeneration || current === expected.generation) && (expected.unlock
               ? sameSessionUnlock(currentUnlock, expected.unlock)
               : current === expected.generation && currentUnlock === null);
-            const pendingMatch = currentUnlock && pending.some(candidate => sameSessionUnlock(currentUnlock, candidate.unlock));
+            const pendingMatch = currentUnlock && pending.some(candidate =>
+              (!strictGeneration || current === candidate.base?.generation + 1)
+                && sameSessionUnlock(currentUnlock, candidate.unlock));
             const invalidatePending = pending.some(candidate => candidate.base
               && current === candidate.base.generation && sameStoredSessionUnlock(currentUnlock, candidate.base.unlock));
             if (!observedMatch && !pendingMatch && !invalidatePending) return;
@@ -684,18 +686,27 @@ export async function prepareAccountScopedVault({
   cryptoValue = globalThis.crypto,
   now = () => new Date().toISOString(),
   randomUUID = () => cryptoValue.randomUUID(),
+  onController = async () => {},
+  requireCurrent = () => {},
 } = {}) {
   const normalizedID = normalizedAccountID(accountID);
   if (!accountRepository || !legacyRepository) throw new Error("invalid_local_vault_repository");
+  requireCurrent();
   const unlockState = typeof accountRepository.loadSessionUnlockState === "function"
     ? await accountRepository.loadSessionUnlockState() : null;
+  requireCurrent();
   const unlockGeneration = unlockState?.generation ?? null;
   let vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID, initialUnlockState: unlockState });
+  await onController(vault);
+  requireCurrent();
   const accountStatus = await vault.status();
+  requireCurrent();
   if (accountStatus !== "empty") {
     const stored = await accountRepository.load();
+    requireCurrent();
     const binding = typeof accountRepository.loadOwnershipBinding === "function"
       ? await accountRepository.loadOwnershipBinding() : null;
+    requireCurrent();
     let ownership = null;
     try { if (binding) ownership = validatedOwnershipBinding(binding, normalizedID); } catch {}
     if (!ownership || !stored || !sameWrappedKey(ownership.wrappedKey, stored.envelope?.wrappedKey)) {
@@ -704,6 +715,7 @@ export async function prepareAccountScopedVault({
     const restored = passphrase === null
       ? await vault.restoreRememberedSession(normalizedID)
       : false;
+    requireCurrent();
     if (restored && !await vault.hasAccountOwnership(normalizedID)) {
       vault.lock();
       return { vault, legacyMigrated: false, restored: false, legacyOwnershipUnverified: true };
@@ -716,11 +728,13 @@ export async function prepareAccountScopedVault({
     throw new Error("local_vault_storage_unavailable");
   }
   const legacyState = await legacyRepository.loadLegacyState();
+  requireCurrent();
   const legacySnapshot = legacyState.snapshot;
   if (!legacySnapshot) return { vault, legacyMigrated: false, restored: false };
   const remembered = typeof legacyRepository.loadSessionUnlock === "function"
     ? await legacyRepository.loadSessionUnlock()
     : null;
+  requireCurrent();
   const legacyVault = createLocalVaultController({
     repository: { ...legacyRepository, load: async () => clone(legacySnapshot),
       loadSessionUnlock: async () => clone(remembered), deleteSessionUnlock: async () => {},
@@ -743,9 +757,12 @@ export async function prepareAccountScopedVault({
   if (claimedOwner !== normalizedID) {
     return { vault, legacyMigrated: false, restored: false, legacyOwnershipUnverified: true };
   }
+  await onController(legacyVault);
+  requireCurrent();
   const rememberedAccount = remembered?.accountID ? String(remembered.accountID).toLowerCase() : null;
   const rememberedRestored = remembered && rememberedAccount === normalizedID
     ? await legacyVault.restoreRememberedSession(normalizedID) : false;
+  requireCurrent();
 
   if (passphrase !== null) {
     try {
@@ -754,11 +771,13 @@ export async function prepareAccountScopedVault({
     } catch {
       throw new Error("legacy_vault_unlock_failed");
     }
+    requireCurrent();
   } else {
     restored = rememberedRestored;
   }
 
   await accountRepository.importLegacyStateIfAbsent({ snapshot: legacySnapshot, sync: legacyState.sync, owner: normalizedID });
+  requireCurrent();
   let migratedUnlockState = unlockState;
   if (passphrase === null && restored) {
     if (typeof accountRepository.saveSessionUnlock !== "function") {
@@ -770,10 +789,14 @@ export async function prepareAccountScopedVault({
         migratedUnlockState = { generation: unlockGeneration + 1, unlock };
       }
     } else await accountRepository.saveSessionUnlock(unlock);
+    requireCurrent();
   }
   vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID, initialUnlockState: migratedUnlockState });
+  await onController(vault);
+  requireCurrent();
   if (passphrase !== null) await vault.unlock(passphrase);
   else if (restored) await vault.unlockWithSessionKey(legacyVault.sessionKey());
+  requireCurrent();
   return { vault, legacyMigrated: true, restored };
 }
 
@@ -856,7 +879,13 @@ export function createLocalVaultController({
   let lockGeneration = 0;
   let observedUnlockState = initialUnlockState ? clone(initialUnlockState) : null;
   let observedUnlockGeneration = observedUnlockState?.generation ?? -1;
+  // A value merely read from shared storage may belong to another session.
+  let claimedUnlockState = null;
   const pendingSessionUnlocks = new Set();
+
+  function observeClaimedUnlock(state) {
+    if (!claimedUnlockState || state.generation > claimedUnlockState.generation) claimedUnlockState = clone(state);
+  }
 
   function observeUnlockState(state) {
     if (!state || !Number.isSafeInteger(state.generation) || state.generation < 0) {
@@ -1078,6 +1107,7 @@ export function createLocalVaultController({
           if (unlockGeneration !== null && typeof repository.saveSessionUnlockIfCurrent === "function") {
             if (!await repository.saveSessionUnlockIfCurrent(unlock, unlockGeneration, unlockState.unlock)) return false;
             observeUnlockState({ generation: unlockGeneration + 1, unlock });
+            observeClaimedUnlock({ generation: unlockGeneration + 1, unlock });
           } else await repository.saveSessionUnlock(unlock);
           if (lockGeneration !== capturedGeneration) return false;
           return true;
@@ -1130,6 +1160,7 @@ export function createLocalVaultController({
             try {
               if (!await repository.saveSessionUnlockIfCurrent(unlock, unlockState.generation, unlockState.unlock)) return false;
               observeUnlockState({ generation: unlockState.generation + 1, unlock });
+              observeClaimedUnlock({ generation: unlockState.generation + 1, unlock });
             } finally { pendingSessionUnlocks.delete(pending); }
             requireGeneration(generation);
           } else if (unlockState && !observedUnlockState) observeUnlockState(unlockState);
@@ -1144,6 +1175,18 @@ export function createLocalVaultController({
         // Preserve it; an explicit successful unlock can safely replace it.
         return false;
       }
+    },
+
+    async forgetTrackedRememberedSession() {
+      if (typeof repository.deleteSessionUnlockIfCurrent !== "function") return false;
+      const expected = claimedUnlockState ? clone(claimedUnlockState) : null;
+      const pending = [...pendingSessionUnlocks].map(clone);
+      if (!expected && !pending.length) {
+        // Preserve any unclaimed record; its owner cannot be established here.
+        if (typeof repository.loadSessionUnlock !== "function") return false;
+        return (await repository.loadSessionUnlock()) == null;
+      }
+      return repository.deleteSessionUnlockIfCurrent(expected, pending, { strictGeneration: true });
     },
 
     async forgetRememberedSession() {

@@ -173,6 +173,238 @@ test("logout is unconfirmed unless the server explicitly revokes the session", a
   }
 });
 
+test("a late confirmed account deletion preserves the replacement browser session", async () => {
+  const secondUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const firstBinding = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const secondBinding = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  };
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: storage, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      const first = JSON.parse(options.body).email === "first@example.invalid";
+      return new Response(JSON.stringify({ token: (first ? "a" : "b").repeat(43),
+        user: { id: first ? userID : secondUser, email: first ? "first@example.invalid" : "second@example.invalid" },
+        deviceID: deviceA }), { status: 200, headers: {
+        "Content-Type": "application/json", "X-Selective-Session-Binding": first ? firstBinding : secondBinding,
+      } });
+    }
+    if (path === "/v1/me" && options.method === "DELETE") {
+      assert.equal(options.headers.Authorization, `Bearer ${"a".repeat(43)}`);
+      entered(); await held;
+      return jsonResponse(200, { deleted: true });
+    }
+    if (path === "/v1/auth/logout") return jsonResponse(204, null);
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  const deletion = client.deleteAccount({ email: "first@example.invalid", password: passphrase });
+  try {
+    await started;
+    await client.logout();
+    await client.login({ email: "second@example.invalid", password: passphrase, deviceID: deviceA });
+    const secondEpoch = client.sessionGeneration();
+    release();
+    const result = await deletion;
+    assert.equal(client.session()?.id, secondUser);
+    assert.equal(client.sessionGeneration(), secondEpoch);
+    assert.equal(values.get("selective-remote:browser-session-binding:v1"), secondBinding);
+    assert.deepEqual(result, { deleted: true, sessionChanged: true });
+  } finally { release(); }
+});
+
+test("a late account deletion cannot invalidate a replacement login in flight", async () => {
+  const secondUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  let deleteEntered, releaseDelete, loginEntered, releaseLogin;
+  const deleteStarted = new Promise(resolve => { deleteEntered = resolve; });
+  const deleteHeld = new Promise(resolve => { releaseDelete = resolve; });
+  const loginStarted = new Promise(resolve => { loginEntered = resolve; });
+  const loginHeld = new Promise(resolve => { releaseLogin = resolve; });
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      const email = JSON.parse(options.body).email;
+      if (email === "second@example.invalid") { loginEntered(); await loginHeld; }
+      return jsonResponse(200, { token: "t".repeat(43),
+        user: { id: email === "second@example.invalid" ? secondUser : userID, email }, deviceID: deviceA });
+    }
+    if (path === "/v1/me" && options.method === "DELETE") {
+      deleteEntered(); await deleteHeld; return jsonResponse(200, { deleted: true });
+    }
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  const deletion = client.deleteAccount({ email: "first@example.invalid", password: passphrase });
+  let replacement;
+  try {
+    await deleteStarted;
+    replacement = client.login({ email: "second@example.invalid", password: passphrase, deviceID: deviceA });
+    await loginStarted;
+    const newEpoch = client.sessionGeneration();
+    releaseDelete();
+    assert.deepEqual(await deletion, { deleted: true, sessionChanged: true });
+    assert.equal(client.sessionGeneration(), newEpoch);
+    releaseLogin();
+    assert.equal((await replacement).id, secondUser);
+    assert.equal(client.session()?.id, secondUser);
+  } finally {
+    releaseDelete(); releaseLogin();
+    if (replacement) await replacement.catch(() => {});
+  }
+});
+
+test("a late username update cannot rewrite the replacement account", async () => {
+  const secondUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      const first = JSON.parse(options.body).email === "first@example.invalid";
+      return jsonResponse(200, { token: (first ? "a" : "b").repeat(43), deviceID: deviceA,
+        user: { id: first ? userID : secondUser, email: first ? "first@example.invalid" : "second@example.invalid",
+          username: first ? "first" : "second", displayName: first ? "First" : "Second" } });
+    }
+    if (path === "/v1/account/username" && options.method === "PATCH") {
+      assert.equal(options.headers.Authorization, `Bearer ${"a".repeat(43)}`);
+      entered(); await held;
+      return jsonResponse(200, { username: "first-renamed" });
+    }
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  const update = client.updateUsername({ username: "first-renamed", password: passphrase });
+  try {
+    await started;
+    await client.login({ email: "second@example.invalid", password: passphrase, deviceID: deviceA });
+    const newEpoch = client.sessionGeneration();
+    release();
+    const result = await update;
+    assert.equal(client.session()?.id, secondUser);
+    assert.equal(client.session()?.username, "second");
+    assert.equal(client.sessionGeneration(), newEpoch);
+    assert.deepEqual(result, { id: userID, email: "first@example.invalid", username: "first-renamed",
+      displayName: "First", sessionChanged: true });
+  } finally { release(); }
+});
+
+test("a username update confirmed after logout does not recreate a session", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") return jsonResponse(200, { token: "a".repeat(43), deviceID: deviceA,
+      user: { id: userID, email: "first@example.invalid", username: "first", displayName: "First" } });
+    if (path === "/v1/account/username" && options.method === "PATCH") {
+      entered(); await held; return jsonResponse(200, { username: "first-renamed" });
+    }
+    if (path === "/v1/auth/logout") return jsonResponse(204, null);
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  const update = client.updateUsername({ username: "first-renamed", password: passphrase });
+  try {
+    await started;
+    await client.logout();
+    const loggedOutEpoch = client.sessionGeneration();
+    release();
+    assert.deepEqual(await update, { id: userID, email: "first@example.invalid", username: "first-renamed",
+      displayName: "First", sessionChanged: true });
+    assert.equal(client.session(), null);
+    assert.equal(client.sessionGeneration(), loggedOutEpoch);
+  } finally { release(); }
+});
+
+test("confirmed deletion retires only its current session and keeps its existing result shape", async () => {
+  const binding = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  };
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: storage, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") return new Response(JSON.stringify({ token: "a".repeat(43),
+      user: { id: userID, email: "first@example.invalid" }, deviceID: deviceA }), {
+      status: 200, headers: { "Content-Type": "application/json", "X-Selective-Session-Binding": binding },
+    });
+    if (path === "/v1/me" && options.method === "DELETE") return jsonResponse(200, { deleted: true });
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  let identityAtNotification = "not-notified";
+  client.subscribePublicationIdentity(() => { identityAtNotification = client.session(); });
+  const originalEpoch = Number(client.sessionGeneration());
+  assert.deepEqual(await client.deleteAccount({ email: "first@example.invalid", password: passphrase }), { deleted: true });
+  assert.equal(client.session(), null);
+  assert.equal(identityAtNotification, null);
+  assert.equal(Number(client.sessionGeneration()), originalEpoch + 1);
+  assert.equal(values.has("selective-remote:browser-session-binding:v1"), false);
+});
+
+test("a replacement login during deletion response parsing is preserved", async () => {
+  const secondUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      const first = JSON.parse(options.body).email === "first@example.invalid";
+      return jsonResponse(200, { token: (first ? "a" : "b").repeat(43), deviceID: deviceA,
+        user: { id: first ? userID : secondUser, email: first ? "first@example.invalid" : "second@example.invalid" } });
+    }
+    if (path === "/v1/me" && options.method === "DELETE") return {
+      status: 200, ok: true, async json() { entered(); await held; return { deleted: true }; },
+    };
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  const deletion = client.deleteAccount({ email: "first@example.invalid", password: passphrase });
+  try {
+    await started;
+    await client.login({ email: "second@example.invalid", password: passphrase, deviceID: deviceA });
+    const newEpoch = client.sessionGeneration();
+    release();
+    assert.deepEqual(await deletion, { deleted: true, sessionChanged: true });
+    assert.equal(client.session()?.id, secondUser);
+    assert.equal(client.sessionGeneration(), newEpoch);
+  } finally { release(); }
+});
+
+test("a late rejected deletion cannot retire a replacement session", async () => {
+  const secondUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      const first = JSON.parse(options.body).email === "first@example.invalid";
+      return jsonResponse(200, { token: (first ? "a" : "b").repeat(43), deviceID: deviceA,
+        user: { id: first ? userID : secondUser, email: first ? "first@example.invalid" : "second@example.invalid" } });
+    }
+    if (path === "/v1/me" && options.method === "DELETE") {
+      entered(); await held; return jsonResponse(401, { error: "authentication_required" });
+    }
+    throw new Error("unexpected_synthetic_request");
+  } });
+  await client.login({ email: "first@example.invalid", password: passphrase, deviceID: deviceA });
+  const deletion = client.deleteAccount({ email: "first@example.invalid", password: passphrase });
+  try {
+    await started;
+    await client.login({ email: "second@example.invalid", password: passphrase, deviceID: deviceA });
+    const newEpoch = client.sessionGeneration();
+    release();
+    await assert.rejects(deletion, /authentication_required/);
+    assert.equal(client.session()?.id, secondUser);
+    assert.equal(client.sessionGeneration(), newEpoch);
+  } finally { release(); }
+});
+
 test("browser session restores from an HttpOnly cookie without a JavaScript token", async () => {
   const calls = [];
   const client = createAuthenticatedVaultClient({ sessionStorageValue: bindingStorage(deviceA), fetchValue: async (path, options = {}) => {

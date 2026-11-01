@@ -784,12 +784,17 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     },
 
     async updateUsername({ username, password }) {
+      if (!user) throw new Error("authentication_required");
+      const updateEpoch = sessionEpoch;
+      const sourceUser = structuredClone(user);
       const response = await authorizedRequest("/v1/account/username", {
         method: "PATCH", body: JSON.stringify({ username, password: String(password ?? "") }),
       });
       const result = await responseJSON(response, "username_update_failed");
       if (!response.ok) throw new Error(["invalid_username", "username_exists", "invalid_credentials"].includes(result.error) ? result.error : "username_update_failed");
-      user.username = String(result.username ?? "");
+      const updatedUsername = String(result.username ?? "");
+      if (sessionEpoch !== updateEpoch) return { ...sourceUser, username: updatedUsername, sessionChanged: true };
+      user.username = updatedUsername;
       return structuredClone(user);
     },
 
@@ -820,6 +825,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     },
 
     async deleteAccount({ email, password }) {
+      const deletionEpoch = sessionEpoch;
       const response = await authorizedRequest("/v1/me", {
         method: "DELETE",
         body: JSON.stringify({ email: String(email ?? "").trim(), password: normalizedPassword(password) }),
@@ -831,10 +837,15 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
         throw new Error(code);
       }
       if (result.deleted !== true || Object.keys(result).length !== 1) throw new Error("account_delete_failed");
-      invalidateIdentity();
+      // A 2xx response confirms the original deletion even if another login
+      // has replaced its session while the request was in flight.
+      if (sessionEpoch !== deletionEpoch) return { deleted: true, sessionChanged: true };
       token = null;
       user = null;
       currentDeviceID = null;
+      cookieSessionBinding = null;
+      writeStoredBinding(null);
+      invalidateIdentity();
       return { deleted: true };
     },
 

@@ -95,6 +95,28 @@ export function teamSyncTargetMatches(captured, current) {
     && captured.teamID === current.teamID && captured.vaultID === current.vaultID;
 }
 
+export function captureTeamWorkspaceContext({ client, identity, activationEpoch }) {
+  const accountID = client.session()?.id, deviceID = client.deviceID(), generation = client.sessionGeneration();
+  if (!accountID || !deviceID || !identity || identity.deviceID !== deviceID || typeof generation !== "string") return null;
+  return { accountID, deviceID, generation, identity, activationEpoch };
+}
+
+export function teamWorkspaceContextMatches(captured, { client, identity, activationEpoch }) {
+  return Boolean(captured) && captured.identity === identity && captured.activationEpoch === activationEpoch
+    && captured.accountID === client.session()?.id && captured.deviceID === client.deviceID()
+    && captured.generation === client.sessionGeneration();
+}
+
+export async function lockPersonalVault({ controller, cleanup, onLocked = () => {} }) {
+  let pendingCleanup;
+  try { pendingCleanup = Promise.resolve(cleanup()); }
+  catch (error) { pendingCleanup = Promise.reject(error); }
+  controller.lock();
+  onLocked();
+  try { return (await pendingCleanup) !== false; }
+  catch { return false; }
+}
+
 export function createSyncPresentationState() {
   return { personal: { status: "unknown" }, team: { status: "unknown" } };
 }
@@ -1396,20 +1418,20 @@ export async function initializeLocalVault({
   });
   lockButton.addEventListener("click", async () => {
     lockButton.disabled = true;
-    try {
-      await lockListener();
-    } catch {
-      setText(message, "Не удалось удалить ключ доверенного браузера. Vault оставлен открытым.");
-      lockButton.disabled = false;
-      return;
+    const lockedController = controller;
+    let lockedGeneration;
+    const cleanupConfirmed = await lockPersonalVault({ controller: lockedController, cleanup: lockListener, onLocked() {
+      publishSyncObservation(documentValue, { scope: "personal", type: "locked" });
+      resetEditor();
+      clearConflictUI();
+      mode("waiting");
+      lockedGeneration = scopeGeneration;
+      records.replaceChildren();
+      setText(message, "Vault заблокирован. Войдите в аккаунт снова, чтобы открыть его.");
+    } });
+    if (controller === lockedController && lockedGeneration === scopeGeneration && workspace.hidden && !cleanupConfirmed) {
+      setText(message, "Vault заблокирован. Не удалось подтвердить удаление сохранённого ключа доверенного браузера.");
     }
-    controller.lock();
-    publishSyncObservation(documentValue, { scope: "personal", type: "locked" });
-    resetEditor();
-    clearConflictUI();
-    mode("waiting");
-    records.replaceChildren();
-    setText(message, "Vault заблокирован. Войдите в аккаунт снова, чтобы открыть его.");
     lockButton.disabled = false;
   });
 
@@ -1489,18 +1511,21 @@ export async function maintainAccessibleTeamVaultWrappers({
   synchronize = synchronizeTeamVault,
   provision = provisionTeamVaultWrappers,
   rotate = rotateTeamVault,
+  isCurrent = () => true,
 } = {}) {
   if (!client || !identity || !team?.id || !team?.role || !Array.isArray(vaults)) {
     throw new Error("invalid_team_vault_maintenance");
   }
   const outcome = { attempted: 0, synchronized: 0, rotated: 0, granted: 0, unavailable: 0, failed: 0 };
   for (const vault of vaults.slice(0, 256)) {
+    if (!isCurrent()) return outcome;
     if (!vault?.id) continue;
     outcome.attempted += 1;
     const scope = { type: "team", teamID: team.id, vaultID: vault.id };
     let format;
     try { format = await resolveTeamVaultFormat(client, scope); }
-    catch { outcome.failed += 1; continue; }
+    catch { if (!isCurrent()) return outcome; outcome.failed += 1; continue; }
+    if (!isCurrent()) return outcome;
     if (format !== "V1_ACTIVE") { outcome.unavailable += 1; continue; }
     const maintenanceController = controllerFactory({
       repository: repositoryFactory(scope),
@@ -1514,6 +1539,7 @@ export async function maintainAccessibleTeamVaultWrappers({
           continue;
         }
         const rotation = await rotate({ client, controller: maintenanceController, role: team.role });
+        if (!isCurrent()) return outcome;
         if (rotation.status === "rotated") outcome.rotated += 1;
         else outcome.failed += 1;
         continue;
@@ -1523,14 +1549,17 @@ export async function maintainAccessibleTeamVaultWrappers({
         controller: maintenanceController,
         role: team.role,
       });
+      if (!isCurrent()) return outcome;
       if (["conflict", "remote_changed"].includes(synchronization.status)) {
         outcome.failed += 1;
         continue;
       }
       outcome.synchronized += 1;
       const provisioning = await provision({ client, controller: maintenanceController });
+      if (!isCurrent()) return outcome;
       outcome.granted += provisioning?.granted ?? 0;
     } catch (error) {
+      if (!isCurrent()) return outcome;
       if (["team_vault_key_unavailable", "device_approval_required", "team_vault_rotation_required"]
         .includes(String(error?.message ?? ""))) {
         outcome.unavailable += 1;
@@ -1786,6 +1815,7 @@ export function initializeTeamWorkspace({
   let memberTotal = 0;
   let memberSearchTimer = null;
   let memberRequestGeneration = 0;
+  let teamActivationEpoch = 0, teamListRequestGeneration = 0, selectedTeamRequestGeneration = 0;
   let teamInvitations = [];
   let accountInvitations = [];
   let notificationSourceSequence = 0;
@@ -1826,6 +1856,14 @@ export function initializeTeamWorkspace({
   let editingRecordID = null;
   let recordSavePending = false;
   let detailedHostID = null;
+
+  function captureWorkspaceContext() {
+    return captureTeamWorkspaceContext({ client, identity, activationEpoch: teamActivationEpoch });
+  }
+
+  function workspaceContextCurrent(captured) {
+    return teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: teamActivationEpoch });
+  }
 
   function publicationDriverFor(scope,{recovery=false}={}) {
     if(!identity || !deviceTrustRepository || typeof client.wholePublicationTransport !== 'function' || selectedTeam?.id !== scope.teamID)return null;
@@ -1893,9 +1931,15 @@ export function initializeTeamWorkspace({
   }
 
   async function loadActivity({ append = false } = {}) {
+    const captured = captureWorkspaceContext();
+    if (!workspaceContextCurrent(captured)) return;
     if (!selectedTeam || !activityList) { activityEvents = []; activityNextCursor = null; renderActivity(); return; }
+    const teamID = selectedTeam.id;
     setText(message, "Загружаем журнал активности без содержимого секретов…");
-    const page = await client.listTeamActivity(selectedTeam.id, { limit: 50, cursor: append ? activityNextCursor : null });
+    let page;
+    try { page = await client.listTeamActivity(teamID, { limit: 50, cursor: append ? activityNextCursor : null }); }
+    catch (error) { if (!workspaceContextCurrent(captured) || selectedTeam?.id !== teamID) return; throw error; }
+    if (!workspaceContextCurrent(captured) || selectedTeam?.id !== teamID) return;
     activityEvents = append ? [...activityEvents, ...page.events] : page.events;
     activityNextCursor = page.nextCursor;
     renderActivity();
@@ -2417,12 +2461,17 @@ export function initializeTeamWorkspace({
   }
 
   async function loadDevices() {
+    const captured = captureWorkspaceContext();
+    if (!workspaceContextCurrent(captured)) return;
     const sequence = ++notificationSourceSequence;
-    const sessionID = client.session()?.id;
-    const values = await client.listDevices();
-    if (!sessionID || client.session()?.id !== sessionID || !identity) return;
+    const sessionID = captured.accountID;
+    let values;
+    try { values = await client.listDevices(); }
+    catch (error) { if (!workspaceContextCurrent(captured)) return; throw error; }
+    if (!workspaceContextCurrent(captured)) return;
     const trustRequests = client.deviceTrustRequests
       ? await client.deviceTrustRequests().catch(() => null) : null;
+    if (!workspaceContextCurrent(captured)) return;
     const EventType = documentValue.defaultView?.CustomEvent;
     if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
       detail: { recipient: sessionID, group: "devices", complete: trustRequests !== null, sequence,
@@ -2432,19 +2481,26 @@ export function initializeTeamWorkspace({
     }));
     if (deviceTrustContainer && deviceTrustRepository) {
       try {
-        trustPanel ??= createBrowserDeviceTrustPanel({ container: deviceTrustContainer,
-          documentValue, client, repository: deviceTrustRepository,
-          identityRepository: teamIdentityRepository,
-          endpoint: globalThis.location.origin, accountID: sessionID, identity,
-          onUpdated: () => { void loadDevices().catch(() => {}); },
-          onRekeyCommitted: () => globalThis.location.reload() });
+        if (!trustPanel) {
+          const panelContainer = documentValue.createElement("div");
+          panelContainer.style.display = "contents";
+          deviceTrustContainer.replaceChildren(panelContainer);
+          trustPanel = createBrowserDeviceTrustPanel({ container: panelContainer,
+            documentValue, client, repository: deviceTrustRepository,
+            identityRepository: teamIdentityRepository,
+            endpoint: globalThis.location.origin, accountID: sessionID, identity,
+            onUpdated: () => { if (workspaceContextCurrent(captured)) void loadDevices().catch(() => {}); },
+            onRekeyCommitted: () => { if (workspaceContextCurrent(captured)) globalThis.location.reload(); } });
+        }
         await trustPanel.refresh();
       } catch (error) {
+        if (!workspaceContextCurrent(captured)) return;
         const failure = documentValue.createElement("p");
         failure.setAttribute("role", "alert");
         failure.textContent = deviceTrustFailureCopy(error, activeInterfaceLocale(documentValue.documentElement?.lang));
         deviceTrustContainer.replaceChildren(failure);
       }
+      if (!workspaceContextCurrent(captured)) return;
     }
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     devices.replaceChildren();
@@ -2486,6 +2542,7 @@ export function initializeTeamWorkspace({
       fingerprint.textContent = device.publicKey
         ? `SHA-256: ${await teamDevicePublicKeyFingerprint(device.publicKey)}`
         : "SHA-256: ключ не зарегистрирован";
+      if (!workspaceContextCurrent(captured)) return;
       approve.type = "button";
       approve.textContent = "Одобрить ключ";
       approve.disabled = current || Boolean(device.revokedAt) || approved || !device.publicKey;
@@ -2659,29 +2716,47 @@ export function initializeTeamWorkspace({
       revoke.textContent = "Отозвать доступ";
       revoke.disabled = !editableByActor || self;
       revoke.addEventListener("click", async () => {
+        const captured = captureWorkspaceContext(), activeTeam = selectedTeam;
+        let selectionGeneration = selectedTeamRequestGeneration;
+        const isCurrent = () => workspaceContextCurrent(captured) && selectedTeam === activeTeam
+          && selectedTeamRequestGeneration === selectionGeneration;
+        if (!activeTeam || !isCurrent()) return;
         if (!await requestConfirmation({
           title: "Отозвать доступ участника?",
           message: `@${member.username} потеряет доступ. Ключи командных папок будут автоматически обновлены для оставшихся участников.`,
           confirmLabel: "Отозвать доступ",
           danger: true,
         })) return;
+        if (!isCurrent()) return;
         revoke.disabled = true;
+        let revoked = false;
         try {
-          const result = await client.revokeTeamMember({ teamID: selectedTeam.id, membershipID: member.id });
+          const result = await client.revokeTeamMember({ teamID: activeTeam.id, membershipID: member.id });
+          revoked = true;
+          if (!isCurrent()) return;
           ownershipMembers = [];
-          await loadSelectedTeam();
+          const refreshing = loadSelectedTeam(captured);
+          selectionGeneration = selectedTeamRequestGeneration;
+          await refreshing;
+          if (!isCurrent()) return;
           setText(message, result.rotationRequiredVaults > 0
             ? `Доступ отозван. Автоматически обновляем ключи папок: ${result.rotationRequiredVaults}.`
             : "Доступ отозван.");
           const maintenance = await maintainSelectedTeamVaults();
-          vaults = await client.listSharedVaults(selectedTeam.id);
+          if (!isCurrent()) return;
+          const refreshedVaults = await client.listSharedVaults(activeTeam.id);
+          if (!isCurrent()) return;
+          vaults = refreshedVaults;
           populateVaults();
           const pendingRotations = vaults.filter((vault) => vault.rotationRequired).length;
           setText(message, pendingRotations === 0
             ? `Доступ отозван. Ключи обновлены автоматически: ${maintenance?.rotated ?? result.rotationRequiredVaults}.`
             : `Доступ отозван. Обновление ключей продолжится автоматически; осталось папок: ${pendingRotations}.`);
         } catch {
-          setText(message, "Доступ не отозван: проверьте полномочия и правило последнего Owner.");
+          if (!isCurrent()) return;
+          setText(message, revoked
+            ? "Доступ отозван. Не удалось подтвердить обновление ключей командных папок."
+            : "Не удалось подтвердить отзыв доступа. Обновите список участников перед повтором.");
           revoke.disabled = !editableByActor || self;
         }
       });
@@ -2709,26 +2784,41 @@ export function initializeTeamWorkspace({
   }
 
   async function loadMemberPage({ reset = false } = {}) {
+    const captured = captureWorkspaceContext();
+    if (!workspaceContextCurrent(captured)) return;
     if (!selectedTeam) return;
+    const teamID = selectedTeam.id;
     const generation = ++memberRequestGeneration;
     memberMore.disabled = true;
-    const page = await client.listTeamMembersPage(selectedTeam.id, {
-      search: memberSearch.value,
-      role: memberRoleFilter.value,
-      limit: 50,
-      cursor: reset ? null : memberNextCursor,
-    });
-    if (generation !== memberRequestGeneration) return;
+    let page;
+    try {
+      page = await client.listTeamMembersPage(teamID, {
+        search: memberSearch.value,
+        role: memberRoleFilter.value,
+        limit: 50,
+        cursor: reset ? null : memberNextCursor,
+      });
+    } catch (error) {
+      if (!workspaceContextCurrent(captured) || generation !== memberRequestGeneration || selectedTeam?.id !== teamID) return;
+      throw error;
+    }
+    if (!workspaceContextCurrent(captured) || generation !== memberRequestGeneration || selectedTeam?.id !== teamID) return;
     teamMembers = reset ? page.members : [...teamMembers, ...page.members];
     memberNextCursor = page.nextCursor;
     memberTotal = page.total;
     renderMembers(teamMembers);
   }
 
-  async function loadOwnershipMembers() {
+  async function loadOwnershipMembers(captured = captureWorkspaceContext()) {
+    if (!workspaceContextCurrent(captured)) return;
     if (!selectedTeam || selectedTeam.role !== "owner" || ownershipMembers.length > 0) return;
+    const teamID = selectedTeam.id;
     transferOwnershipForm.querySelector("button").disabled = true;
-    ownershipMembers = await client.listTeamMembers(selectedTeam.id);
+    let loaded;
+    try { loaded = await client.listTeamMembers(teamID); }
+    catch (error) { if (!workspaceContextCurrent(captured) || selectedTeam?.id !== teamID) return; throw error; }
+    if (!workspaceContextCurrent(captured) || selectedTeam?.id !== teamID) return;
+    ownershipMembers = loaded;
     renderOwnershipMembers(ownershipMembers);
   }
 
@@ -2821,10 +2911,14 @@ export function initializeTeamWorkspace({
   }
 
   async function loadPendingInvitations() {
+    const captured = captureWorkspaceContext();
+    if (!workspaceContextCurrent(captured)) return;
     const sequence = ++notificationSourceSequence;
-    const sessionID = client.session()?.id;
-    const values = await client.listPendingTeamInvitations();
-    if (!sessionID || client.session()?.id !== sessionID || !identity) return;
+    const sessionID = captured.accountID;
+    let values;
+    try { values = await client.listPendingTeamInvitations(); }
+    catch (error) { if (!workspaceContextCurrent(captured)) return; throw error; }
+    if (!workspaceContextCurrent(captured)) return;
     accountInvitations = values;
     const EventType = documentValue.defaultView?.CustomEvent;
     if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
@@ -2837,7 +2931,8 @@ export function initializeTeamWorkspace({
   }
 
   async function refreshWorkspaceActivity({ full = false } = {}) {
-    if (!identity) return null;
+    const captured = captureWorkspaceContext();
+    if (!workspaceContextCurrent(captured)) return null;
     if (workspaceRefreshOperation) return workspaceRefreshOperation;
     const activeIdentity = identity;
     const activeTeam = selectedTeam;
@@ -2848,7 +2943,7 @@ export function initializeTeamWorkspace({
       }
       const sequence = ++notificationSourceSequence;
       const pendingForAccount = await client.listPendingTeamInvitations().catch(() => null);
-      if (identity !== activeIdentity) return;
+      if (!workspaceContextCurrent(captured) || identity !== activeIdentity) return;
       if (pendingForAccount) {
         accountInvitations = pendingForAccount;
         const EventType = documentValue.defaultView?.CustomEvent;
@@ -2862,7 +2957,7 @@ export function initializeTeamWorkspace({
         renderOverviewSummary();
       }
       const latestTeams = await client.listTeams();
-      if (identity !== activeIdentity) return;
+      if (!workspaceContextCurrent(captured) || identity !== activeIdentity) return;
       const teamSignature = (values) => JSON.stringify(values.map((team) => [
         team.id, team.name, team.role, team.membershipID,
       ]));
@@ -2879,7 +2974,7 @@ export function initializeTeamWorkspace({
         }),
         canManage() ? client.listTeamInvitations(activeTeam.id) : Promise.resolve([]),
       ]);
-      if (identity !== activeIdentity || selectedTeam?.id !== activeTeam.id) return;
+      if (!workspaceContextCurrent(captured) || identity !== activeIdentity || selectedTeam?.id !== activeTeam.id) return;
       if (memberResult.status === "fulfilled") {
         teamMembers = memberResult.value.members;
         memberNextCursor = memberResult.value.nextCursor;
@@ -2895,6 +2990,9 @@ export function initializeTeamWorkspace({
     workspaceRefreshOperation = pending;
     try {
       return await pending;
+    } catch (error) {
+      if (!workspaceContextCurrent(captured)) return null;
+      throw error;
     } finally {
       if (workspaceRefreshOperation === pending) workspaceRefreshOperation = null;
     }
@@ -2958,11 +3056,14 @@ export function initializeTeamWorkspace({
   }
 
   async function maintainSelectedTeamVaults() {
-    if (backgroundMaintenanceOperation) return backgroundMaintenanceOperation;
-    if (!identity || !selectedTeam || vaults.length === 0) {
+    const captured = captureWorkspaceContext(), activeTeam = selectedTeam;
+    const selectionGeneration = selectedTeamRequestGeneration;
+    const isCurrent = () => workspaceContextCurrent(captured) && selectedTeam === activeTeam
+      && selectedTeamRequestGeneration === selectionGeneration;
+    if (!isCurrent() || !activeTeam || vaults.length === 0) {
       return null;
     }
-    const activeTeam = selectedTeam;
+    if (backgroundMaintenanceOperation?.isCurrent()) return backgroundMaintenanceOperation.promise;
     const availableVaults = vaults.filter((vault) => (
       vault.id !== selectedVault?.id || vault.rotationRequired
     ));
@@ -2972,17 +3073,22 @@ export function initializeTeamWorkspace({
       identity,
       team: activeTeam,
       vaults: availableVaults,
+      isCurrent,
     });
-    backgroundMaintenanceOperation = pending;
+    const operation = { promise: pending, isCurrent };
+    backgroundMaintenanceOperation = operation;
     let outcome;
     try {
       outcome = await pending;
     } finally {
-      if (backgroundMaintenanceOperation === pending) backgroundMaintenanceOperation = null;
+      if (backgroundMaintenanceOperation === operation) backgroundMaintenanceOperation = null;
     }
-    if ((outcome?.rotated ?? 0) > 0 && selectedTeam?.id === activeTeam.id) {
-      const refreshedVaults = await client.listSharedVaults(activeTeam.id);
-      if (selectedTeam?.id === activeTeam.id) {
+    if (!isCurrent()) return null;
+    if ((outcome?.rotated ?? 0) > 0) {
+      let refreshedVaults;
+      try { refreshedVaults = await client.listSharedVaults(activeTeam.id); }
+      catch (error) { if (!isCurrent()) return null; throw error; }
+      if (isCurrent()) {
         vaults = refreshedVaults;
         if (selectedVault) {
           selectedVault = vaults.find((vault) => vault.id === selectedVault.id) ?? null;
@@ -3202,6 +3308,8 @@ export function initializeTeamWorkspace({
   }
 
   async function openSelectedVault() {
+    const captured = captureWorkspaceContext();
+    if (!workspaceContextCurrent(captured)) return;
     const vault = vaults.find((value) => value.id === vaultSelect.value);
     if (!vault || !identity) return;
     const recipient = client.session()?.id;
@@ -3313,9 +3421,11 @@ export function initializeTeamWorkspace({
     setText(workspaceStatus, "Загружаем зашифрованную Team-ревизию…");
     try {
       const outcome = await synchronizeAndProvision();
+      if (!workspaceContextCurrent(captured) || !teamSyncTargetMatches(target,
+        { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
       applySynchronizationOutcome(outcome);
     } catch (error) {
-      if (!teamSyncTargetMatches(target,
+      if (!workspaceContextCurrent(captured) || !teamSyncTargetMatches(target,
         { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
       const code = String(error?.message ?? "");
       publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: vault.id, recipient });
@@ -3329,12 +3439,17 @@ export function initializeTeamWorkspace({
           ? "Для этого устройства пока нет wrapper ключа. Ожидаем автоматическую выдачу от любого активного участника с текущим ключом."
           : teamVaultSynchronizationErrorMessage(code));
     } finally {
-      startBackgroundSync();
-      if (selectedVault?.rotationRequired) void runBackgroundTeamVaultSync();
+      if (workspaceContextCurrent(captured) && teamSyncTargetMatches(target,
+        { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) {
+        startBackgroundSync();
+        if (selectedVault?.rotationRequired) void runBackgroundTeamVaultSync();
+      }
     }
   }
 
-  async function loadSelectedTeam() {
+  async function loadSelectedTeam(captured = captureWorkspaceContext()) {
+    if (!workspaceContextCurrent(captured)) return;
+    const selectionGeneration = ++selectedTeamRequestGeneration;
     const memberGeneration = ++memberRequestGeneration;
     selectedTeam = teams.find((team) => team.id === teamSelect.value) ?? null;
     accessManager?.setContext({ teamID: selectedTeam?.id, role: selectedTeam?.role, deviceID: client.deviceID?.() });
@@ -3374,17 +3489,24 @@ export function initializeTeamWorkspace({
     ownershipMembers = [];
     transferOwnershipMember.replaceChildren();
     transferOwnershipForm.querySelector("button").disabled = true;
-    const [loadedMemberPage, sharedVaults, loadedInvitations, loadedDeviceAdmissionPolicy] = await Promise.all([
-      client.listTeamMembersPage(selectedTeam.id, {
-        search: memberSearch.value,
-        role: memberRoleFilter.value,
-        limit: 50,
-      }),
-      client.listSharedVaults(selectedTeam.id),
-      canManage() ? client.listTeamInvitations(selectedTeam.id) : Promise.resolve([]),
-      client.getTeamDeviceAdmissionPolicy(selectedTeam.id),
-    ]);
-    if (selectedTeam?.id !== loadedTeamID) return;
+    let loaded;
+    try {
+      loaded = await Promise.all([
+        client.listTeamMembersPage(selectedTeam.id, {
+          search: memberSearch.value,
+          role: memberRoleFilter.value,
+          limit: 50,
+        }),
+        client.listSharedVaults(selectedTeam.id),
+        canManage() ? client.listTeamInvitations(selectedTeam.id) : Promise.resolve([]),
+        client.getTeamDeviceAdmissionPolicy(selectedTeam.id),
+      ]);
+    } catch (error) {
+      if (!workspaceContextCurrent(captured) || selectionGeneration !== selectedTeamRequestGeneration || selectedTeam?.id !== loadedTeamID) return;
+      throw error;
+    }
+    if (!workspaceContextCurrent(captured) || selectionGeneration !== selectedTeamRequestGeneration || selectedTeam?.id !== loadedTeamID) return;
+    const [loadedMemberPage, sharedVaults, loadedInvitations, loadedDeviceAdmissionPolicy] = loaded;
     if (memberGeneration === memberRequestGeneration) {
       teamMembers = loadedMemberPage.members;
       memberNextCursor = loadedMemberPage.nextCursor;
@@ -3399,7 +3521,8 @@ export function initializeTeamWorkspace({
     renderTeamInvitations();
     populateVaults();
     updateTeamMessage();
-    if (activeView === "management" && selectedTeam.role === "owner") await loadOwnershipMembers();
+    if (activeView === "management" && selectedTeam.role === "owner") await loadOwnershipMembers(captured);
+    if (!workspaceContextCurrent(captured) || selectionGeneration !== selectedTeamRequestGeneration || selectedTeam?.id !== loadedTeamID) return;
     if (activeView === "hosts" && vaults.length > 0) {
       await openSelectedVault();
     } else {
@@ -3408,8 +3531,17 @@ export function initializeTeamWorkspace({
     }
   }
 
-  async function loadTeams(preferredID = null) {
-    teams = await client.listTeams();
+  async function loadTeams(preferredID = null, captured = captureWorkspaceContext()) {
+    if (!workspaceContextCurrent(captured)) return;
+    const requestGeneration = ++teamListRequestGeneration;
+    let loaded;
+    try { loaded = await client.listTeams(); }
+    catch (error) {
+      if (!workspaceContextCurrent(captured) || requestGeneration !== teamListRequestGeneration) return;
+      throw error;
+    }
+    if (!workspaceContextCurrent(captured) || requestGeneration !== teamListRequestGeneration) return;
+    teams = loaded;
     renderOverviewSummary();
     teamSelect.replaceChildren();
     for (const team of teams) {
@@ -3419,7 +3551,7 @@ export function initializeTeamWorkspace({
       teamSelect.append(option);
     }
     if (preferredID && teams.some((team) => team.id === preferredID)) teamSelect.value = preferredID;
-    if (teams.length > 0) await loadSelectedTeam();
+    if (teams.length > 0) await loadSelectedTeam(captured);
     else {
       selectedTeam = null;
       teamInvitations = [];
@@ -4100,15 +4232,23 @@ export function initializeTeamWorkspace({
       loadDevices().catch(() => {});
     },
     async activate(nextIdentity) {
+      if (!client.session()?.id || !client.deviceID() || nextIdentity?.deviceID !== client.deviceID()) return;
+      teamActivationEpoch += 1;
       identity = nextIdentity;
+      const captured = captureWorkspaceContext();
       trustPanel = null;
+      deviceTrustContainer?.replaceChildren();
       renderOverviewSummary();
-      await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams()]);
+      try { await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams(null, captured)]); }
+      catch (error) { if (!workspaceContextCurrent(captured)) return; throw error; }
+      if (!workspaceContextCurrent(captured)) return;
       startWorkspaceRefresh();
     },
     deactivate() {
+      teamActivationEpoch += 1;
       identity = null;
       trustPanel = null;
+      deviceTrustContainer?.replaceChildren();
       stopWorkspaceRefresh();
       teams = [];
       vaults = [];
@@ -4276,20 +4416,143 @@ export function passwordResetAcceptedMessage() {
   return "Если адрес подходит для восстановления, проверьте почту и папку «Спам». Если письмо не пришло, повторите запрос позже.";
 }
 
+// Track controllers which may still be restoring an account while the UI is
+// already signed in. A logout must invalidate those controllers as well.
+export function createPendingAccountVaultActivations() {
+  const entries = new Set();
+  const forget = (vault) => {
+    vault.lock();
+    return forgetTrackedRememberedSession(vault);
+  };
+  return {
+    begin(session) {
+      const entry = { session, controllers: new Set(), cancelled: false, finishing: false, cleanupUnconfirmed: false };
+      entries.add(entry);
+      const requireCurrent = () => {
+        if (entry.cancelled) throw new Error("authentication_required");
+        session.requireCurrent();
+      };
+      return {
+        async onController(vault) {
+          try {
+            requireCurrent();
+          } catch {
+            // Its first read may have captured a newer session's key.
+            vault.lock();
+            throw new Error("authentication_required");
+          }
+          entry.controllers.add(vault);
+        },
+        async finish(installed) {
+          if (installed) { entries.delete(entry); return; }
+          entry.cancelled = true;
+          entry.finishing = true;
+          try {
+            const results = await Promise.all([...entry.controllers].map(forget));
+            if (entry.controllers.size && results.every(result => result !== false)) entries.delete(entry);
+            else entry.cleanupUnconfirmed = true;
+          } catch (error) {
+            entry.cleanupUnconfirmed = true;
+            throw error;
+          } finally { entry.finishing = false; }
+        },
+        requireCurrent,
+      };
+    },
+    cancelCurrent() {
+      const cleanup = [];
+      for (const entry of entries) {
+        entry.cancelled = true;
+        if (entry.finishing || entry.cleanupUnconfirmed) {
+          cleanup.push(Promise.resolve(false));
+          continue;
+        }
+        if (!entry.controllers.size) cleanup.push(Promise.resolve(false));
+        for (const vault of entry.controllers) cleanup.push(forget(vault));
+      }
+      return Promise.all(cleanup).then(results => results.every(result => result !== false));
+    },
+  };
+}
+
+function forgetTrackedRememberedSession(vault) {
+  try {
+    return Promise.resolve(typeof vault.forgetTrackedRememberedSession === "function"
+      ? vault.forgetTrackedRememberedSession() : vault.forgetRememberedSession());
+  } catch (error) { return Promise.reject(error); }
+}
+
 // Capture the old controller before any asynchronous logout response can switch accounts.
 export async function completeBrowserSessionLogout({ client, vault, clearView, restoreView, documentValue = null,
-  isCurrent = () => client.session() === null }) {
+  isCurrent = () => client.session() === null, cancelPendingActivations = () => {} }) {
+  let pendingCleanup;
+  try { pendingCleanup = Promise.resolve(cancelPendingActivations()); }
+  catch (error) { pendingCleanup = Promise.reject(error); }
   const pending = client.logout();
   vault.lock();
   documentValue?.querySelectorAll("#host-detail-dialog, #resource-detail-dialog").forEach(dialog => dialog.close?.());
   clearView();
-  const forgotten = Promise.resolve(vault.forgetRememberedSession()).catch(() => {});
+  const localCleanup = Promise.allSettled([forgetTrackedRememberedSession(vault), pendingCleanup]);
   let remoteRevoked = false;
   try { await pending; remoteRevoked = true; }
   finally {
-    await forgotten;
-    if (isCurrent()) await restoreView({ remoteRevoked });
+    const cleanup = await localCleanup;
+    const localCleanupConfirmed = cleanup.every(result => result.status === "fulfilled" && result.value !== false);
+    if (isCurrent()) await restoreView({ remoteRevoked, localCleanupConfirmed });
   }
+}
+
+export function createBrowserLogoutRestoreView({ message, isCurrent }) {
+  return ({ remoteRevoked, localCleanupConfirmed }) => {
+    if (!isCurrent()) return;
+    const remoteMessage = remoteRevoked ? "Сеанс Cloud завершён на сервере."
+      : "Не удалось подтвердить завершение сеанса Cloud на сервере. Проверьте подключение.";
+    setText(message, localCleanupConfirmed ? remoteMessage
+      : `${remoteMessage} Не удалось подтвердить удаление локального ключа доверенного браузера.`);
+  };
+}
+
+export async function completeBrowserAccountDeletion({ client, vault, email, password,
+  isBeforeCurrent, isViewCurrent, cancelPendingActivations, clearView }) {
+  if (!isBeforeCurrent()) return { deleted: false, sessionChanged: true };
+  const result = await client.deleteAccount({ email, password });
+  if (result?.deleted !== true) throw new Error("account_delete_unconfirmed");
+  if (result.sessionChanged || client.session() !== null || !isViewCurrent()) {
+    return { deleted: true, sessionChanged: true };
+  }
+  const generation = client.sessionGeneration();
+  let pendingCleanup;
+  try { pendingCleanup = Promise.resolve(cancelPendingActivations()); }
+  catch (error) { pendingCleanup = Promise.reject(error); }
+  let locked = true, viewCleared = true;
+  try { vault.lock(); } catch { locked = false; }
+  const localCleanup = Promise.allSettled([forgetTrackedRememberedSession(vault), pendingCleanup]);
+  try { clearView(); } catch { viewCleared = false; }
+  const cleanup = await localCleanup;
+  const localCleanupConfirmed = cleanup.every(value => value.status === "fulfilled" && value.value !== false);
+  const sessionChanged = client.session() !== null || client.sessionGeneration() !== generation || !isViewCurrent();
+  return { deleted: true, localCleanupConfirmed, sessionChanged,
+    ...(!locked ? { vaultLocked: false } : {}), ...(!viewCleared ? { viewCleared: false } : {}) };
+}
+
+export async function completeBrowserUsernameUpdate({ client, username, password, isCurrent, onSuccess, onError }) {
+  let user;
+  try { user = await client.updateUsername({ username, password }); }
+  catch (error) { if (isCurrent()) onError(error); return; }
+  if (!user?.sessionChanged && isCurrent()) onSuccess(user);
+}
+
+export async function completeBrowserPasswordUpdate({ client, currentPassword, newPassword, isCurrent, onSuccess, onError }) {
+  try { await client.changePassword({ currentPassword, newPassword }); }
+  catch (error) { if (isCurrent()) onError(error); return; }
+  if (isCurrent()) onSuccess();
+}
+
+export function sessionRetiredByError(client, error, expectedGeneration) {
+  const generation = Number(expectedGeneration);
+  return error?.message === "authentication_required" && !client.session()
+    && error.invalidatedSessionEpoch === expectedGeneration && Number.isSafeInteger(generation)
+    && client.sessionGeneration() === String(generation + 1);
 }
 
 export async function initializeCloudAccount({
@@ -4301,6 +4564,7 @@ export async function initializeCloudAccount({
   onSessionChange = () => {},
 } = {}) {
   let vault = vaultUI?.controller;
+  const pendingAccountVaultActivations = createPendingAccountVaultActivations();
   const section = documentValue.querySelector("#cloud-account");
   if (!section || !vault) return null;
   const form = documentValue.querySelector("#cloud-login-form");
@@ -4366,7 +4630,8 @@ export async function initializeCloudAccount({
     conflictApply.disabled = true;
   });
   vaultUI.setLockListener(async () => {
-    await vault.forgetRememberedSession();
+    const results = await Promise.all([pendingAccountVaultActivations.cancelCurrent(), forgetTrackedRememberedSession(vault)]);
+    if (results.some(result => result === false)) throw new Error("local_vault_cleanup_unconfirmed");
   });
 
   function setAccountMessage(value, tone = null) {
@@ -4381,16 +4646,23 @@ export async function initializeCloudAccount({
     }
     const session = capturePersonalVaultSession(client);
     if (session.accountID !== String(user.id).toLowerCase()) throw new Error("authentication_required");
-    const prepared = await prepareAccountScopedVault({
-      accountID: user.id,
-      accountRepository: vaultUI.repository.forAccount(user.id),
-      legacyRepository: vaultUI.repository,
-      passphrase,
-    });
-    session.requireCurrent();
-    vault = prepared.vault;
-    vaultUI.useController(vault);
-    return prepared;
+    const activation = pendingAccountVaultActivations.begin(session);
+    let installed = false;
+    try {
+      const prepared = await prepareAccountScopedVault({
+        accountID: user.id,
+        accountRepository: vaultUI.repository.forAccount(user.id),
+        legacyRepository: vaultUI.repository,
+        passphrase,
+        onController: activation.onController,
+        requireCurrent: activation.requireCurrent,
+      });
+      activation.requireCurrent();
+      vault = prepared.vault;
+      vaultUI.useController(vault);
+      installed = true;
+      return prepared;
+    } finally { await activation.finish(installed); }
   }
 
   async function unlockAndSyncPersonalVault(passphrase, targetVault = vault) {
@@ -4453,8 +4725,7 @@ export async function initializeCloudAccount({
       }
     } catch (error) {
       const code = String(error?.message ?? "");
-      if (code === "authentication_required" && !client.session()
-          && error.invalidatedSessionEpoch === identity?.sessionEpoch && vault === targetVault) {
+      if (sessionRetiredByError(client, error, identity?.sessionEpoch) && vault === targetVault) {
         targetVault.lock();
         showSession(null);
         setAccountMessage("Сеанс Cloud изменился в другой вкладке. Войдите снова; локальные данные сохранены.", "error");
@@ -4611,8 +4882,12 @@ export async function initializeCloudAccount({
     ));
   }
 
-  let sessionPresentationEpoch = 0;
+  let sessionPresentationEpoch = 0, presentedSessionGeneration = null, presentedAccountID = null;
   function showSession(user) {
+    const generation = client.sessionGeneration(), accountID = user?.id ?? null;
+    if (presentedSessionGeneration !== generation || presentedAccountID !== accountID) teamWorkspace?.deactivate();
+    presentedSessionGeneration = generation;
+    presentedAccountID = accountID;
     sessionPresentationEpoch += 1;
     tabs.hidden = Boolean(user);
     form.hidden = Boolean(user);
@@ -4700,9 +4975,15 @@ export async function initializeCloudAccount({
     }
   });
 
+  let loginAttempt = 0, loginInputRevision = 0;
+  form.elements.password?.addEventListener?.("input", () => { loginInputRevision += 1; });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = form.querySelector("button");
+    const attempt = ++loginAttempt, inputRevision = loginInputRevision;
+    let operationGeneration = client.sessionGeneration(), authenticatedAccountID = null;
+    const isCurrent = () => attempt === loginAttempt && client.sessionGeneration() === operationGeneration
+      && (authenticatedAccountID === null || client.session()?.id === authenticatedAccountID);
     button.disabled = true;
     try {
       const password = form.elements.password.value;
@@ -4711,8 +4992,16 @@ export async function initializeCloudAccount({
         input: { email, password },
         accountDevices,
         ensureIdentity: (deviceID) => ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID }),
-        login: (input) => client.login(input),
+        login: (input) => {
+          if (!isCurrent()) throw new Error("authentication_required");
+          teamWorkspace?.deactivate();
+          const pending = client.login(input);
+          operationGeneration = client.sessionGeneration();
+          return pending;
+        },
       });
+      authenticatedAccountID = user.id;
+      if (!isCurrent()) return;
       let personalVaultReady = false;
       let personalVaultRemembered = false;
       let personalVaultError = null;
@@ -4725,9 +5014,11 @@ export async function initializeCloudAccount({
           unlockAndSyncPersonalVault,
           rememberSession: (accountID, targetVault) => (targetVault ?? vault).rememberSession(accountID),
         });
+        if (!isCurrent()) return;
         personalVaultReady = true;
         personalVaultRemembered = outcome.remembered;
       } catch (error) {
+        if (!isCurrent()) throw error;
         personalVaultError = String(error?.message ?? "");
         vaultUI.mode("error", { allowReauthentication: true });
       }
@@ -4738,22 +5029,28 @@ export async function initializeCloudAccount({
             publicKey: identity.publicKey,
             idempotencyKey: `web:device:bootstrap:${globalThis.crypto.randomUUID()}`,
           });
-        } catch {
+          if (!isCurrent()) return;
+        } catch (error) {
+          if (!isCurrent()) throw error;
           // Existing accounts with an approved device must use device-to-device approval.
         }
       }
-      form.elements.password.value = "";
+      if (!isCurrent()) return;
+      if (loginInputRevision === inputRevision) form.elements.password.value = "";
       showSession(user);
       if (!identity) {
         setText(message, "Вход выполнен. Team-ключ недоступен в этом браузере; личный Vault продолжает работать.");
       } else {
         try {
           await teamWorkspace?.activate(identity);
+          if (!isCurrent()) return;
           setText(message, "Вход выполнен. Сессия защищена HttpOnly cookie; пароль не сохранён.");
-        } catch {
+        } catch (error) {
+          if (!isCurrent()) throw error;
           setText(message, "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.");
         }
       }
+      if (!isCurrent()) return;
       setText(
         vaultMessage,
         !personalVaultReady
@@ -4767,6 +5064,17 @@ export async function initializeCloudAccount({
             : "Personal Vault открыт только для этой страницы; сохранить ключ доверенного браузера не удалось. После перезагрузки потребуется восстановить доступ."
       );
     } catch (error) {
+      if (attempt !== loginAttempt) return;
+      const retiredCurrent = sessionRetiredByError(client, error, operationGeneration);
+      if (client.sessionGeneration() !== operationGeneration && !retiredCurrent) return;
+      if (retiredCurrent) {
+        vault.lock();
+        teamWorkspace?.deactivate();
+        vaultUI.mode("waiting");
+        showSession(null);
+        setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+        return;
+      }
       const code = String(error?.message ?? "");
       const messages = {
         invalid_credentials: "Неверная электронная почта или пароль.",
@@ -4777,7 +5085,7 @@ export async function initializeCloudAccount({
       };
       setAccountMessage(messages[code] ?? "Не удалось войти. Проверьте соединение и повторите попытку.", "error");
     } finally {
-      button.disabled = false;
+      if (attempt === loginAttempt) button.disabled = false;
     }
   });
 
@@ -4829,7 +5137,7 @@ export async function initializeCloudAccount({
         ? "Personal Vault открыт паролем аккаунта и синхронизируется автоматически."
         : "Personal Vault открыт только для этой страницы; сохранить ключ доверенного браузера не удалось. После перезагрузки потребуется восстановить доступ.");
     } catch (error) {
-      const retiredCurrent = !client.session() && error?.invalidatedSessionEpoch === operationGeneration;
+      const retiredCurrent = sessionRetiredByError(client, error, operationGeneration);
       if (client.sessionGeneration() !== operationGeneration && !retiredCurrent) return;
       if (retiredCurrent) {
         vault.lock();
@@ -4866,6 +5174,7 @@ export async function initializeCloudAccount({
     const isCurrent = () => client.session() === null && sessionPresentationEpoch === presentationEpoch;
     try {
       await completeBrowserSessionLogout({ client, vault: logoutVault, isCurrent, documentValue,
+        cancelPendingActivations: () => pendingAccountVaultActivations.cancelCurrent(),
         clearView() {
           showSession(null);
           presentationEpoch = sessionPresentationEpoch;
@@ -4873,19 +5182,22 @@ export async function initializeCloudAccount({
           hideConflicts();
           vaultUI.mode("waiting");
         },
-        async restoreView({ remoteRevoked }) {
-          const status = await logoutVault.status();
-          if (!isCurrent()) return;
-          vaultUI.mode(status === "unlocked" ? "unlocked" : "waiting");
-          setText(message, remoteRevoked ? "Сеанс Cloud завершён на сервере."
-            : "Не удалось подтвердить завершение сеанса Cloud на сервере. Проверьте подключение.");
-        },
+        restoreView: createBrowserLogoutRestoreView({ message, isCurrent }),
       });
     } catch { /* The local Vault is locked; restoreView reports remote failure. */ }
     finally { logoutButton.disabled = false; }
   });
 
+  let usernameInputRevision = 0;
   usernameForm.addEventListener("input", async () => {
+    const revision = ++usernameInputRevision;
+    const generation = client.sessionGeneration();
+    const accountID = client.session()?.id;
+    const presentationEpoch = sessionPresentationEpoch;
+    const isCurrent = () => Boolean(accountID) && client.session()?.id === accountID
+      && client.sessionGeneration() === generation && sessionPresentationEpoch === presentationEpoch
+      && usernameInputRevision === revision;
+    if (!isCurrent()) return;
     const username = usernameForm.elements.username.value.trim().toLowerCase();
     if (username.length < 3) return setSettingsMessage(usernameAvailability, "Минимум 3 символа.");
     if (username === client.session()?.username.toLowerCase()) {
@@ -4893,14 +5205,23 @@ export async function initializeCloudAccount({
     }
     try {
       const result = await client.usernameAvailability(username);
+      if (!isCurrent()) return;
       setSettingsMessage(usernameAvailability, result.available ? `@${result.username} свободен` : `@${result.username} уже занят`, result.available ? "success" : "error");
     } catch {
+      if (!isCurrent()) return;
       setSettingsMessage(usernameAvailability, "Допустимы латинские буквы, цифры, точка, дефис и подчёркивание.", "error");
     }
   });
 
   usernameForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const accountID = client.session()?.id;
+    if (!accountID) return;
+    const generation = client.sessionGeneration();
+    let presentationEpoch = sessionPresentationEpoch;
+    const isCurrent = () => client.session()?.id === accountID && client.sessionGeneration() === generation
+      && sessionPresentationEpoch === presentationEpoch;
+    const inputRevision = usernameInputRevision;
     const requestedUsername = usernameForm.elements.username.value.trim().toLowerCase();
     if (requestedUsername === client.session()?.username.toLowerCase()) {
       setSettingsMessage(usernameMessage, "Username уже установлен для этого аккаунта.");
@@ -4910,36 +5231,55 @@ export async function initializeCloudAccount({
     const button = usernameForm.querySelector('button[type="submit"]');
     button.disabled = true;
     try {
-      const user = await client.updateUsername({ username: usernameForm.elements.username.value, password: usernameForm.elements.password.value });
-      showSession(user);
-      setSettingsMessage(usernameMessage, `Username изменён на @${user.username}.`, "success");
-    } catch (error) {
-      const messages = { username_exists: "Этот username уже занят.", invalid_username: "Проверьте формат username.", invalid_credentials: "Текущий пароль неверен." };
-      setSettingsMessage(usernameMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить username.", "error");
+      await completeBrowserUsernameUpdate({ client, username: usernameForm.elements.username.value,
+        password: usernameForm.elements.password.value, isCurrent,
+        onSuccess(user) {
+          showSession(user);
+          presentationEpoch = sessionPresentationEpoch;
+          setSettingsMessage(usernameMessage, `Username изменён на @${user.username}.`, "success");
+        },
+        onError(error) {
+          const messages = { username_exists: "Этот username уже занят.", invalid_username: "Проверьте формат username.", invalid_credentials: "Текущий пароль неверен." };
+          setSettingsMessage(usernameMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить username.", "error");
+        } });
     } finally {
-      usernameForm.elements.password.value = "";
+      if (isCurrent() && usernameInputRevision === inputRevision) usernameForm.elements.password.value = "";
       button.disabled = false;
     }
   });
 
+  let passwordInputRevision = 0;
+  passwordForm.addEventListener("input", () => { passwordInputRevision += 1; });
   passwordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const accountID = client.session()?.id;
+    if (!accountID) return;
+    const generation = client.sessionGeneration(), presentationEpoch = sessionPresentationEpoch;
+    const isCurrent = () => client.session()?.id === accountID && client.sessionGeneration() === generation
+      && sessionPresentationEpoch === presentationEpoch;
+    const inputRevision = passwordInputRevision;
     const button = passwordForm.querySelector('button[type="submit"]');
     if (passwordForm.elements.newPassword.value !== passwordForm.elements.confirmation.value) {
       return setSettingsMessage(passwordMessage, "Новые пароли не совпадают.", "error");
     }
     button.disabled = true;
     try {
-      await client.changePassword({ currentPassword: passwordForm.elements.currentPassword.value, newPassword: passwordForm.elements.newPassword.value });
-      passwordForm.reset();
-      setSettingsMessage(passwordMessage, "Пароль изменён. Остальные сессии завершены.", "success");
-    } catch (error) {
-      const messages = { invalid_password: "Новый пароль должен содержать не менее 12 символов.", invalid_credentials: "Текущий пароль неверен.", personal_vault_rewrap_required: "Смена пароля временно недоступна для сохранения доступа к личным данным. Пароль не изменён." };
-      setSettingsMessage(passwordMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить пароль.", "error");
+      await completeBrowserPasswordUpdate({ client, currentPassword: passwordForm.elements.currentPassword.value,
+        newPassword: passwordForm.elements.newPassword.value, isCurrent,
+        onSuccess() {
+          if (passwordInputRevision === inputRevision) passwordForm.reset();
+          setSettingsMessage(passwordMessage, "Пароль изменён. Остальные сессии завершены.", "success");
+        },
+        onError(error) {
+          const messages = { invalid_password: "Новый пароль должен содержать не менее 12 символов.", invalid_credentials: "Текущий пароль неверен.", personal_vault_rewrap_required: "Смена пароля временно недоступна для сохранения доступа к личным данным. Пароль не изменён." };
+          setSettingsMessage(passwordMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить пароль.", "error");
+        } });
     } finally {
-      passwordForm.elements.currentPassword.value = "";
-      passwordForm.elements.newPassword.value = "";
-      passwordForm.elements.confirmation.value = "";
+      if (isCurrent() && passwordInputRevision === inputRevision) {
+        passwordForm.elements.currentPassword.value = "";
+        passwordForm.elements.newPassword.value = "";
+        passwordForm.elements.confirmation.value = "";
+      }
       button.disabled = false;
     }
   });
@@ -4948,11 +5288,18 @@ export async function initializeCloudAccount({
     event.preventDefault();
     const currentUser = client.session();
     const email = deleteAccountForm.elements.email.value.trim().toLowerCase();
+    const password = deleteAccountForm.elements.password.value;
     const button = deleteAccountForm.querySelector('button[type="submit"]');
     if (!currentUser || email !== currentUser.email.toLowerCase()) {
       setText(deleteAccountMessage, "Email должен точно совпадать с адресом текущего аккаунта.");
       return;
     }
+    const targetVault = vault;
+    const generation = client.sessionGeneration();
+    let presentationEpoch = sessionPresentationEpoch;
+    const isViewCurrent = () => vault === targetVault && sessionPresentationEpoch === presentationEpoch;
+    const isBeforeCurrent = () => isViewCurrent() && client.sessionGeneration() === generation
+      && client.session()?.id === currentUser.id;
     if (!await requestConfirmation({
       eyebrow: "НЕОБРАТИМОЕ ДЕЙСТВИЕ",
       title: "Удалить аккаунт?",
@@ -4960,26 +5307,38 @@ export async function initializeCloudAccount({
       confirmLabel: "Удалить аккаунт",
       danger: true,
     })) return;
+    if (!isBeforeCurrent()) return;
     button.disabled = true;
     try {
-      await client.deleteAccount({ email, password: deleteAccountForm.elements.password.value });
-      deleteAccountForm.reset();
-      teamWorkspace?.deactivate();
-      hideConflicts();
-      try { await vault.forgetRememberedSession(); } catch {}
-      vault.lock();
-      await vaultUI.restoreModeFromLocalStatus();
-      showSession(null);
-      setAccountMessage("Аккаунт удалён. Все Cloud-сессии завершены.", "success");
+      const result = await completeBrowserAccountDeletion({ client, vault: targetVault, email, password,
+        isBeforeCurrent, isViewCurrent, cancelPendingActivations: () => pendingAccountVaultActivations.cancelCurrent(),
+        clearView() {
+          deleteAccountForm.reset();
+          teamWorkspace?.deactivate();
+          hideConflicts();
+          vaultUI.mode("waiting");
+          showSession(null);
+          presentationEpoch = sessionPresentationEpoch;
+          setAccountMessage("Аккаунт удалён. Все Cloud-сессии завершены.", "success");
+        } });
+      if (result.deleted && !result.sessionChanged && isViewCurrent()) {
+        const warnings = [];
+        if (result.vaultLocked === false) warnings.push("Не удалось заблокировать локальный Vault.");
+        if (result.viewCleared === false) warnings.push("Не удалось обновить экран.");
+        if (!result.localCleanupConfirmed) warnings.push("Не удалось подтвердить удаление локального ключа доверенного браузера.");
+        if (warnings.length) setAccountMessage(`Аккаунт удалён. ${warnings.join(" ")}`, "error");
+      }
     } catch (error) {
+      if (!isBeforeCurrent()) return;
       const messages = {
         invalid_credentials: "Текущий пароль неверен.",
         account_email_mismatch: "Email не совпадает с адресом аккаунта.",
         account_owns_teams: "Сначала передайте владение активной Team или архивируйте её.",
       };
-      setText(deleteAccountMessage, messages[String(error?.message ?? "")] ?? "Аккаунт не удалён. Повторите попытку позже.");
+      setText(deleteAccountMessage, messages[String(error?.message ?? "")]
+        ?? "Не удалось подтвердить удаление аккаунта. Проверьте состояние перед повтором.");
     } finally {
-      deleteAccountForm.elements.password.value = "";
+      if (isBeforeCurrent() || (client.session() === null && isViewCurrent())) deleteAccountForm.elements.password.value = "";
       button.disabled = false;
     }
   });
@@ -5018,8 +5377,7 @@ export async function initializeCloudAccount({
       }
     } catch (error) {
       const code = String(error?.message ?? "");
-      const retiredCurrent = code === "authentication_required" && !client.session()
-        && error.invalidatedSessionEpoch === identity?.sessionEpoch && vault === targetVault;
+      const retiredCurrent = sessionRetiredByError(client, error, identity?.sessionEpoch) && vault === targetVault;
       if (!retiredCurrent) {
         try { session.requireCurrent(); } catch { return; }
         if (vault !== targetVault) return;
@@ -5027,9 +5385,11 @@ export async function initializeCloudAccount({
       publishSyncObservation(documentValue, { scope: "personal", type: "error", code, recipient });
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
       else if (code === "authentication_required") {
-        targetVault.lock();
-        showSession(null);
-        setText(vaultMessage, "Сессия истекла. Войдите снова.");
+        if (retiredCurrent) {
+          targetVault.lock();
+          showSession(null);
+          setText(vaultMessage, "Сессия истекла. Войдите снова.");
+        } else setText(vaultMessage, "Не удалось подтвердить сессию. Повторите синхронизацию позже.");
       } else if (code === "recovery_passphrase_required") {
         hideConflicts();
         vaultUI.mode("locked", { allowReauthentication: true });
@@ -5071,9 +5431,12 @@ export async function initializeCloudAccount({
   });
 
   setAuthMode("login");
-  let startupSession = null;
+  let startupSession = null, startupGeneration = null;
   try {
-    const restoredUser = await client.restoreSession();
+    const pendingRestore = client.restoreSession();
+    startupGeneration = client.sessionGeneration();
+    const restoredUser = await pendingRestore;
+    if (client.sessionGeneration() !== startupGeneration || client.session()?.id !== restoredUser?.id) throw new Error("authentication_required");
     startupSession = capturePersonalVaultSession(client);
     showSession(restoredUser);
     const prepared = await activateAccountVault(restoredUser);
@@ -5119,9 +5482,14 @@ export async function initializeCloudAccount({
       ? "Сессия восстановлена. Team-раздел готов к работе."
       : "Сессия восстановлена. Для Team Vault может потребоваться одобрение устройства.", "success");
   } catch (error) {
-    let stale = false;
+    const retiredCurrent = sessionRetiredByError(client, error, startupGeneration);
+    let stale = startupGeneration !== null && client.sessionGeneration() !== startupGeneration && !retiredCurrent;
     try { startupSession?.requireCurrent(); } catch { stale = true; }
-    if (stale) {
+    if (retiredCurrent && startupSession) {
+      vault.lock();
+      showSession(null);
+      setAccountMessage("Сессия Cloud истекла. Войдите снова.", "error");
+    } else if (stale) {
       // The newer session, or its own authentication-loss handler, owns the UI.
     } else if (client.session()) {
       vaultUI.mode("error", { allowReauthentication: true });

@@ -632,6 +632,419 @@ test("lock invalidates in-flight password and session-key unlocks", async () => 
   }
 });
 
+for (const afterCommit of [false, true]) test(`logout during account restoration handles the key ${afterCommit ? "after" : "before"} its commit`, async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory());
+  const accountRepository = root.forAccount(accountID), seed = controller(accountRepository);
+  await seed.create(passphrase);
+  await seed.bindAccountOwnership(accountID);
+  assert.equal(await seed.rememberSession(accountID), true);
+  seed.lock();
+  const original = await accountRepository.loadSessionUnlock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...accountRepository, saveSessionUnlockIfCurrent: async (...args) => {
+    if (afterCommit) {
+      const result = await accountRepository.saveSessionUnlockIfCurrent(...args);
+      entered(); await held; return result;
+    }
+    entered(); await held; return accountRepository.saveSessionUnlockIfCurrent(...args);
+  } };
+  let signedIn = true;
+  const session = { requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } };
+  const activations = createPendingAccountVaultActivations(), activation = activations.begin(session);
+  const preparing = (async () => {
+    let installed = false;
+    try {
+      const prepared = await prepareAccountScopedVault({ accountID, accountRepository: delayed,
+        legacyRepository: root, cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      session.requireCurrent(); installed = true; return prepared;
+    } finally { await activation.finish(installed); }
+  })();
+  await started;
+  const legacyController = controller(root);
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: legacyController, cancelPendingActivations: () => activations.cancelCurrent(), clearView() {}, restoreView() {} });
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  if (afterCommit) assert.equal((await accountRepository.loadSessionUnlockState()).unlock, null);
+  else assert.deepEqual((await accountRepository.loadSessionUnlockState()).unlock, original);
+});
+
+test("late canceled activation preserves a newer login's remembered key", async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), accountRepository = root.forAccount(accountID);
+  const seed = controller(accountRepository);
+  await seed.create(passphrase); await seed.bindAccountOwnership(accountID); await seed.rememberSession(accountID); seed.lock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...accountRepository, loadSessionUnlockState: async () => {
+    const captured = await accountRepository.loadSessionUnlockState(); entered(); await held; return captured;
+  } };
+  let signedIn = true;
+  const session = { requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } };
+  const activations = createPendingAccountVaultActivations(), activation = activations.begin(session);
+  const preparing = (async () => {
+    try {
+      return await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(), clearView() {}, restoreView() {} });
+  const newer = controller(accountRepository);
+  await newer.unlock(passphrase); assert.equal(await newer.rememberSession(accountID), true);
+  const expected = await accountRepository.loadSessionUnlockState();
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.deepEqual(await accountRepository.loadSessionUnlockState(), expected);
+});
+
+test("logout before the first account read reports unconfirmed and preserves a later login", async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), repository = root.forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase); await seed.rememberSession(accountID); seed.lock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, loadSessionUnlockState: async () => {
+    entered(); await held; return repository.loadSessionUnlockState();
+  } };
+  let signedIn = true, presentation;
+  const activation = createPendingAccountVaultActivations();
+  const pending = activation.begin({ requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } });
+  const preparing = (async () => {
+    try {
+      return await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: pending.onController, requireCurrent: pending.requireCurrent });
+    } finally { await pending.finish(false); }
+  })();
+  await started;
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activation.cancelCurrent(),
+    clearView() {}, restoreView(value) { presentation = value; } });
+  const newer = controller(repository);
+  await newer.unlock(passphrase); assert.equal(await newer.rememberSession(accountID), true);
+  const expected = await repository.loadSessionUnlockState();
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.deepEqual(await repository.loadSessionUnlockState(), expected);
+  assert.equal(presentation.remoteRevoked, true);
+  assert.equal(presentation.localCleanupConfirmed, false);
+});
+
+test("logout cannot delete another login's key merely observed by a pending activation", async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), repository = root.forAccount(accountID);
+  const newer = controller(repository);
+  await newer.create(passphrase); await newer.rememberSession(accountID);
+  const expected = await repository.loadSessionUnlock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, load: async () => { entered(); await held; return repository.load(); } };
+  let signedIn = true, presentation;
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } });
+  const preparing = (async () => {
+    try {
+      const result = await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      activation.requireCurrent(); return result;
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+    clearView() {}, restoreView(value) { presentation = value; } });
+  const immediatelyAfterLogout = await repository.loadSessionUnlock();
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.deepEqual(immediatelyAfterLogout, expected);
+  assert.deepEqual(await repository.loadSessionUnlock(), expected);
+  assert.equal(presentation.localCleanupConfirmed, false);
+});
+
+for (const afterCommit of [false, true]) test(`logout reports cleanup before a delayed account save ${afterCommit ? "after" : "before"} commit`, async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), repository = root.forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase); await seed.rememberSession(accountID); seed.lock();
+  const original = await repository.loadSessionUnlock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    if (afterCommit) {
+      const result = await repository.saveSessionUnlockIfCurrent(...args);
+      entered(); await held; return result;
+    }
+    entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  let signedIn = true, presentation;
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } });
+  const preparing = (async () => {
+    try {
+      const result = await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      activation.requireCurrent(); return result;
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+    clearView() {}, restoreView(value) { presentation = value; } });
+  const immediatelyAfterLogout = await repository.loadSessionUnlock();
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.equal(presentation.localCleanupConfirmed, afterCommit);
+  if (afterCommit) assert.equal(immediatelyAfterLogout, null);
+  else assert.deepEqual(immediatelyAfterLogout, original);
+});
+
+for (const afterCommit of [false, true]) test(`logout during legacy migration ${afterCommit ? "after" : "before"} the account key commit is unconfirmed`, async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", indexedDB = new IDBFactory();
+  const root = createIndexedDBVaultRepository(indexedDB), repository = root.forAccount(accountID);
+  const seed = controller(root);
+  await seed.create(passphrase); await seed.rememberSession(accountID); await markLegacyOwner(indexedDB, accountID); seed.lock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    if (afterCommit) {
+      const result = await repository.saveSessionUnlockIfCurrent(...args);
+      entered(); await held; return result;
+    }
+    entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  let signedIn = true, presentation;
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } });
+  const preparing = (async () => {
+    try {
+      const result = await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      activation.requireCurrent(); return result;
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+    clearView() {}, restoreView(value) { presentation = value; } });
+  const newer = controller(repository);
+  await newer.unlock(passphrase); assert.equal(await newer.rememberSession(accountID), true);
+  const expected = await repository.loadSessionUnlockState();
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.deepEqual(await repository.loadSessionUnlockState(), expected);
+  assert.equal(presentation.localCleanupConfirmed, false);
+});
+
+test("a pending legacy key copy stays unconfirmed even if its source key disappears", async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", indexedDB = new IDBFactory();
+  const root = createIndexedDBVaultRepository(indexedDB), repository = root.forAccount(accountID);
+  const seed = controller(root);
+  await seed.create(passphrase); await seed.rememberSession(accountID); await markLegacyOwner(indexedDB, accountID); seed.lock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  let signedIn = true, presentation;
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } });
+  const preparing = (async () => {
+    try {
+      const result = await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      activation.requireCurrent(); return result;
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  await root.deleteSessionUnlock();
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+    clearView() {}, restoreView(value) { presentation = value; } });
+  release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.equal(presentation.localCleanupConfirmed, false);
+});
+
+test("logout reports unconfirmed if pending account key deletion fails", async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), repository = root.forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase); await seed.rememberSession(accountID); seed.lock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository,
+    saveSessionUnlockIfCurrent: async (...args) => {
+      const result = await repository.saveSessionUnlockIfCurrent(...args); entered(); await held; return result;
+    },
+    deleteSessionUnlockIfCurrent: async () => { throw new Error("synthetic_storage_failure"); },
+  };
+  let signedIn = true, presentation;
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() { if (!signedIn) throw new Error("authentication_required"); } });
+  const preparing = (async () => {
+    try {
+      const result = await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      activation.requireCurrent(); return result;
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  await completeBrowserSessionLogout({ client: { logout: async () => { signedIn = false; }, session: () => null },
+    vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+    clearView() {}, restoreView(value) { presentation = value; } });
+  const retained = await repository.loadSessionUnlock();
+  release();
+  await assert.rejects(preparing, /synthetic_storage_failure/);
+  assert.notEqual(retained, null);
+  assert.equal(presentation.remoteRevoked, true);
+  assert.equal(presentation.localCleanupConfirmed, false);
+});
+
+for (const cleanupSettled of [false, true]) test(`logout reports unfinished activation cleanup ${cleanupSettled ? "after failure" : "while pending"}`, async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), repository = root.forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const tracked = controller({ ...repository, async deleteSessionUnlockIfCurrent() {
+    entered(); await held; throw new Error("synthetic_storage_failure");
+  } });
+  await tracked.create(passphrase);
+  await tracked.rememberSession(accountID);
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() {} });
+  await activation.onController(tracked);
+  const finishing = activation.finish(false).then(() => null, error => error);
+  await started;
+  if (cleanupSettled) { release(); assert.match((await finishing).message, /synthetic_storage_failure/u); }
+  let presentation;
+  try {
+    await completeBrowserSessionLogout({ client: { logout: async () => {}, session: () => null },
+      vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+      clearView() {}, restoreView(value) { presentation = value; } });
+    assert.notEqual(await repository.loadSessionUnlock(), null);
+    assert.equal(presentation.localCleanupConfirmed, false);
+  } finally {
+    release();
+    await finishing;
+  }
+});
+
+test("a finishing activation's delayed cleanup preserves a newer remembered session", async () => {
+  const { completeBrowserSessionLogout, createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), repository = root.forAccount(accountID);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const old = controller({ ...repository, async deleteSessionUnlockIfCurrent(...args) {
+    entered(); await held; return repository.deleteSessionUnlockIfCurrent(...args);
+  } });
+  await old.create(passphrase);
+  await old.rememberSession(accountID);
+  const activations = createPendingAccountVaultActivations(), activation = activations.begin({ requireCurrent() {} });
+  await activation.onController(old);
+  const finishing = activation.finish(false);
+  await started;
+  let presentation;
+  try {
+    await completeBrowserSessionLogout({ client: { logout: async () => {}, session: () => null },
+      vault: controller(root), cancelPendingActivations: () => activations.cancelCurrent(),
+      clearView() {}, restoreView(value) { presentation = value; } });
+    const newer = controller(repository);
+    await newer.unlock(passphrase);
+    assert.equal(await newer.rememberSession(accountID), true);
+    const expected = await repository.loadSessionUnlockState();
+    release();
+    await finishing;
+    assert.deepEqual(await repository.loadSessionUnlockState(), expected);
+    assert.equal(presentation.localCleanupConfirmed, false);
+  } finally { release(); await finishing; }
+});
+
+test("an unconfirmed Personal Vault lock drops decrypted access and preserves an ambiguous remembered key", async () => {
+  const { lockPersonalVault } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const vault = controller(repository);
+  await vault.create(passphrase);
+  await vault.rememberSession(accountID);
+  const retained = await repository.loadSessionUnlockState();
+  const operation = lockPersonalVault({ controller: vault, cleanup: async () => false });
+  assert.throws(() => vault.document(), /local_vault_locked/u);
+  assert.equal(await operation, false);
+  assert.deepEqual(await repository.loadSessionUnlockState(), retained);
+  assert.equal(await vault.status(), "locked");
+});
+
+test("logout confirms removal of its own claimed remembered key", async () => {
+  const { completeBrowserSessionLogout } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const vault = controller(repository);
+  await vault.create(passphrase); assert.equal(await vault.rememberSession(accountID), true);
+  let presentation;
+  await completeBrowserSessionLogout({ client: { logout: async () => {}, session: () => null }, vault,
+    clearView() {}, restoreView(value) { presentation = value; } });
+  assert.equal(await repository.loadSessionUnlock(), null);
+  assert.equal(presentation.localCleanupConfirmed, true);
+});
+
+test("old logout preserves an identical key claimed at a newer generation", async () => {
+  const { completeBrowserSessionLogout } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);
+  const vault = controller(repository);
+  await vault.create(passphrase); assert.equal(await vault.rememberSession(accountID), true);
+  const previous = await repository.loadSessionUnlockState();
+  assert.equal(await repository.saveSessionUnlockIfCurrent(previous.unlock, previous.generation, previous.unlock), true);
+  const newer = await repository.loadSessionUnlockState();
+  let presentation;
+  await completeBrowserSessionLogout({ client: { logout: async () => {}, session: () => null }, vault,
+    clearView() {}, restoreView(value) { presentation = value; } });
+  assert.deepEqual(await repository.loadSessionUnlockState(), newer);
+  assert.equal(presentation.localCleanupConfirmed, false);
+});
+
+test("locking during account restoration prevents late activation", async () => {
+  const { createPendingAccountVaultActivations } = await import("../public/app.js");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const root = createIndexedDBVaultRepository(new IDBFactory()), accountRepository = root.forAccount(accountID);
+  const seed = controller(accountRepository);
+  await seed.create(passphrase); await seed.bindAccountOwnership(accountID); await seed.rememberSession(accountID); seed.lock();
+  const original = await accountRepository.loadSessionUnlock();
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...accountRepository, saveSessionUnlockIfCurrent: async (...args) => {
+    entered(); await held; return accountRepository.saveSessionUnlockIfCurrent(...args);
+  } };
+  const activations = createPendingAccountVaultActivations();
+  const activation = activations.begin({ requireCurrent() {} });
+  const preparing = (async () => {
+    try {
+      const prepared = await prepareAccountScopedVault({ accountID, accountRepository: delayed, legacyRepository: root,
+        cryptoValue: webcrypto, onController: activation.onController, requireCurrent: activation.requireCurrent });
+      activation.requireCurrent(); return prepared;
+    } finally { await activation.finish(false); }
+  })();
+  await started;
+  assert.equal(await activations.cancelCurrent(), false); release();
+  await assert.rejects(preparing, /authentication_required/);
+  assert.deepEqual((await accountRepository.loadSessionUnlockState()).unlock, original);
+});
+
 test("lock during creation or remote import cannot reopen the controller", async () => {
   const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const source = controller(memoryRepository());
