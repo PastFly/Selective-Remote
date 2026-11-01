@@ -175,6 +175,29 @@ function sameSessionUnlock(left, right) {
   } catch { return false; }
 }
 
+// A damaged record can be replaced after a password unlock, but only if the
+// exact record read before encryption is still present in the transaction.
+function sameStoredSessionUnlock(left, right) {
+  if (sameSessionUnlock(left, right)) return true;
+  try {
+    const keys = ["accountID", "ciphertext", "nonce", "version"];
+    exactKeys(left, keys, "invalid_session_unlock");
+    exactKeys(right, keys, "invalid_session_unlock");
+    if (typeof left.accountID !== "string" || left.accountID !== right.accountID
+        || typeof left.version !== "number" || !Object.is(left.version, right.version)) return false;
+    return ["nonce", "ciphertext"].every((key) => {
+      const a = left[key], b = right[key];
+      if (!ArrayBuffer.isView(a) || !ArrayBuffer.isView(b)
+          || a.BYTES_PER_ELEMENT !== 1 || b.BYTES_PER_ELEMENT !== 1
+          || a.constructor.name !== b.constructor.name || a.byteLength !== b.byteLength
+          || a.byteLength > 4096) return false;
+      const aa = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      const bb = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+      return aa.every((value, index) => value === bb[index]);
+    });
+  } catch { return false; }
+}
+
 function sameWrappedKey(left, right) {
   const keys = ["algorithm", "iterations", "salt", "value"];
   if (!left || !right || typeof left.algorithm !== "string" || !Number.isSafeInteger(left.iterations)
@@ -553,7 +576,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
             if (--remaining) return;
             const current = generation.result ?? 0;
             if (!Number.isSafeInteger(current) || current < 0 || current === Number.MAX_SAFE_INTEGER) { failure = new Error("local_vault_storage_failed"); tx.abort(); return; }
-            if (current !== expectedGeneration || !sameSessionUnlock(previous.result ?? null, expectedUnlock)) return;
+            if (current !== expectedGeneration || !sameStoredSessionUnlock(previous.result ?? null, expectedUnlock)) return;
             store.put(unlock, keys.sessionUnlock);
             store.put(current + 1, sessionUnlockGenerationKey);
             committed = true;
@@ -606,7 +629,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
               : current === expected.generation && currentUnlock === null);
             const pendingMatch = currentUnlock && pending.some(candidate => sameSessionUnlock(currentUnlock, candidate.unlock));
             const invalidatePending = pending.some(candidate => candidate.base
-              && current === candidate.base.generation && sameSessionUnlock(currentUnlock, candidate.base.unlock));
+              && current === candidate.base.generation && sameStoredSessionUnlock(currentUnlock, candidate.base.unlock));
             if (!observedMatch && !pendingMatch && !invalidatePending) return;
             store.put(current + 1, sessionUnlockGenerationKey);
             if (observedMatch || pendingMatch) { store.delete(keys.sessionUnlock); deleted = true; }

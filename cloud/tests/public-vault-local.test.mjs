@@ -266,6 +266,113 @@ test("failed remembered-key restore cannot delete a concurrently replaced unlock
   assert.deepEqual(await repository.loadSessionUnlock(), valid);
 });
 
+test("password unlock can replace an unchanged malformed remembered record", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const indexedDB = new IDBFactory();
+  const repository = createIndexedDBVaultRepository(indexedDB).forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase);
+  assert.equal(await seed.rememberSession(accountID), true);
+  const malformed = { ...await repository.loadSessionUnlock(), ciphertext: new Uint8Array([1]) };
+  const request = indexedDB.open("selective-remote-cloud", 1);
+  const db = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction("local-vault", "readwrite");
+    tx.objectStore("local-vault").put(malformed, accountVaultStorageKeys(accountID).sessionUnlock);
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+  const vault = controller(repository);
+  await vault.unlock(passphrase);
+  assert.equal(await vault.rememberSession(accountID), true);
+  assert.equal(await controller(repository).restoreRememberedSession(accountID), true);
+});
+
+test("a changed malformed remembered record is not overwritten by a stale save", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const indexedDB = new IDBFactory();
+  const repository = createIndexedDBVaultRepository(indexedDB).forAccount(accountID);
+  const seed = controller(repository);
+  await seed.create(passphrase);
+  await seed.rememberSession(accountID);
+  const valid = await repository.loadSessionUnlock();
+  const request = indexedDB.open("selective-remote-cloud", 1);
+  const db = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  const putRaw = value => new Promise((resolve, reject) => {
+    const tx = db.transaction("local-vault", "readwrite");
+    tx.objectStore("local-vault").put(value, accountVaultStorageKeys(accountID).sessionUnlock);
+    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+  });
+  await putRaw({ ...valid, ciphertext: new Uint8Array([1]) });
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+    entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+  } };
+  const vault = controller(delayed);
+  await vault.unlock(passphrase);
+  const pending = vault.rememberSession(accountID);
+  await started;
+  const replacement = { ...valid, ciphertext: new Uint8Array([2]) };
+  await putRaw(replacement);
+  release();
+  assert.equal(await pending, false);
+  assert.deepEqual(await repository.loadSessionUnlock(), replacement);
+  db.close();
+});
+
+for (const scenario of ["logout before save", "logout after save", "newer session before logout"]) {
+  test(`logout handles a pending replacement of a malformed record: ${scenario}`, async () => {
+    const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const indexedDB = new IDBFactory();
+    const repository = createIndexedDBVaultRepository(indexedDB).forAccount(accountID);
+    const seed = controller(repository);
+    await seed.create(passphrase);
+    await seed.rememberSession(accountID);
+    const malformed = { ...await repository.loadSessionUnlock(), ciphertext: new Uint8Array([1]) };
+    const request = indexedDB.open("selective-remote-cloud", 1);
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("local-vault", "readwrite");
+      tx.objectStore("local-vault").put(malformed, accountVaultStorageKeys(accountID).sessionUnlock);
+      tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    const delayed = { ...repository, saveSessionUnlockIfCurrent: async (...args) => {
+      if (scenario === "logout after save") {
+        const saved = await repository.saveSessionUnlockIfCurrent(...args);
+        entered(); await held; return saved;
+      }
+      entered(); await held; return repository.saveSessionUnlockIfCurrent(...args);
+    } };
+    const older = controller(delayed);
+    await older.unlock(passphrase);
+    const pending = older.rememberSession(accountID);
+    await started;
+    if (scenario === "newer session before logout") {
+      const newer = controller(repository);
+      await newer.unlock(passphrase);
+      assert.equal(await newer.rememberSession(accountID), true);
+    }
+    older.lock();
+    await older.forgetRememberedSession();
+    release();
+    assert.equal(await pending, false);
+    assert.equal(await controller(repository).restoreRememberedSession(accountID),
+      scenario === "newer session before logout");
+  });
+}
+
 test("logout cannot be undone by a delayed remembered-key write", async () => {
   const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const repository = createIndexedDBVaultRepository(new IDBFactory()).forAccount(accountID);

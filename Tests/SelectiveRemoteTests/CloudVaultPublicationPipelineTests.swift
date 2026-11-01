@@ -102,14 +102,18 @@ struct CloudVaultPublicationDurabilityTests {
         try store.commit(caches[3], expected: waters[3], session: newer)
         let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
             (Data(#"{"error":"authentication_required"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
-        })
+        }, publicationStore: { throw CancellationError() })
         await #expect(throws: SelectiveRemoteCloudError.authenticationRequired) { try await client.teams(endpoint: a.scope.endpoint) }
         try session.prepareAuthenticationLossRetirement()
         let firstReceipt = "receipt/" + SHA256.hash(data: Data(a.scope.key.utf8)).map { String(format: "%02x", $0) }.joined()
         memory.failOnce(firstReceipt)
         #expect(throws: CocoaError.self) { try store.retireScopes(session: session, selection: .team(a.scope.teamID, keepingVaults: nil)) }
-        tokens.saveToken(token, for: a.scope.endpoint)
-        let checking = SelectiveRemotePublicationSession(endpoint: a.scope.endpoint, accountID: a.scope.accountID, deviceID: a.scope.deviceID, token: token, tokenStore: tokens)
+        let nextToken = String(repeating: "b", count: 40)
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: a.scope.endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: a.scope.endpoint, expectedEpoch: epoch) { _ in
+            tokens.saveToken(nextToken, for: a.scope.endpoint)
+        }
+        let checking = SelectiveRemotePublicationSession(endpoint: a.scope.endpoint, accountID: a.scope.accountID, deviceID: a.scope.deviceID, token: nextToken, tokenStore: tokens)
         for (index, fixture) in [a, b, unrelated, newerFixture].enumerated() {
             #expect(try store.highWater(scope: fixture.scope) == waters[index])
             let pin = fixture.ownPin

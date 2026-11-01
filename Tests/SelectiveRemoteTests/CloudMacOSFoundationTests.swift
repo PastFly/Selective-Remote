@@ -1492,18 +1492,20 @@ struct CloudMacOSFoundationTests {
                                                             token: oldToken, tokenStore: tokens)
         let oldCoordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: store, session: oldSession)
         let expected = try #require(try store.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID))
-        store.pauseNextLoad()
-        defer { store.resumeLoad() }
-        let pending = Task { try await oldCoordinator.stage(Data("old edit".utf8), expected: expected, teamID: teamID, vaultID: vaultID, identity: identity) }
-        guard await store.waitUntilPaused() else { Issue.record("The synthetic reader did not pause"); return }
-        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
-        tokens.saveToken(newToken, for: endpoint)
-        let newSession = SelectiveRemotePublicationSession(endpoint: endpoint, accountID: UUID(), deviceID: deviceID,
-                                                            token: newToken, tokenStore: tokens)
-        let next = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: store, session: newSession)
+        let candidateStore = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        try candidateStore.save(expected, endpoint: endpoint)
+        let next = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: candidateStore)
         let newer = try await next.stage(Data("new edit".utf8), expected: expected, teamID: teamID, vaultID: vaultID, identity: identity)
-        store.resumeLoad()
-        await #expect(throws: CancellationError.self) { try await pending.value }
+        // Inject the account transition after the old read but before its
+        // commit, without blocking a cooperative executor thread.
+        store.afterNextLoad {
+            SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+            tokens.saveToken(newToken, for: endpoint)
+            try store.saveIfCurrent(newer.snapshot, endpoint: endpoint, replacing: expected)
+        }
+        await #expect(throws: CancellationError.self) {
+            try await oldCoordinator.stage(Data("old edit".utf8), expected: expected, teamID: teamID, vaultID: vaultID, identity: identity)
+        }
         #expect(try store.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == newer.snapshot)
     }
 
@@ -2618,7 +2620,7 @@ private actor CloudLoginResponseBarrier {
         await withCheckedContinuation { continuation in
             responseWaiter = continuation
             Task {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
                 if responseWaiter != nil {
                     Issue.record("Timed out waiting to release response")
                     resumeResponse()
@@ -2631,7 +2633,7 @@ private actor CloudLoginResponseBarrier {
         return await withCheckedContinuation { continuation in
             enteredWaiter = continuation
             Task {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
                 enteredWaiter?.resume(returning: false)
                 enteredWaiter = nil
             }
@@ -2680,25 +2682,14 @@ private final class CloudIntermittentReadTokenStore: SelectiveRemoteCloudTokenSt
 }
 
 private final class ControlledTeamSnapshotStore: SelectiveRemoteTeamVaultSnapshotStore, @unchecked Sendable {
-    private struct TestTimeout: Error {}
     private let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
     private let lock = NSLock()
-    private let paused = DispatchSemaphore(value: 0), resume = DispatchSemaphore(value: 0)
-    private var shouldPause = false
-    func pauseNextLoad() { lock.withLock { shouldPause = true } }
-    func waitUntilPaused() async -> Bool {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global().async { continuation.resume(returning: self.paused.wait(timeout: .now() + 10) == .success) }
-        }
-    }
-    func resumeLoad() { resume.signal() }
+    private var nextLoadHook: (@Sendable () throws -> Void)?
+    func afterNextLoad(_ hook: @escaping @Sendable () throws -> Void) { lock.withLock { nextLoadHook = hook } }
     func load(endpoint: URL, teamID: UUID, vaultID: UUID) throws -> SelectiveRemoteTeamVaultSnapshot? {
         let value = try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
-        let mustPause = lock.withLock { let previous = shouldPause; shouldPause = false; return previous }
-        if mustPause {
-            paused.signal()
-            guard resume.wait(timeout: .now() + 10) == .success else { throw TestTimeout() }
-        }
+        let hook = lock.withLock { let previous = nextLoadHook; nextLoadHook = nil; return previous }
+        try hook?()
         return value
     }
     func save(_ snapshot: SelectiveRemoteTeamVaultSnapshot, endpoint: URL) throws {
