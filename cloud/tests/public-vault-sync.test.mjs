@@ -152,6 +152,27 @@ test("authenticated client keeps its bearer token in memory and uses only the pe
   assert.equal(client.session(), null);
 });
 
+test("logout is unconfirmed unless the server explicitly revokes the session", async () => {
+  for (const status of [200, 202, 403, 500, 503]) {
+    const token = "t".repeat(43);
+    let logoutAuthorization;
+    const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
+      if (path === "/v1/auth/login") return jsonResponse(200, {
+        token, user: { id: userID, email: "user@example.invalid" }, deviceID: deviceA,
+      });
+      if (path === "/v1/auth/logout") {
+        logoutAuthorization = options.headers.Authorization;
+        return jsonResponse(status, { error: "synthetic_logout_failure" });
+      }
+      throw new Error("unexpected_request");
+    } });
+    await client.login({ email: "user@example.invalid", password: "synthetic-password", deviceID: deviceA });
+    await assert.rejects(client.logout(), /logout_unconfirmed/, `status ${status}`);
+    assert.equal(client.session(), null, "local identity must still be cleared");
+    assert.equal(logoutAuthorization, `Bearer ${token}`, "the old session must be the revocation target");
+  }
+});
+
 test("browser session restores from an HttpOnly cookie without a JavaScript token", async () => {
   const calls = [];
   const client = createAuthenticatedVaultClient({ sessionStorageValue: bindingStorage(deviceA), fetchValue: async (path, options = {}) => {

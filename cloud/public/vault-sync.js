@@ -813,9 +813,10 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       cookieSessionBinding = null;
       writeStoredBinding(null);
       invalidateIdentity();
-      await authorizedRequest("/v1/auth/logout", { method: "POST",
+      const response = await authorizedRequest("/v1/auth/logout", { method: "POST",
         headers: { ...(logoutToken ? { Authorization: `Bearer ${logoutToken}` } : {}),
           ...(logoutBinding ? { "X-Selective-Session-Binding": logoutBinding } : {}) } });
+      if (response.status !== 204) throw new Error("logout_unconfirmed");
     },
 
     async deleteAccount({ email, password }) {
