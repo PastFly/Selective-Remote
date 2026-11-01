@@ -344,50 +344,55 @@ test('publisher/account deletion deadlock retries identical atomic deletion with
   assert.equal((await pool.query('SELECT count(*)::int n FROM shared_vault_rotation_tasks WHERE vault_id=$1 AND removed_membership_id=$2',[f.input.vaultID,g.membershipID])).rows[0].n,1);
  }finally{release?.();await pool.end();}
 });
-test('publication retries if a second deadlock selects the publisher after account deletion retries',{skip:!database,timeout:15000},async()=>{
- const pool=new pg.Pool({connectionString:database,max:8});let resumeFirst,resumeSecond;
+test('publication retry fails closed when deletion wins after injected transaction conflicts',{skip:!database,timeout:15000},async()=>{
+ const pool=new pg.Pool({connectionString:database,max:8});let resumeFirst,resumeSecond,secondPaused,deletionFinished;
  try{
   const f=await seedMigration(pool),g=await addMember(pool,f);
   await pool.query('UPDATE team_memberships SET revoked_at=now() WHERE team_id=$1 AND user_id=$2',[g.input.teamID,g.accountID]);
   await pool.query('UPDATE teams SET archived_at=now() WHERE id=$1',[g.input.teamID]);
-  let firstPaused,secondPaused;
+  let firstPaused;
   const first=new Promise(r=>{firstPaused=r;}),second=new Promise(r=>{secondPaused=r;});
+  const deletionDone=new Promise(r=>{deletionFinished=r;});
   const resumeFirstPromise=new Promise(r=>{resumeFirst=r;}),resumeSecondPromise=new Promise(r=>{resumeSecond=r;});
-  let deletionAttempts=0,publisherDeadlocks=0;
+  const bounded=async(p,label)=>{let timer;try{return await Promise.race([p,new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(Error(`test_wait_timeout:${label}`)),5000);
+  })]);}finally{clearTimeout(timer);}};
+  let deletionAttempts=0,migrationAttempts=0,injectedDeletion=false,injectedPublisher=false;
+  const conflict=()=>Object.assign(new Error('synthetic_transaction_conflict'),{code:'40P01'});
   const deletePool={connect:async()=>{
    const c=await pool.connect(),attempt=++deletionAttempts;
    await c.query(`SET deadlock_timeout='${attempt===1?'50ms':'5s'}'`);
    return {release:()=>c.release(),query:async(sql,values)=>{
     const result=await c.query(sql,values);
-    if(attempt===1&&sql.includes('UPDATE team_memberships SET revoked_at')){firstPaused();await resumeFirstPromise;}
+    if(attempt===1&&sql.includes('UPDATE team_memberships SET revoked_at')){
+     firstPaused();await resumeFirstPromise;injectedDeletion=true;throw conflict();
+    }
     if(attempt===2&&sql.includes('SELECT member.id, member.team_id')){secondPaused();await resumeSecondPromise;}
     return result;
    }};
   }};
   const migrationPool={connect:async()=>{
-   const c=await pool.connect();await c.query("SET deadlock_timeout='5s'");
+   const c=await pool.connect(),attempt=++migrationAttempts;
    return {release:()=>c.release(),query:async(sql,values)=>{
-    try{
-     const result=await c.query(sql,values);
-     if(sql.startsWith('LOCK TABLE ')){
-      await second;
-      await c.query("SET deadlock_timeout='50ms'");
-      resumeSecond();
-     }
-     return result;
-    }catch(error){if(error.code==='40P01')publisherDeadlocks++;throw error;}
+    if(attempt>1&&sql.startsWith('LOCK TABLE '))await bounded(deletionDone,'deletion');
+    const result=await c.query(sql,values);
+    if(attempt===1&&sql.startsWith('LOCK TABLE ')){
+     await bounded(second,'second attempt');resumeSecond();injectedPublisher=true;throw conflict();
+    }
+    return result;
    }};
   }};
-  const deletion=new PostgresStore(null,deletePool).deleteAccount(g.accountID).then(value=>({value}),error=>({error}));
-  await first;
+  const deletion=new PostgresStore(null,deletePool).deleteAccount(g.accountID).then(
+   value=>{deletionFinished();return {value};},error=>{deletionFinished();return {error};});
+  await bounded(first,'first attempt');
   const migration=new VaultMigrationStore(migrationPool,f.config).start({...f.input,resources:[resource()]}).then(value=>({value}),error=>({error}));
   let blocked=false;for(let n=0;n<200;n++){
    const pending=(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'")).rows[0].n;
    if(pending){blocked=true;break;}await new Promise(r=>setTimeout(r,5));
   }
   assert.equal(blocked,true);resumeFirst();
-  const [deleted,prepared]=await Promise.all([deletion,migration]);
-  assert.ok(publisherDeadlocks>=1,'the scheduled publisher deadlock was not observed');
+  const [deleted,prepared]=await bounded(Promise.all([deletion,migration]),'transactions');
+  assert.equal(injectedDeletion,true);assert.equal(injectedPublisher,true);
   assert.deepEqual(deleted,{value:{deleted:true}});
   assert.equal(prepared.error?.message,'migration_source_not_ready',prepared.error?.stack);
   assert.equal((await pool.query('SELECT count(*)::int n FROM vault_migration_attempts WHERE id=$1',[f.input.attemptID])).rows[0].n,0);
@@ -395,7 +400,7 @@ test('publication retries if a second deadlock selects the publisher after accou
    {format_state:'V1_ACTIVE',rotation_required:true});
   assert.equal((await pool.query("SELECT count(*)::int n FROM team_audit_events WHERE team_id=$1 AND action='team.member_account_deleted' AND target_membership_id=$2",[f.input.teamID,g.membershipID])).rows[0].n,1);
   assert.equal((await pool.query('SELECT count(*)::int n FROM shared_vault_rotation_tasks WHERE vault_id=$1 AND removed_membership_id=$2',[f.input.vaultID,g.membershipID])).rows[0].n,1);
- }finally{resumeFirst?.();resumeSecond?.();await pool.end();}
+ }finally{resumeFirst?.();resumeSecond?.();secondPaused?.();deletionFinished?.();await pool.end();}
 });
 test('real HTTP viewer metadata, admin inspection, outsider, device and membership revocation matrix',{skip:!database},async()=>{
  const isolated=await isolatedPublicationDatabase(database),pool=isolated.pool;let runtime,viewer,admin;

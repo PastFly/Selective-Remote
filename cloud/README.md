@@ -72,6 +72,16 @@ An already open older browser tab can still write the prior IndexedDB format
 without the newer client's conditional checks. A mixed-version cutover that
 isolates both Personal and Team data remains a release blocker; do not treat
 same-version concurrency tests as proof of safe concurrent upgrades.
+Old browser bearer sessions can still reach the server without the newer tab
+binding, so separating local keys alone would not prevent late Cloud writes.
+A legacy ownership marker containing only a wrapped key also does not prove
+the provenance of a particular ciphertext or revision: an older client can
+change that snapshot without changing the wrapped key. Synthetic tests have
+demonstrated this limitation; no production issuance of such a marker has
+been established. A previously contaminated remote copy, including one with
+a rewrapped key, likewise cannot be safely attributed using only the password
+and server account. Independently established provenance, a supported recovery
+flow and a reviewed server-side cutover remain required before release.
 The browser requires an explicit choice for every concurrent record or
 tombstone, joins both causal histories locally, and leaves the resolution dirty
 until the next conditional upload. A clean browser can import the encrypted

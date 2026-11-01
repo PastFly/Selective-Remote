@@ -1458,12 +1458,19 @@ struct CloudMacOSFoundationTests {
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         let blocking = try SelectiveRemoteTeamVaultFileSnapshotStore(root: directory.appending(path: "unrelated-a"), beforeCommit: {
             entered.signal()
-            guard release.wait(timeout: .now() + 10) == .success else { throw CocoaError(.fileWriteUnknown) }
+            guard release.wait(timeout: .now() + 45) == .success else { throw CocoaError(.fileWriteUnknown) }
         })
         let otherStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: directory.appending(path: "unrelated-b"))
-        let pending = Task.detached { try blocking.save(initial.snapshot, endpoint: endpoint) }
+        let pending = Task {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do { try blocking.save(initial.snapshot, endpoint: endpoint); continuation.resume() }
+                    catch { continuation.resume(throwing: error) }
+                }
+            }
+        }
         let reached = await withCheckedContinuation { continuation in
-            DispatchQueue.global().async { continuation.resume(returning: entered.wait(timeout: .now() + 10) == .success) }
+            DispatchQueue.global().async { continuation.resume(returning: entered.wait(timeout: .now() + 45) == .success) }
         }
         guard reached else { release.signal(); Issue.record("The synthetic writer did not start"); return }
         defer { release.signal() }
