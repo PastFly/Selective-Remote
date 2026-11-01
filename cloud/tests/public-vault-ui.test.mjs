@@ -3,6 +3,7 @@ import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createLocalVaultController } from "../public/vault-local.js";
+import * as application from "../public/app.js";
 import {
   accountVaultPassphrase,
   appearancePreference,
@@ -725,6 +726,13 @@ test("Team Vault routine automation exposes controls only for recoverable blocke
   assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_key_unavailable" }), "access");
   assert.equal(teamVaultRecoveryMode({ errorCode: "network_unavailable" }), "synchronize");
   assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_rotation_required" }), "none");
+});
+
+test("a conflicting older browser copy is reported without promising automatic sync", () => {
+  assert.equal(typeof application.teamVaultSynchronizationErrorMessage, "function");
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_legacy_conflict");
+  assert.match(message, /копи/u);
+  assert.doesNotMatch(message, /продолжится автоматически/u);
 });
 
 test("trusted browser automatically rotates and maintains accessible Team Vaults outside the active view", async () => {

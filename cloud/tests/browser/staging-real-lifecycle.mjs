@@ -57,7 +57,7 @@ export async function stagingPartialBootstrapGuard({installOnly=false,...options
   const scope={type:'team',teamID:created.teamID,vaultID:item.vaultID},remote=await client.getTeamVault(scope);
   if(remote.revision!==0||remote.keyGeneration!==1||remote.rotationRequired!==false
    ||['envelopeVersion','ciphertext','nonce','authTag','contentHash','wrapper'].some(k=>remote[k]!==null))fail();
-  if(await team.createIndexedDBTeamVaultRepository(scope).load()||await storage('legacy:'+item.vaultID)||await storage('expected:'+item.vaultID))fail();
+  if(await team.createIndexedDBTeamVaultRepository(scope).load(identity.deviceID)||await storage('legacy:'+item.vaultID)||await storage('expected:'+item.vaultID))fail();
   return structuredClone(saved);
  };
  if(installOnly){globalThis.__prcInspectPartialBootstrap=inspect;return;}
@@ -87,7 +87,7 @@ export async function stagingInitializedBootstrapGuard({installOnly=false,...opt
   if(!equal(verified.publicKey,identity.publicKey))fail();
   const recipients=(await client.listTeamKeyDevices(scope)).devices,tuples=rows=>rows.map(({membershipID,membershipEpoch,deviceID})=>({membershipID,membershipEpoch,deviceID})).sort((a,b)=>a.deviceID.localeCompare(b.deviceID));
   if(!recipients.every(r=>r.hasWrapper===true)||!equal(tuples(recipients),tuples(initialized.requiredRecipients)))fail();
-  const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+  const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load(identity.deviceID);
   if(remote.revision!==1||remote.keyGeneration!==1||remote.rotationRequired!==false||remote.envelopeVersion!==1||!remote.wrapper||!cached||cached.deviceID!==identity.deviceID||cached.localRevision!==1||cached.serverRevision!==1||cached.syncedLocalRevision!==1||cached.keyGeneration!==1||!equal(cached.scope,scope))fail();
   const envelope={baseRevision:0,keyGeneration:1,envelopeVersion:remote.envelopeVersion,ciphertext:remote.ciphertext,nonce:remote.nonce,authTag:remote.authTag,contentHash:remote.contentHash};
   const wrapper=initialized.wrappers.find(v=>v.deviceID===identity.deviceID);
@@ -134,7 +134,7 @@ export async function stagingUploadedBootstrapContinuation({installOnly=false,..
   if(!equal(verified.publicKey,identity.publicKey))fail();
   const recipients=(await client.listTeamKeyDevices(scope)).devices,tuples=rows=>rows.map(({membershipID,membershipEpoch,deviceID})=>({membershipID,membershipEpoch,deviceID})).sort((a,b)=>a.deviceID.localeCompare(b.deviceID));
   if(!recipients.every(r=>r.hasWrapper===true)||!equal(tuples(recipients),tuples(initialized.requiredRecipients)))fail();
-  const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+  const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load(identity.deviceID);
   if(remote.revision!==2||remote.keyGeneration!==1||remote.rotationRequired!==false||remote.envelopeVersion!==1||!remote.wrapper||!cached||cached.deviceID!==identity.deviceID||cached.localRevision!==5||cached.serverRevision!==2||cached.syncedLocalRevision!==5||cached.keyGeneration!==1||!equal(cached.scope,scope))fail();
   const envelope={baseRevision:1,keyGeneration:1,envelopeVersion:remote.envelopeVersion,ciphertext:remote.ciphertext,nonce:remote.nonce,authTag:remote.authTag,contentHash:remote.contentHash};
   const wrapper=initialized.wrappers.find(v=>v.deviceID===identity.deviceID);
@@ -174,7 +174,7 @@ export async function stagingUploadedBootstrapContinuation({installOnly=false,..
   await inspect();checkTime();
   const name=`TEST-ONLY-CODEX-${runID}-empty`,vault=await client.createSharedVault({teamID:stageCreated.teamID,name,idempotencyKey:`prc:${runID}:empty`});
   stageCreated.vaults.push({vaultID:vault.id,name,attemptID:crypto.randomUUID()});await storage('created',stageCreated);checkTime();
-  const scope={type:'team',teamID:stageCreated.teamID,vaultID:vault.id},emptyRepository=team.createIndexedDBTeamVaultRepository(scope);if(await emptyRepository.load())fail();checkTime();
+  const scope={type:'team',teamID:stageCreated.teamID,vaultID:vault.id},emptyRepository=team.createIndexedDBTeamVaultRepository(scope);if(await emptyRepository.load(identity.deviceID))fail();checkTime();
   const controller=team.createTeamVaultController({repository:emptyRepository,identity,scope});
   // The ordinary product initializer is the only writer. No populated controller
   // mutation method or upload is reachable through this transport.
@@ -183,7 +183,7 @@ export async function stagingUploadedBootstrapContinuation({installOnly=false,..
   try{
    await inspect();checkTime();const result=await team.synchronizeTeamVault({client:emptyClient,controller,role:'owner'});checkTime();
    if(result.status!=='initialized'||result.revision!==1||putCount!==1)fail();emptyRevision=1;
-   const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+   const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load(identity.deviceID);
    const legacy=await verifyLegacy({team,identity,scope,controller,cached,remote,expectedRecordCount:0});checkTime();
    await storage('legacy:'+vault.id,legacy);checkTime();await storage('expected:'+vault.id,{records:[],secrets:[]});
   }finally{controller.lock();}
@@ -223,7 +223,7 @@ export async function inspectUploadedBrowser({origin,runID,email,moduleHashes,up
   if(!identity||identity.deviceID!==deviceID||await keys.teamDevicePublicKeyFingerprint(identity.publicKey)!==account.publicKeyFingerprint)throw Error('preserved_identity_changed');
   const recordKey=origin+'|'+user.id,pin=await readRecord('selective-remote-device-trust-v1','records','pin:'+recordKey),root=await readRecord('selective-remote-device-trust-v1','records','root:'+recordKey),snapshot=await client.deviceTrustSnapshot();
   if(!pin||!root||pin.rootFingerprint!==account.rootFingerprint||root.accountID!==user.id||root.endpoint!==origin||root.publicKey!==snapshot.rootPublicKey)throw Error('product_trust_required');
-  const readonlyTeam={...team,createIndexedDBTeamVaultRepository:scope=>({load:()=>readRecord('selective-remote-cloud','local-vault',`team-vault:${scope.teamID}:${scope.vaultID}`),save:async()=>{throw Error('readonly_storage_required');},remove:async()=>{throw Error('readonly_storage_required');}})};
+  const readonlyTeam={...team,createIndexedDBTeamVaultRepository:scope=>({load:async deviceID=>{const key=`team-vault:${scope.teamID}:${scope.vaultID}`,scoped=await readRecord('selective-remote-cloud','local-vault',`${key}:${deviceID}`),legacy=await readRecord('selective-remote-cloud','local-vault',key);if(scoped&&legacy?.deviceID===deviceID)throw Error('team_vault_legacy_conflict');return scoped??(legacy?.deviceID===deviceID?legacy:null);},save:async()=>{throw Error('readonly_storage_required');},remove:async()=>{throw Error('readonly_storage_required');}})};
   const storage=async function(key){if(arguments.length!==1)throw Error('readonly_storage_required');return readRecord('selective-remote-real-'+runID,'run',key);};
   const result=await globalThis.__prcContinueUploadedBootstrap({client,team:readonlyTeam,keys,trust,pin,origin,identity,userID:user.id,runID,uploaded,expectedFixture,interval,storage,inspectOnly:true});
   return {outcome:'PASS',...result};
@@ -492,7 +492,7 @@ export async function installBrowserLifecycle({origin,runID,email,moduleHashes,u
      else await team.synchronizeTeamVault({client,controller,role:'owner'});
      if(kind==='populated')for(const r of globalThis.__prcCreateV1Records())await controller.upsert(r);
      await team.synchronizeTeamVault({client,controller,role:'owner'});
-     const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+     const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load(identity.deviceID);
      const legacy=await globalThis.__prcVerifyLegacyRoundtrip({team,identity,scope,controller,cached,remote,expectedRecordCount:kind==='populated'?4:0});
      await storage('legacy:'+vault.id,legacy);
      const document=controller.document(),records=await Promise.all(document.records.map(async r=>({id:r.id,type:r.type,digest:await migration.migrationHash(r)}))),secrets=[];

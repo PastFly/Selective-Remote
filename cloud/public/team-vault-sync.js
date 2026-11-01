@@ -110,12 +110,15 @@ async function transaction(indexedDBValue, mode, operation) {
   try {
     return await new Promise((resolve, reject) => {
       const tx = database.transaction(storeName, mode);
-      const request = operation(tx.objectStore(storeName));
       let result = null;
-      request.onsuccess = () => { result = request.result ?? null; };
-      request.onerror = () => reject(new Error("team_vault_storage_failed"));
-      tx.onabort = () => reject(new Error("team_vault_storage_failed"));
-      tx.onerror = () => reject(new Error("team_vault_storage_failed"));
+      let failure = null;
+      const request = operation(tx.objectStore(storeName), (value) => { result = value ?? null; }, (error) => {
+        failure = error;
+        tx.abort();
+      });
+      if (request) request.onsuccess = () => { result = request.result ?? null; };
+      tx.onabort = () => reject(failure ?? new Error("team_vault_storage_failed"));
+      tx.onerror = () => reject(failure ?? new Error("team_vault_storage_failed"));
       tx.oncomplete = () => resolve(result);
     });
   } finally {
@@ -126,17 +129,67 @@ async function transaction(indexedDBValue, mode, operation) {
 export function createIndexedDBTeamVaultRepository(scope, indexedDBValue = globalThis.indexedDB) {
   const normalizedScope = normalizeTeamVaultScope(scope);
   const key = snapshotKey(normalizedScope);
+  function readDeviceSnapshots(store, device, done, abort, apply) {
+    const scoped = store.get(`${key}:${device}`);
+    scoped.onsuccess = () => {
+      const legacy = store.get(key);
+      legacy.onsuccess = () => {
+        try {
+          const current = scoped.result == null ? null : normalizedSnapshot(scoped.result, normalizedScope);
+          if (current && current.deviceID !== device) throw new Error("invalid_local_team_vault");
+          const old = legacy.result == null ? null : normalizedSnapshot(legacy.result, normalizedScope);
+          const ownLegacy = old?.deviceID === device ? old : null;
+          if (current && ownLegacy) throw new Error("team_vault_legacy_conflict");
+          apply(current, ownLegacy, done);
+        } catch (error) { abort(error); }
+      };
+    };
+  }
   return {
-    async load() {
-      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(key));
-      return value === null || value === undefined ? null : normalizedSnapshot(value, normalizedScope);
-    },
-    async save(value) {
+    async load(deviceID = null) {
+      const device = deviceID === null ? null : normalizedUUID(deviceID, "invalid_team_device_identity");
+      const value = await transaction(indexedDBValue, "readonly", (store, done, abort) => {
+        if (!device) return store.get(key);
+        readDeviceSnapshots(store, device, done, abort, (scoped, legacy, finish) => finish(scoped ?? legacy));
+      });
+      if (value === null || value === undefined) return null;
       const snapshot = normalizedSnapshot(value, normalizedScope);
-      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), key));
+      if (device && snapshot.deviceID !== device) throw new Error("invalid_local_team_vault");
+      return snapshot;
     },
-    async remove() {
-      await transaction(indexedDBValue, "readwrite", (store) => store.delete(key));
+    async save(value, deviceID = null, expectedSnapshot = undefined) {
+      const snapshot = normalizedSnapshot(value, normalizedScope);
+      const device = deviceID === null ? null : normalizedUUID(deviceID, "invalid_team_device_identity");
+      if (device && snapshot.deviceID !== device) throw new Error("invalid_local_team_vault");
+      const expected = expectedSnapshot == null ? expectedSnapshot : normalizedSnapshot(expectedSnapshot, normalizedScope);
+      if (expected && expected.deviceID !== device) throw new Error("invalid_local_team_vault");
+      await transaction(indexedDBValue, "readwrite", (store, done, abort) => {
+        if (!device) return store.put(clone(snapshot), key);
+        readDeviceSnapshots(store, device, done, abort, (scoped, legacy, finish) => {
+          if (expected !== undefined && JSON.stringify(scoped ?? legacy) !== JSON.stringify(expected)) {
+            throw new Error("team_vault_legacy_conflict");
+          }
+          store.put(clone(snapshot), `${key}:${device}`);
+          if (legacy) store.delete(key);
+          finish(null);
+        });
+      });
+    },
+    async remove(deviceID = null, expectedSnapshot = undefined) {
+      const device = deviceID === null ? null : normalizedUUID(deviceID, "invalid_team_device_identity");
+      const expected = expectedSnapshot == null ? expectedSnapshot : normalizedSnapshot(expectedSnapshot, normalizedScope);
+      if (expected && expected.deviceID !== device) throw new Error("invalid_local_team_vault");
+      await transaction(indexedDBValue, "readwrite", (store, done, abort) => {
+        if (!device) return store.delete(key);
+        readDeviceSnapshots(store, device, done, abort, (scoped, legacy, finish) => {
+          if (expected !== undefined && JSON.stringify(scoped ?? legacy) !== JSON.stringify(expected)) {
+            throw new Error("team_vault_legacy_conflict");
+          }
+          store.delete(`${key}:${device}`);
+          if (legacy) store.delete(key);
+          finish(null);
+        });
+      });
     },
   };
 }
@@ -180,7 +233,7 @@ export function createTeamVaultController({
 
   async function save(nextSnapshot) {
     const normalized = normalizedSnapshot(nextSnapshot, normalizedScope);
-    await repository.save(normalized);
+    await repository.save(normalized, deviceID, snapshot);
     snapshot = normalized;
   }
 
@@ -208,11 +261,11 @@ export function createTeamVaultController({
 
     async status() {
       if (snapshot && vaultKey && document) return "unlocked";
-      return (await repository.load()) ? "locked" : "empty";
+      return (await repository.load(deviceID)) ? "locked" : "empty";
     },
 
     async unlock() {
-      const stored = await repository.load();
+      const stored = await repository.load(deviceID);
       if (!stored) throw new Error("local_team_vault_missing");
       const nextSnapshot = normalizedSnapshot(stored, normalizedScope);
       const nextKey = await unwrapTeamVaultKeyForDevice({
@@ -253,7 +306,7 @@ export function createTeamVaultController({
     },
 
     async initialize(keyDevices) {
-      if (await repository.load()) throw new Error("local_team_vault_exists");
+      if (await repository.load(deviceID)) throw new Error("local_team_vault_exists");
       if (!Array.isArray(keyDevices) || keyDevices.length === 0) throw new Error("team_key_devices_required");
       const unique = new Set(keyDevices.map((device) => normalizedUUID(device?.deviceID, "invalid_team_key_devices")));
       if (unique.size !== keyDevices.length || !unique.has(deviceID)) throw new Error("invalid_team_key_devices");
@@ -326,12 +379,12 @@ export function createTeamVaultController({
         throw new Error("team_vault_initialization_committed");
       }
       if (typeof repository.remove !== "function") throw new Error("team_vault_storage_unavailable");
-      await repository.remove();
+      await repository.remove(deviceID, snapshot);
       this.lock();
     },
 
     async importRemote(remote) {
-      if (await repository.load()) throw new Error("local_team_vault_exists");
+      if (await repository.load(deviceID)) throw new Error("local_team_vault_exists");
       if (remote.rotationRequired) throw new Error("team_vault_rotation_required");
       if (remote.revision < 1 || !remote.wrapper) throw new Error("team_vault_key_unavailable");
       const envelope = remoteEnvelope(remote);

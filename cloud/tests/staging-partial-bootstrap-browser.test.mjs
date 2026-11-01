@@ -180,6 +180,7 @@ async function inspectPreclaimFixture(f){
  const readRecord=async(name,store,key)=>{
   if(name==='selective-remote-cloud'&&store==='local-vault'){
    if(key==='team-device-key:'+o.identity.deviceID)return o.identity;
+   if(key===`team-vault:${o.uploaded.created.teamID}:${o.uploaded.created.vaults[0].vaultID}:${o.identity.deviceID}`)return null;
    if(key===`team-vault:${o.uploaded.created.teamID}:${o.uploaded.created.vaults[0].vaultID}`)return structuredClone(f.actual.local);
   }
   if(name==='selective-remote-device-trust-v1'&&store==='records'){

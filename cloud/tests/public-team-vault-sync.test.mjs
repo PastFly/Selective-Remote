@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import test from "node:test";
+import { IDBFactory } from "fake-indexeddb";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
 import {
+  createIndexedDBTeamVaultRepository,
   createTeamVaultController,
   provisionTeamVaultWrappers,
   rotateTeamVault,
@@ -117,6 +119,103 @@ function sharedServer(keyDevices) {
     },
   };
 }
+
+test("switching Team accounts preserves each device's encrypted local changes", async () => {
+  const indexedDB = new IDBFactory();
+  const a = await device(deviceA, membershipA);
+  const b = await device(deviceB, membershipB);
+  const server = sharedServer([a.keyDevice, b.keyDevice]);
+  const legacy = createIndexedDBTeamVaultRepository(scope, indexedDB);
+  const oldRepository = memoryRepository();
+  const oldController = createTeamVaultController({ repository: oldRepository, identity: a.identity, scope, cryptoValue: webcrypto });
+  await synchronizeTeamVault({ client: server.clientFor(deviceA), controller: oldController, role: "owner" });
+  await oldController.upsert({ id: recordID, type: "host", data: { title: "Unsynced A", address: "a.invalid" } });
+  await legacy.save(oldRepository.inspect());
+  const legacyBefore = await legacy.load();
+  oldController.lock();
+
+  const repoB = createIndexedDBTeamVaultRepository(scope, indexedDB);
+  const controllerB = createTeamVaultController({ repository: repoB, identity: b.identity, scope, cryptoValue: webcrypto });
+  assert.deepEqual(await synchronizeTeamVault({ client: server.clientFor(deviceB), controller: controllerB, role: "editor" }),
+    { status: "downloaded", revision: 1 });
+  assert.deepEqual(controllerB.document().records, []);
+  await assert.rejects(repoB.save(legacyBefore, deviceB), /invalid_local_team_vault/u);
+  assert.deepEqual(await legacy.load(), legacyBefore);
+
+  const repoA = createIndexedDBTeamVaultRepository(scope, indexedDB);
+  const controllerA = createTeamVaultController({ repository: repoA, identity: a.identity, scope, cryptoValue: webcrypto });
+  assert.equal(await controllerA.status(), "locked");
+  const restored = await controllerA.unlock();
+  assert.equal(restored.records[0].data.title, "Unsynced A");
+  assert.equal((await controllerA.syncState()).dirty, true);
+  await controllerA.upsert({ type: "snippet", data: { title: "Still local", body: "echo preserved" } });
+  controllerB.lock();
+  assert.deepEqual((await controllerB.unlock()).records, []);
+
+  await repoB.remove(deviceB);
+  controllerA.lock();
+  assert.equal((await controllerA.unlock()).records.find(record => record.id === recordID).data.title, "Unsynced A");
+  assert.equal(controllerA.document().records.length, 2);
+});
+
+test("an older browser tab cannot overwrite a migrated device snapshot", async () => {
+  const indexedDB = new IDBFactory();
+  const a = await device(deviceA, membershipA);
+  const server = sharedServer([a.keyDevice]);
+  const oldRepository = memoryRepository();
+  const old = createTeamVaultController({ repository: oldRepository, identity: a.identity, scope, cryptoValue: webcrypto });
+  await synchronizeTeamVault({ client: server.clientFor(deviceA), controller: old, role: "owner" });
+  await old.upsert({ id: recordID, type: "host", data: { title: "Old", address: "old.invalid" } });
+  const legacy = createIndexedDBTeamVaultRepository(scope, indexedDB);
+  const oldSnapshot = structuredClone(oldRepository.inspect());
+  await legacy.save(oldSnapshot);
+
+  const current = createTeamVaultController({ repository: createIndexedDBTeamVaultRepository(scope, indexedDB), identity: a.identity, scope, cryptoValue: webcrypto });
+  await current.unlock();
+  await current.upsert({ type: "snippet", data: { title: "New", body: "echo local" } });
+  assert.equal((await legacy.load()) === null, true);
+
+  await legacy.save(oldSnapshot);
+  await assert.rejects(current.upsert({ type: "snippet", data: { title: "Blocked", body: "echo blocked" } }), /team_vault_legacy_conflict/u);
+  current.lock();
+  await assert.rejects(current.unlock(), /team_vault_legacy_conflict/u);
+  assert.deepEqual(await legacy.load(), oldSnapshot);
+});
+
+test("a legacy tab change during migration cannot be silently overwritten", async () => {
+  const indexedDB = new IDBFactory();
+  const a = await device(deviceA, membershipA);
+  const server = sharedServer([a.keyDevice]);
+  const oldRepository = memoryRepository();
+  const old = createTeamVaultController({ repository: oldRepository, identity: a.identity, scope, cryptoValue: webcrypto });
+  await synchronizeTeamVault({ client: server.clientFor(deviceA), controller: old, role: "owner" });
+  const legacy = createIndexedDBTeamVaultRepository(scope, indexedDB);
+  await legacy.save(oldRepository.inspect());
+  const current = createTeamVaultController({ repository: createIndexedDBTeamVaultRepository(scope, indexedDB), identity: a.identity, scope, cryptoValue: webcrypto });
+  await current.unlock();
+
+  await old.upsert({ id: recordID, type: "host", data: { title: "Old tab", address: "old.invalid" } });
+  const changedLegacy = structuredClone(oldRepository.inspect());
+  await legacy.save(changedLegacy);
+  await assert.rejects(current.upsert({ type: "snippet", data: { title: "New tab", body: "echo local" } }), /team_vault_legacy_conflict/u);
+  assert.deepEqual(await legacy.load(), changedLegacy);
+});
+
+test("concurrent tabs on one device cannot silently replace local changes", async () => {
+  const indexedDB = new IDBFactory();
+  const a = await device(deviceA, membershipA);
+  const server = sharedServer([a.keyDevice]);
+  const makeController = () => createTeamVaultController({ repository: createIndexedDBTeamVaultRepository(scope, indexedDB), identity: a.identity, scope, cryptoValue: webcrypto });
+  const first = makeController();
+  await synchronizeTeamVault({ client: server.clientFor(deviceA), controller: first, role: "owner" });
+  const second = makeController();
+  await second.unlock();
+  await first.upsert({ id: recordID, type: "host", data: { title: "First tab", address: "first.invalid" } });
+  await assert.rejects(second.upsert({ type: "snippet", data: { title: "Second tab", body: "echo local" } }), /team_vault_legacy_conflict/u);
+  first.lock();
+  const restored = await first.unlock();
+  assert.equal(restored.records.find(record => record.id === recordID).data.title, "First tab");
+});
 
 test("a Team Vault initializes for every approved device and persists ciphertext only", async () => {
   const a = await device(deviceA, membershipA);

@@ -51,7 +51,7 @@ const syncIssueCodes = new Set([
   "team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required",
   "network_unavailable", "remote_revision_regressed", "team_vault_generation_changed",
   "invalid_remote_revision", "invalid_local_team_vault", "team_vault_storage_failed",
-  "wrapper_provisioning_failed",
+  "wrapper_provisioning_failed", "team_vault_legacy_conflict",
 ]);
 
 export function publishSyncObservation(documentValue, observation) {
@@ -598,6 +598,23 @@ export function teamVaultRecoveryMode({
   if (code) return "synchronize";
   if (wrapperProvisioningFailed) return "wrappers";
   return "none";
+}
+
+export function teamVaultSynchronizationErrorMessage(code) {
+  const messages = {
+    authentication_required: "Сессия Cloud истекла. Войдите снова.",
+    device_approval_required: "Это устройство ещё не одобрено для Team Vault.",
+    team_vault_key_unavailable: "Для этого браузера пока нет wrapper ключа. Оставьте доверенный браузер или приложение участника с доступом к Team Vault подключённым к Cloud.",
+    team_vault_rotation_required: "Синхронизация заморожена до безопасной ротации ключа.",
+    remote_revision_regressed: "Cloud вернул более старую ревизию; запись остановлена для защиты данных.",
+    team_vault_generation_changed: "Поколение ключа изменилось. Повторно откройте Team Vault после синхронизации доверенного устройства.",
+    invalid_remote_revision: "Cloud не подтвердил ожидаемую следующую ревизию; локальная копия сохранена.",
+    invalid_local_team_vault: "Локальная зашифрованная копия несовместима или повреждена; серверная версия не перезаписана.",
+    team_vault_storage_failed: "Браузер не смог сохранить локальную зашифрованную копию.",
+    team_vault_legacy_conflict: "Найдены две локальные копии Team Vault. Синхронизация остановлена; обе копии сохранены. Не очищайте данные браузера до восстановления.",
+  };
+  return messages[code]
+    ?? "Локальная зашифрованная копия сохранена. Синхронизация продолжится автоматически.";
 }
 
 function setText(element, value) {
@@ -1918,22 +1935,6 @@ export function initializeTeamWorkspace({
       : retriesSynchronization ? "Повторить безопасную синхронизацию" : "Синхронизировать";
     grantWrappersButton.hidden = mode !== "wrappers";
     grantWrappersButton.disabled = mode !== "wrappers" || !controller || selectedVault?.rotationRequired;
-  }
-
-  function teamVaultSynchronizationErrorMessage(code) {
-    const messages = {
-      authentication_required: "Сессия Cloud истекла. Войдите снова.",
-      device_approval_required: "Это устройство ещё не одобрено для Team Vault.",
-      team_vault_key_unavailable: "Для этого браузера пока нет wrapper ключа. Оставьте доверенный браузер или приложение участника с доступом к Team Vault подключённым к Cloud.",
-      team_vault_rotation_required: "Синхронизация заморожена до безопасной ротации ключа.",
-      remote_revision_regressed: "Cloud вернул более старую ревизию; запись остановлена для защиты данных.",
-      team_vault_generation_changed: "Поколение ключа изменилось. Повторно откройте Team Vault после синхронизации доверенного устройства.",
-      invalid_remote_revision: "Cloud не подтвердил ожидаемую следующую ревизию; локальная копия сохранена.",
-      invalid_local_team_vault: "Локальная зашифрованная копия несовместима или повреждена; серверная версия не перезаписана.",
-      team_vault_storage_failed: "Браузер не смог сохранить локальную зашифрованную копию.",
-    };
-    return messages[code]
-      ?? "Локальная зашифрованная копия сохранена. Синхронизация продолжится автоматически.";
   }
 
   function updateTeamMessage() {
@@ -3665,6 +3666,7 @@ export function initializeTeamWorkspace({
     if (selectedTeam?.role !== "owner") return;
     const archivedTeam = selectedTeam;
     const archivedVaults = [...vaults];
+    const archivedDeviceID = identity?.deviceID;
     const button = archiveTeamForm.querySelector("button");
     let remotelyArchived = false;
     button.disabled = true;
@@ -3684,12 +3686,14 @@ export function initializeTeamWorkspace({
       remotelyArchived = true;
       lockCurrentVault();
       const removals = await Promise.allSettled(archivedVaults.map((vault) => (
-        createIndexedDBTeamVaultRepository({ type: "team", teamID: archivedTeam.id, vaultID: vault.id }).remove()
+        archivedDeviceID
+          ? createIndexedDBTeamVaultRepository({ type: "team", teamID: archivedTeam.id, vaultID: vault.id }).remove(archivedDeviceID)
+          : Promise.reject(new Error("team_vault_storage_unavailable"))
       )));
       await loadTeams();
       const failed = removals.filter((result) => result.status === "rejected").length;
       setText(message, failed === 0
-        ? "Team архивирована; локальные зашифрованные снимки удалены."
+        ? "Team архивирована; локальные зашифрованные снимки этого устройства удалены."
         : `Team архивирована, но ${failed} локальных зашифрованных снимков не удалось удалить.`);
     } catch (error) {
       const feedback = teamArchiveErrorMessage(error, remotelyArchived);
