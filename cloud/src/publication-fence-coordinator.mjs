@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {canonicalMigrationJSON,migrationHash,verifyMigrationManifest} from './migration-policy.mjs';
 import {publicationHash,verifyReaderHeader} from '../public/vault-publication-v1.js';
 import {validateFenceEvent,fenceIntentDigest} from './migration-fence-journal.mjs';
-import {v1CiphertextHash,v1EnvelopeHash,v1TeamWrappersSQL} from './v1-data-fence.mjs';
+import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL} from './v1-data-fence.mjs';
 
 const same=(a,b)=>canonicalMigrationJSON(a)===canonicalMigrationJSON(b);
 const abortProofs=new WeakMap();
@@ -106,9 +106,9 @@ export async function readCommittedV1Outcome({query,intent}){
   const table=personal?'personal_vaults':'shared_vaults';
   const history=personal?'vault_revisions':'shared_vault_revisions';
   const owner=personal?'user_id':'team_id';
-  const envelope=alias=>`jsonb_build_object('envelopeVersion',${alias}.envelope_version,'wrappedKey',${personal?`${alias}.wrapped_key`:'NULL'},'ciphertext',${alias}.ciphertext,'nonce',${alias}.nonce,'authTag',${alias}.auth_tag,'contentHash',${alias}.content_hash,'keyGeneration',${personal?'NULL':`${alias}.key_generation::text`},'wrappers',${personal?'NULL':v1TeamWrappersSQL})`;
-  const result=await query(`SELECT v.id AS vault_id,v.${owner} AS owner_id,r.revision,r.ciphertext,
-      v.revision AS current_revision,v.ciphertext AS current_ciphertext,${envelope('r')} AS envelope,${envelope('v')} AS current_envelope
+  const result=await query(`SELECT v.id AS vault_id,v.${owner} AS owner_id,r.revision,v.revision AS current_revision,
+      ${v1CiphertextHashSQL('r.ciphertext')} AS ciphertext_hash,${v1CiphertextHashSQL('v.ciphertext')} AS current_ciphertext_hash,
+      ${v1EnvelopeHashSQL(v1EnvelopeSQL('r',personal))} AS envelope_hash,${v1EnvelopeHashSQL(v1EnvelopeSQL('v',personal))} AS current_envelope_hash
     FROM public.${table} v JOIN public.${history} r ON r.vault_id=v.id
     WHERE v.id=$1 AND v.${owner}=$2 AND r.revision=$3`,[intent.vaultID,intent.ownerID,intent.revision]);
   if(!Array.isArray(result?.rows))fail('deployment_fence_mismatch');
@@ -119,12 +119,10 @@ export async function readCommittedV1Outcome({query,intent}){
     return Number.isSafeInteger(value)&&value>=0?value:null;
   };
   const row=result.rows[0],revision=parseRevision(row.revision),current=parseRevision(row.current_revision);
-  let historyEnvelope,currentEnvelope;
-  try{historyEnvelope=v1EnvelopeHash(row.envelope);currentEnvelope=v1EnvelopeHash(row.current_envelope);}catch{fail('deployment_fence_mismatch');}
   if(row.vault_id!==intent.vaultID||row.owner_id!==intent.ownerID||!Number.isSafeInteger(revision)||revision!==intent.revision
-    ||!Number.isSafeInteger(current)||current!==revision||v1CiphertextHash(row.ciphertext)!==intent.ciphertextHash
-    ||historyEnvelope!==intent.envelopeHash
-    ||(current===revision&&(v1CiphertextHash(row.current_ciphertext)!==intent.ciphertextHash||currentEnvelope!==intent.envelopeHash)))fail('deployment_fence_mismatch');
+    ||!Number.isSafeInteger(current)||current!==revision||row.ciphertext_hash!==intent.ciphertextHash
+    ||row.envelope_hash!==intent.envelopeHash||row.current_ciphertext_hash!==intent.ciphertextHash
+    ||row.current_envelope_hash!==intent.envelopeHash)fail('deployment_fence_mismatch');
   return {kind:'V1',operationID:intent.operationID,vaultKind:intent.vaultKind,ownerID:intent.ownerID,vaultID:intent.vaultID,
     baseRevision:intent.baseRevision,revision:intent.revision,ciphertextHash:intent.ciphertextHash,envelopeHash:intent.envelopeHash};
 }

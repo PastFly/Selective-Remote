@@ -202,6 +202,39 @@ test('V1 data floor rejects altered decryption metadata even when revision and c
   } finally { await db.cleanup(); }
 });
 
+test('V1 floor reads opaque commitments without transferring ciphertext or wrappers to the Cloud process', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const {readV1VaultState}=await import('../src/v1-data-fence.mjs');
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  try {
+    const user=randomUUID();
+    await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'scale-privacy@example.test','scale_privacy',now())",[user]);
+    await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}',repeat('A',8192),'nonce','tag','hash')",[user]);
+    let inspected=false;
+    const state=await readV1VaultState(async(sql,values)=>{
+      const result=await db.pool.query(sql,values);inspected=true;
+      for(const row of result.rows){assert.equal('ciphertext' in row,false);assert.equal('envelope' in row,false);}
+      return result;
+    });
+    assert.equal(inspected,true);assert.equal(state.length,1);
+    assert.match(state[0].ciphertextHash,/^[a-f0-9]{64}$/u);assert.match(state[0].envelopeHash,/^[a-f0-9]{64}$/u);
+  } finally {await db.cleanup();}
+});
+
+test('PostgreSQL and client compute identical V1 ciphertext commitments', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const {v1CiphertextHash,v1CiphertextHashSQL}=await import('../src/v1-data-fence.mjs');
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  try {
+    for(const value of [null,'','AQID_-','тест-中-🙂','A'.repeat(65536)]){
+      const result=await db.pool.query(`SELECT ${v1CiphertextHashSQL('$1::text')} AS value`,[value]);
+      assert.equal(result.rows[0].value,v1CiphertextHash(value));
+    }
+  } finally {await db.cleanup();}
+});
+
 test('current writer holds barrier integrity until its transaction commits', {
   skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
 }, async () => {

@@ -53,14 +53,13 @@ test('V1 rollback acknowledged before COMMIT is a proven abort',async()=>{
 
 test('V1 committed readback binds owner, Vault, revision and actual ciphertext',async()=>{
  const {readCommittedV1Outcome}=await import('../src/publication-fence-coordinator.mjs');
- const {v1CiphertextHash,v1EnvelopeHash}=await import('../src/v1-data-fence.mjs');
- const envelope={envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'nonce',authTag:'tag',contentHash:'hash',keyGeneration:null,wrappers:null};
- const v={...fields(),ciphertextHash:v1CiphertextHash('bmV3'),envelopeHash:v1EnvelopeHash(envelope)};
- const row={vault_id:v.vaultID,owner_id:v.ownerID,revision:String(v.revision),current_revision:String(v.revision),ciphertext:'bmV3',current_ciphertext:'bmV3',envelope,current_envelope:envelope};
+ const {v1CiphertextHash}=await import('../src/v1-data-fence.mjs');
+ const v={...fields(),ciphertextHash:v1CiphertextHash('bmV3'),envelopeHash:'d'.repeat(64)};
+ const row={vault_id:v.vaultID,owner_id:v.ownerID,revision:String(v.revision),current_revision:String(v.revision),ciphertext_hash:v.ciphertextHash,current_ciphertext_hash:v.ciphertextHash,envelope_hash:v.envelopeHash,current_envelope_hash:v.envelopeHash};
  const query=rows=>async()=>({rows});
  assert.deepEqual(await readCommittedV1Outcome({query:query([row]),intent:v}),v);
  assert.equal(await readCommittedV1Outcome({query:query([]),intent:v}),null);
- for(const bad of [{...row,ciphertext:'c3RhbGU'},{...row,current_ciphertext:'c3RhbGU'},{...row,owner_id:randomUUID()},
-   {...row,current_revision:'0'},{...row,revision:'2'},{...row,envelope:{...envelope,authTag:'altered'}},{...row,current_envelope:{...envelope,wrappedKey:{altered:true}}}])
+ for(const bad of [{...row,ciphertext_hash:'c'.repeat(64)},{...row,current_ciphertext_hash:'c'.repeat(64)},{...row,owner_id:randomUUID()},
+   {...row,current_revision:'0'},{...row,revision:'2'},{...row,envelope_hash:'c'.repeat(64)},{...row,current_envelope_hash:'c'.repeat(64)}])
   await assert.rejects(readCommittedV1Outcome({query:query([bad]),intent:v}),/deployment_fence_mismatch/);
 });
