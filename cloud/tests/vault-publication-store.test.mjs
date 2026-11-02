@@ -184,7 +184,9 @@ test('publication config is default OFF and rejects enabled production, missing 
 });
 const publicationHeaders={'x-vault-schema-version':'2','x-vault-capability':'resource_acl_v2','x-publication-version':'1'};
 async function launch(env) {
- const fixture=env.PUBLICATION_READER_ENABLED==='true'&&!env.PUBLICATION_FENCE_PATH?await publicationRuntimeFixture(env.DATABASE_URL??database):null;
+ // The production server always requires independently retained history;
+ // this test-only fixture supplies it even with publication routes disabled.
+ const fixture=!env.PUBLICATION_FENCE_PATH?await publicationRuntimeFixture(env.DATABASE_URL??database):null;
  if(fixture)env={...env,PUBLICATION_FENCE_PATH:fixture.path};
  const socket=createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;
  await new Promise(r=>socket.close(r));

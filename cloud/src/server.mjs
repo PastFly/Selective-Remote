@@ -30,7 +30,7 @@ const service = new CloudService(store, runtimeConfig, mailer);
 const checkDeployment = deploymentFence
   ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
     fence: deploymentFence, candidate: currentCapabilities }))
-  : async () => {};
+  : async () => { throw Error('deployment_fence_required'); };
 const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
