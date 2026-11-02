@@ -4847,7 +4847,7 @@ export function personalVaultStatePresentation(state) {
     },
     reauthentication_required: {
       title: "Требуется восстановление доступа к Personal Vault",
-      description: "Сессия аккаунта активна, но доверенный ключ этого браузера недоступен. Подтвердите пароль аккаунта, чтобы восстановить доступ.",
+      description: "Сессия аккаунта активна, но ключ Personal Vault недоступен. Попробуйте подтвердить пароль или открыть другую вкладку, где Vault уже открыт. После сброса пароля доступ к данным может не восстановиться.",
       action: "Восстановить доступ",
     },
     restoring: {
@@ -6057,7 +6057,7 @@ export async function initializeCloudAccount({
       vaultUI.mode(state, { allowReauthentication: true });
       setText(vaultMessage, state === "uninitialized"
         ? "Сессия активна. Подтвердите пароль, чтобы создать первый зашифрованный Personal Vault."
-        : "Сессия активна, но доверенный ключ Personal Vault недоступен. Восстановите доступ паролем аккаунта или откройте другую доверенную вкладку.");
+        : "Сессия активна, но ключ Personal Vault недоступен. Попробуйте подтвердить пароль или открыть другую вкладку, где Vault уже открыт. Сброс пароля не восстанавливает ключи.");
       if (state === "reauthentication_required") await requestUnlockedVaultFromOtherTab();
       startupSession.requireCurrent();
     }

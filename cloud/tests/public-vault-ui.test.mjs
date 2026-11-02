@@ -1696,6 +1696,18 @@ test("bootstrap preserves the error that retired its current authenticated sessi
     passphrase: "synthetic passphrase", synchronize }), error => error === retired);
 });
 
+test("locked Personal Vault copy does not promise key recovery after a password reset", async () => {
+  const presentation = personalVaultStatePresentation("reauthentication_required");
+  assert.match(presentation.description, /После сброса пароля доступ к данным может не восстановиться/u);
+  const [application, i18n] = await Promise.all([
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/i18n.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(application, /Сброс пароля не восстанавливает ключи/u);
+  assert.match(i18n, /After a password reset, access to your data may not be restored/u);
+  assert.match(i18n, /Resetting your password does not recover keys/u);
+});
+
 test("Personal Vault state copy distinguishes authentication from encryption in RU and EN", async () => {
   const [html, i18n] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
@@ -1711,7 +1723,7 @@ test("Personal Vault state copy distinguishes authentication from encryption in 
   });
   assert.deepEqual(personalVaultStatePresentation("reauthentication_required"), {
     title: "Требуется восстановление доступа к Personal Vault",
-    description: "Сессия аккаунта активна, но доверенный ключ этого браузера недоступен. Подтвердите пароль аккаунта, чтобы восстановить доступ.",
+    description: "Сессия аккаунта активна, но ключ Personal Vault недоступен. Попробуйте подтвердить пароль или открыть другую вкладку, где Vault уже открыт. После сброса пароля доступ к данным может не восстановиться.",
     action: "Восстановить доступ",
   });
   assert.equal(personalVaultStatePresentation("unlocked"), null);
