@@ -48,3 +48,23 @@ func legacySingleProfileImportedWhenCollectionEmpty() throws {
     try NativeStorageValidation.finishLegacyProfileMigration(defaults)
     #expect(defaults.data(forKey: newList) == empty)
 }
+
+@Test("A nonempty profile collection is never replaced by a stale single profile")
+func legacySingleProfileDoesNotReplaceCollection() throws {
+    let suite = "SelectiveRemote.NativeNonemptyProfileMigration.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let oldList = "SelectiveRemote.connectionProfiles.v2"
+    let oldSingle = "SelectiveRemote.connectionProfile.v1"
+    let newList = try #require(NativeStorageMigration.newKey(for: oldList))
+    var current = ConnectionProfile()
+    current.host = "current.invalid"
+    let list = try JSONEncoder().encode([current])
+    let legacy = try JSONEncoder().encode(LegacyConnectionProfile(host: "stale.invalid", username: "test"))
+    defaults.set(list, forKey: oldList)
+    defaults.set(legacy, forKey: oldSingle)
+    try NativeStorageMigration.prepare(defaults)
+    try NativeStorageValidation.finishLegacyProfileMigration(defaults)
+    #expect(defaults.data(forKey: newList) == list)
+    #expect(defaults.data(forKey: oldSingle) == legacy)
+}
