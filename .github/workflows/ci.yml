@@ -113,6 +113,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Environment
         run: |
@@ -142,6 +144,16 @@ jobs:
 
       - name: Test
         run: swift test
+
+      - name: Test isolated Keychain writer regressions
+        run: |
+          python3 Tests/IntegrityFixtures/UnifiedVault/run.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/legacy_matrix.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/parallel.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/crash_lock.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/envelope_parallel.py
+          SR_TEST_LOGOUT=1 python3 Tests/IntegrityFixtures/UnifiedVault/envelope_parallel.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/logout.py
 
       - name: Test native host evidence validation
         run: python3 -m unittest discover -s scripts/tests -p 'test_staging_native_gui_host.py' -v

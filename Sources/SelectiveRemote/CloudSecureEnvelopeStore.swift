@@ -89,7 +89,10 @@ struct SelectiveRemoteCloudSecureEnvelopeStore: Sendable {
 
     func envelope(for endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
         try Self.synchronized {
-            try readUnlocked(endpoint: endpoint)
+            if storage != nil { return try readUnlocked(endpoint: endpoint) }
+            return try UnifiedCredentialVault.shared.withExclusiveAccess {
+                try readUnlocked(endpoint: endpoint)
+            }
         }
     }
 
@@ -98,15 +101,19 @@ struct SelectiveRemoteCloudSecureEnvelopeStore: Sendable {
         _ mutation: (inout SelectiveRemoteCloudSecureEnvelope) throws -> Void
     ) throws {
         try Self.synchronized {
-            var envelope = try readUnlocked(endpoint: endpoint) ?? .init()
-            let original = envelope
-            try mutation(&envelope)
-            guard envelope != original else { return }
-            if envelope.isEmpty {
-                try deleteUnlocked(endpoint: endpoint)
-            } else {
-                try writeUnlocked(envelope, endpoint: endpoint)
+            func applyMutation() throws {
+                var envelope = try readUnlocked(endpoint: endpoint) ?? .init()
+                let original = envelope
+                try mutation(&envelope)
+                guard envelope != original else { return }
+                if envelope.isEmpty {
+                    try deleteUnlocked(endpoint: endpoint)
+                } else {
+                    try writeUnlocked(envelope, endpoint: endpoint)
+                }
             }
+            if storage != nil { try applyMutation() }
+            else { try UnifiedCredentialVault.shared.withExclusiveAccess { try applyMutation() } }
         }
     }
 

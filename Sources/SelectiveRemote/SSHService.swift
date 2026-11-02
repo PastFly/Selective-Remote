@@ -1220,7 +1220,7 @@ enum SSHKeyService {
 
         if let passwordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
-            let hasCurrentSecret = KeychainService.passwordExists(reference: passwordCredential)
+            let hasCurrentSecret = try KeychainService.passwordExistsVerified(reference: passwordCredential)
             if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
                     reason: UpdateLocalization.key("ssh.touch_id.password")
@@ -1236,7 +1236,7 @@ enum SSHKeyService {
         }
         if let jumpHostPasswordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: jumpHostPasswordCredential)
-            let hasCurrentSecret = KeychainService.passwordExists(reference: jumpHostPasswordCredential)
+            let hasCurrentSecret = try KeychainService.passwordExistsVerified(reference: jumpHostPasswordCredential)
             if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
                     reason: UpdateLocalization.key("ssh.touch_id.jump_password")
