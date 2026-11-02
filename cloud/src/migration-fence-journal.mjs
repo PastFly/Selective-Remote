@@ -25,6 +25,11 @@ function tuple(value,modern){
  if(!isUUID(value.attemptID))invalid();
  return {teamID:value.teamID,vaultID:value.vaultID,attemptID:value.attemptID,manifestHash:value.manifestHash};
 }
+function v1Tuple(value){
+ if(!keys(value,['vaultKind','ownerID','vaultID','revision','ciphertextHash','envelopeHash'])||!['PERSONAL','TEAM'].includes(value.vaultKind)
+  ||!isUUID(value.ownerID)||!isUUID(value.vaultID)||!Number.isSafeInteger(value.revision)||value.revision<0||!isHash(value.ciphertextHash)||!isHash(value.envelopeHash))invalid();
+ return {vaultKind:value.vaultKind,ownerID:value.ownerID,vaultID:value.vaultID,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash};
+}
 
 // Normalized copies make ordering deterministic and prevent caller mutation across awaits.
 // Old flat records are supported as evidence, never silently treated as a commit.
@@ -37,6 +42,25 @@ export function validateFenceEvent(value){
  if(value.type==='V1_WRITER_FLOOR'){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
+ }
+ if(value.type==='V1_BASELINE'){
+  if(!keys(value,['version','type','baselineID','vaults'])||!isUUID(value.baselineID)
+   ||!Array.isArray(value.vaults)||value.vaults.length>20000)invalid();
+  const vaults=value.vaults.map(v1Tuple).sort((a,b)=>compare(a.vaultKind,b.vaultKind)||compare(a.vaultID,b.vaultID));
+  if(new Set(vaults.map(v=>v.vaultKind+':'+v.vaultID)).size!==vaults.length)invalid();
+  return {version:2,type:value.type,baselineID:value.baselineID,vaults};
+ }
+ if(value.type==='V1_PENDING_INTENT'){
+  if(!keys(value,['version','type','intentID','operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'])
+   ||!isUUID(value.intentID)||!isUUID(value.operationID)||!['PERSONAL','TEAM'].includes(value.vaultKind)
+   ||!isUUID(value.ownerID)||!isUUID(value.vaultID)||!Number.isSafeInteger(value.baseRevision)||value.baseRevision<0
+   ||!Number.isSafeInteger(value.revision)||value.revision!==value.baseRevision+1||!isHash(value.ciphertextHash)||!isHash(value.envelopeHash))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,operationID:value.operationID,vaultKind:value.vaultKind,
+   ownerID:value.ownerID,vaultID:value.vaultID,baseRevision:value.baseRevision,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash};
+ }
+ if(['V1_CONFIRMED_COMMIT','V1_PROVEN_ABORT'].includes(value.type)){
+  if(!keys(value,['version','type','intentID','intentDigest'])||!isUUID(value.intentID)||!isHash(value.intentDigest))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,intentDigest:value.intentDigest};
  }
  if(value.type==='PENDING_INTENT'){
   if(!keys(value,['version','type','intentID','operationID','kind','schemaFloor','vaults'])||!isUUID(value.intentID)||!isUUID(value.operationID))invalid();
@@ -53,19 +77,47 @@ export function validateFenceEvent(value){
 
 export function fenceIntentDigest(value){
  const event=validateFenceEvent(value);
- if(event.version===2&&event.type!=='PENDING_INTENT')invalid();
- const domain=event.version===2?'selective-remote/deployment-fence-intent/v2\0':'selective-remote/deployment-fence-intent/legacy-v1\0';
+ if(event.version===2&&!['PENDING_INTENT','V1_PENDING_INTENT'].includes(event.type))invalid();
+ const domain=event.type==='V1_PENDING_INTENT'?'selective-remote/v1-writer-fence-intent/v1\0':event.version===2?'selective-remote/deployment-fence-intent/v2\0':'selective-remote/deployment-fence-intent/legacy-v1\0';
  return createHash('sha256').update(domain).update(canonical(event)).digest('hex');
 }
 
 export function reduceFenceEvents(events){
  if(!Array.isArray(events))invalid();
  const intents=new Map(),outcomes=new Map(),committed=new Map(),pending=new Map(),generations=new Map(),vaultTeams=new Map();
- let writerFloor=0;
+ const v1Intents=new Map(),v1Outcomes=new Map(),v1Committed=new Map(),v1Pending=new Map(),v1Owners=new Map(),v1Operations=new Map();
+ let writerFloor=0,v1Baseline=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
-  if(event.type==='V1_WRITER_FLOOR'){writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
+  if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
+  if(event.type==='V1_BASELINE'){
+   if((writerFloor!==0&&!v1Baseline)||v1Intents.size||pending.size||v1Pending.size)conflict();
+   if(v1Baseline){if(!same(v1Baseline,event))conflict();continue;}
+   v1Baseline=event;
+   for(const item of event.vaults){const key=item.vaultKind+':'+item.vaultID;v1Owners.set(key,item.ownerID);v1Committed.set(key,item);}
+   continue;
+  }
+  if(event.type==='V1_PENDING_INTENT'){
+   if(writerFloor!==1||!v1Baseline||pending.size)conflict();
+   const digest=fenceIntentDigest(event),old=v1Intents.get(event.intentID);
+   const intent={...event,intentDigest:digest},key=event.vaultKind+':'+event.vaultID;
+   if(old){if(!same(old,intent))conflict();continue;}
+   if(v1Operations.has(event.operationID))conflict();
+   if(v1Owners.has(key)&&v1Owners.get(key)!==event.ownerID)conflict();
+   if([...v1Pending.values()].some(p=>p.vaultKind===event.vaultKind&&p.vaultID===event.vaultID))conflict();
+   const previous=v1Committed.get(key);
+   if(event.baseRevision!==(previous?.revision??0))conflict();
+   v1Owners.set(key,event.ownerID);v1Operations.set(event.operationID,event.intentID);v1Intents.set(event.intentID,intent);v1Pending.set(event.intentID,intent);continue;
+  }
+  if(event.type==='V1_CONFIRMED_COMMIT'||event.type==='V1_PROVEN_ABORT'){
+   const intent=v1Intents.get(event.intentID);if(!intent||intent.intentDigest!==event.intentDigest)conflict();
+   const old=v1Outcomes.get(event.intentID);if(old){if(!same(old,event))conflict();continue;}
+   if(event.type==='V1_CONFIRMED_COMMIT')v1Committed.set(intent.vaultKind+':'+intent.vaultID,
+    {vaultKind:intent.vaultKind,ownerID:intent.ownerID,vaultID:intent.vaultID,revision:intent.revision,ciphertextHash:intent.ciphertextHash,envelopeHash:intent.envelopeHash});
+   v1Pending.delete(event.intentID);v1Outcomes.set(event.intentID,event);continue;
+  }
   if(!event.version||event.type==='PENDING_INTENT'){
+   if(v1Pending.size)conflict();
    const intentDigest=fenceIntentDigest(event);
    const intent=event.version===2?{...event,intentDigest}:{version:1,type:'PENDING_INTENT',legacy:true,intentID:'legacy:'+intentDigest,
     operationID:event.attemptID,kind:'MIGRATION',schemaFloor:event.schemaFloor,
@@ -101,6 +153,6 @@ export function reduceFenceEvents(events){
   }
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
- return {...(writerFloor?{writerFloor}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
+ return {...(writerFloor?{writerFloor}:{}),...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }

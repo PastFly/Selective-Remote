@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
 import { assertV1CommitFence } from './v1-commit-fence.mjs';
+import { assertV1DataFloor } from './v1-data-fence.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
 function requireCandidate(candidate) {
@@ -21,7 +22,7 @@ function requireWriterFloor(snapshot, candidate) {
 function requireResolved(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.pending) || !Array.isArray(snapshot.committed) || !Array.isArray(snapshot.outcomes))
     throw Error('invalid_deployment_fence');
-  if (snapshot.pending.length) throw Error('deployment_fence_pending');
+  if (snapshot.pending.length || snapshot.v1Pending?.length) throw Error('deployment_fence_pending');
 }
 function samePublication(record, row) {
   if (!row || row.teamID !== record.teamID || row.vaultID !== record.vaultID || row.manifestHash !== record.manifestHash) return false;
@@ -99,7 +100,15 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   requireResolved(after);
   const afterWriterFloor = requireWriterFloor(after, candidate);
   if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
-  if (afterWriterFloor) await assertV1CommitFence(query);
+  if (afterWriterFloor) {
+    await assertV1CommitFence(query);
+    await assertV1DataFloor(query,after);
+    const final=await fence.snapshot();
+    requireResolved(final);
+    if(requireWriterFloor(final,candidate)!==afterWriterFloor
+      ||JSON.stringify([final.v1BaselineID,final.v1Committed,final.v1Outcomes])
+        !==JSON.stringify([after.v1BaselineID,after.v1Committed,after.v1Outcomes]))throw Error('deployment_v1_history_changed');
+  }
   if (!Number.isSafeInteger(after.schemaFloor) || version < after.schemaFloor
       || after.committed.some(record => version < record.schemaFloor)) throw Error('deployment_schema_floor');
   // Every active pointer must be recorded as well as every recorded pointer

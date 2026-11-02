@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {canonicalMigrationJSON,migrationHash,verifyMigrationManifest} from './migration-policy.mjs';
 import {publicationHash,verifyReaderHeader} from '../public/vault-publication-v1.js';
 import {validateFenceEvent,fenceIntentDigest} from './migration-fence-journal.mjs';
+import {v1CiphertextHash,v1EnvelopeHash,v1TeamWrappersSQL} from './v1-data-fence.mjs';
 
 const same=(a,b)=>canonicalMigrationJSON(a)===canonicalMigrationJSON(b);
 const abortProofs=new WeakMap();
@@ -14,14 +15,17 @@ export class PublicationFenceCoordinator{
     this.fence=fence;
   }
   async beforeCommit(fields){
-    const intent=validateFenceEvent({...structuredClone(fields),version:2,type:'PENDING_INTENT',intentID:randomUUID()});
+    const copy=structuredClone(fields),isV1=copy.kind==='V1';
+    if(isV1)delete copy.kind;
+    const intent=validateFenceEvent({...copy,version:2,type:isV1?'V1_PENDING_INTENT':'PENDING_INTENT',intentID:randomUUID()});
     await this.fence.append(intent);
     this.#intents.set(intent.intentID,{...structuredClone(intent),intentDigest:fenceIntentDigest(intent)});
     return structuredClone(intent);
   }
   async #pending(intentID){
     if(this.#intents.has(intentID))return this.#intents.get(intentID);
-    const intent=(await this.fence.snapshot()).pending.find(item=>item.intentID===intentID);
+    const state=await this.fence.snapshot();
+    const intent=[...state.pending,...(state.v1Pending??[])].find(item=>item.intentID===intentID);
     if(!intent)fail('deployment_fence_intent_not_found');
     this.#intents.set(intentID,structuredClone(intent));return intent;
   }
@@ -29,10 +33,12 @@ export class PublicationFenceCoordinator{
     if(typeof readCommittedOutcome!=='function')fail('deployment_fence_readback_required');
     const intent=await this.#pending(intentID),outcome=await readCommittedOutcome(structuredClone(intent));
     if(!outcome)fail('deployment_fence_pending');
-    if(outcome.kind!==intent.kind||outcome.operationID!==intent.operationID||!same(outcome.vaults,intent.vaults))fail('deployment_fence_mismatch');
+    if(intent.type==='V1_PENDING_INTENT'){
+      if(outcome.kind!=='V1'||['operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'].some(key=>outcome[key]!==intent[key]))fail('deployment_fence_mismatch');
+    }else if(outcome.kind!==intent.kind||outcome.operationID!==intent.operationID||!same(outcome.vaults,intent.vaults))fail('deployment_fence_mismatch');
     // Cache retains only the exact authenticated intent, allowing the same
     // confirmation to retry its durability barriers after a failed append.
-    await this.fence.append({version:2,type:'CONFIRMED_COMMIT',intentID,intentDigest:intent.intentDigest});
+    await this.fence.append({version:2,type:intent.type==='V1_PENDING_INTENT'?'V1_CONFIRMED_COMMIT':'CONFIRMED_COMMIT',intentID,intentDigest:intent.intentDigest});
     this.#intents.delete(intentID);
     return {status:'confirmed',intentID};
   }
@@ -41,7 +47,7 @@ export class PublicationFenceCoordinator{
     if(!provenance||provenance.coordinator!==this||provenance.intentID!==intentID)fail('invalid_deployment_abort_proof');
     const intent=await this.#pending(intentID);
     if(intent.legacy||intent.intentDigest!==provenance.intentDigest)fail('invalid_deployment_abort_proof');
-    await this.fence.append({version:2,type:'PROVEN_ABORT',intentID,intentDigest:intent.intentDigest});
+    await this.fence.append({version:2,type:intent.type==='V1_PENDING_INTENT'?'V1_PROVEN_ABORT':'PROVEN_ABORT',intentID,intentDigest:intent.intentDigest});
     this.#intents.delete(intentID);
     abortProofs.delete(proof);return {status:'aborted',intentID};
   }
@@ -50,11 +56,11 @@ export class PublicationFenceCoordinator{
       try{return await this.confirmCommit({intentID,readCommittedOutcome});}
       catch(error){if(error.message==='deployment_fence_pending')return {status:'pending',intentID};throw error;}
     }
-    const state=await this.fence.snapshot(),intent=state.pending.find(item=>item.intentID===intentID);
+    const state=await this.fence.snapshot(),intent=[...state.pending,...(state.v1Pending??[])].find(item=>item.intentID===intentID);
     if(!intent){
-      const outcome=state.outcomes.find(item=>item.intentID===intentID);
+      const outcome=[...state.outcomes,...(state.v1Outcomes??[])].find(item=>item.intentID===intentID);
       if(!outcome)fail('deployment_fence_intent_not_found');
-      return {status:outcome.type==='CONFIRMED_COMMIT'?'confirmed':'aborted',intentID};
+      return {status:['CONFIRMED_COMMIT','V1_CONFIRMED_COMMIT'].includes(outcome.type)?'confirmed':'aborted',intentID};
     }
     this.#intents.set(intentID,structuredClone(intent));
     try{return await this.confirmCommit({intentID,readCommittedOutcome});}
@@ -78,7 +84,8 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
     async confirm(){
       if(!intent)return;
       return coordinator.confirmCommit({intentID:intent.intentID,
-        readCommittedOutcome:readCommittedOutcome??(pending=>readCommittedPublicationOutcome({query,intent:pending}))});
+        readCommittedOutcome:readCommittedOutcome??(pending=>pending.type==='V1_PENDING_INTENT'
+          ?readCommittedV1Outcome({query,intent:pending}):readCommittedPublicationOutcome({query,intent:pending}))});
     },
     async rollback(){
       await query('ROLLBACK');
@@ -89,6 +96,37 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
       const result=await coordinator.proveAbort({intentID:intent.intentID,proof});abortProven=true;return result;
     },
   };
+}
+
+// Positive evidence only: a missing historical revision is unresolved, never
+// proof that a transaction aborted. The ciphertext itself is never journaled.
+export async function readCommittedV1Outcome({query,intent}){
+  const personal=intent.vaultKind==='PERSONAL';
+  if(!personal&&intent.vaultKind!=='TEAM')fail('deployment_fence_mismatch');
+  const table=personal?'personal_vaults':'shared_vaults';
+  const history=personal?'vault_revisions':'shared_vault_revisions';
+  const owner=personal?'user_id':'team_id';
+  const envelope=alias=>`jsonb_build_object('envelopeVersion',${alias}.envelope_version,'wrappedKey',${personal?`${alias}.wrapped_key`:'NULL'},'ciphertext',${alias}.ciphertext,'nonce',${alias}.nonce,'authTag',${alias}.auth_tag,'contentHash',${alias}.content_hash,'keyGeneration',${personal?'NULL':`${alias}.key_generation::text`},'wrappers',${personal?'NULL':v1TeamWrappersSQL})`;
+  const result=await query(`SELECT v.id AS vault_id,v.${owner} AS owner_id,r.revision,r.ciphertext,
+      v.revision AS current_revision,v.ciphertext AS current_ciphertext,${envelope('r')} AS envelope,${envelope('v')} AS current_envelope
+    FROM public.${table} v JOIN public.${history} r ON r.vault_id=v.id
+    WHERE v.id=$1 AND v.${owner}=$2 AND r.revision=$3`,[intent.vaultID,intent.ownerID,intent.revision]);
+  if(!Array.isArray(result?.rows))fail('deployment_fence_mismatch');
+  if(!result.rows.length)return null;
+  if(result.rows.length!==1)fail('deployment_fence_mismatch');
+  const parseRevision=value=>{
+    if(typeof value==='string'&&/^(0|[1-9][0-9]*)$/u.test(value))value=Number(value);
+    return Number.isSafeInteger(value)&&value>=0?value:null;
+  };
+  const row=result.rows[0],revision=parseRevision(row.revision),current=parseRevision(row.current_revision);
+  let historyEnvelope,currentEnvelope;
+  try{historyEnvelope=v1EnvelopeHash(row.envelope);currentEnvelope=v1EnvelopeHash(row.current_envelope);}catch{fail('deployment_fence_mismatch');}
+  if(row.vault_id!==intent.vaultID||row.owner_id!==intent.ownerID||!Number.isSafeInteger(revision)||revision!==intent.revision
+    ||!Number.isSafeInteger(current)||current!==revision||v1CiphertextHash(row.ciphertext)!==intent.ciphertextHash
+    ||historyEnvelope!==intent.envelopeHash
+    ||(current===revision&&(v1CiphertextHash(row.current_ciphertext)!==intent.ciphertextHash||currentEnvelope!==intent.envelopeHash)))fail('deployment_fence_mismatch');
+  return {kind:'V1',operationID:intent.operationID,vaultKind:intent.vaultKind,ownerID:intent.ownerID,vaultID:intent.vaultID,
+    baseRevision:intent.baseRevision,revision:intent.revision,ciphertextHash:intent.ciphertextHash,envelopeHash:intent.envelopeHash};
 }
 
 async function readGeneration(query,vault){

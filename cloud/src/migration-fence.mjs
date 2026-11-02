@@ -45,7 +45,7 @@ export class MigrationFence{
   const file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
   try{
    const snapshot=reduceFenceEvents(await this.records(file));
-   if(snapshot.pending.length)throw Error('deployment_fence_pending');
+   if(snapshot.pending.length||snapshot.v1Pending?.length)throw Error('deployment_fence_pending');
    await file.sync();
    const dir=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);
    try{await dir.sync();}finally{await dir.close();}
@@ -79,11 +79,13 @@ export class MigrationFence{
     const snapshot=reduceFenceEvents([...records,record]);
     const line=Buffer.from(key+'\n'),size=(await file.stat()).size;
     if(size+line.length>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
-    if(!record.version||record.type==='PENDING_INTENT'){
+    if(!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'){
      // Reserve the larger terminal outcome for every pending intent, including
      // legacy IDs. New work must not consume another intent's resolution space.
      const reserved=snapshot.pending.reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({
       version:2,type:'CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
+     })+'\n'),0)+(snapshot.v1Pending??[]).reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({
+      version:2,type:'V1_CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
      })+'\n'),0);
      if(size+line.length+reserved>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
     }
@@ -127,7 +129,7 @@ export class MigrationFence{
  async verifySchemaFloor(schemaVersion){return verifySchemaFloor(schemaVersion,await this.snapshot());}
  async verify({schemaVersion,publications}){
   const snapshot=await this.snapshot();verifySchemaFloor(schemaVersion,snapshot);
-  if(snapshot.pending.length)throw Error('deployment_fence_pending');
+  if(snapshot.pending.length||snapshot.v1Pending?.length)throw Error('deployment_fence_pending');
   if(!Array.isArray(publications))throw Error('deployment_fence_mismatch');
   for(const r of snapshot.committed){
    const fields=r.sequence===undefined?['teamID','vaultID','attemptID','manifestHash']:['teamID','vaultID','generationID','sequence','headerHash','manifestHash'];

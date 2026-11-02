@@ -1,19 +1,23 @@
 // Experimental database-side barrier. Do not wire its arming operation into
-// deployment: a post-barrier backup can still hide later V1 writes because the
-// independent journal does not yet retain per-Vault revision/ciphertext minima.
+// deployment: lifecycle, key-wrapper history and native storage isolation are
+// not yet complete, even though the experimental journal retains data minima.
+import { randomUUID } from 'node:crypto';
+import { readV1VaultState, assertV1DataFloor } from './v1-data-fence.mjs';
 const marker = 'selective_remote.v1_writer_protocol';
 const functionBody = `
       BEGIN
         IF pg_catalog.current_setting('selective_remote.v1_writer_protocol', true) IS DISTINCT FROM 'framed-v1' THEN
           RAISE EXCEPTION 'v1_writer_upgrade_required' USING ERRCODE = 'P0001';
         END IF;
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
       END `;
 const tables = [
-  ['personal_vaults', 'UPDATE OF revision, envelope_version, wrapped_key, ciphertext, nonce, auth_tag, content_hash'],
-  ['shared_vaults', 'UPDATE OF revision, key_generation, envelope_version, ciphertext, nonce, auth_tag, content_hash'],
-  ['vault_revisions', 'INSERT OR UPDATE'],
-  ['shared_vault_revisions', 'INSERT OR UPDATE'],
+  ['personal_vaults', 'INSERT OR DELETE OR UPDATE OF revision, envelope_version, wrapped_key, ciphertext, nonce, auth_tag, content_hash'],
+  ['shared_vaults', 'INSERT OR DELETE OR UPDATE OF revision, key_generation, envelope_version, ciphertext, nonce, auth_tag, content_hash'],
+  ['vault_revisions', 'INSERT OR UPDATE OR DELETE'],
+  ['shared_vault_revisions', 'INSERT OR UPDATE OR DELETE'],
+  ['shared_vault_key_wrappers', 'INSERT OR UPDATE OR DELETE'],
 ];
 
 export async function installV1CommitFence(pool) {
@@ -22,7 +26,7 @@ export async function installV1CommitFence(pool) {
     await client.query('BEGIN');
     // DDL waits for transactions that already modified any protected table.
     // Once it commits, later old writers cannot cross this boundary.
-    await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions IN ACCESS EXCLUSIVE MODE');
+    await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ACCESS EXCLUSIVE MODE');
     await client.query(`CREATE OR REPLACE FUNCTION public.selective_remote_require_framed_v1_writer()
       RETURNS trigger LANGUAGE plpgsql AS $$${functionBody}$$`);
     for (const [table, events] of tables) {
@@ -44,18 +48,19 @@ export async function useFramedV1Writer(client) {
 export async function holdV1CommitFence(client) {
   // Hold the table locks through COMMIT/ROLLBACK: a concurrent restore or DDL
   // cannot invalidate the verified triggers after the check and before write.
-  await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions IN ROW EXCLUSIVE MODE');
+  await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ROW EXCLUSIVE MODE');
   await assertV1CommitFence((sql, values) => client.query(sql, values));
   await useFramedV1Writer(client);
 }
 
-// Test-only candidate. Closing ingress and draining connections are necessary
-// but do not fix the missing per-Vault restore history described above.
+// Test-only candidate. Closing ingress and draining connections are necessary;
+// arming is not safe to deploy until all lifecycle and wrapper changes are journaled.
 export async function armV1CommitFence({ pool, fence }) {
   await fence.assertWritable();
   const before = await fence.snapshot();
   const floor = before?.writerFloor ?? 0;
   if (![0, 1].includes(floor) || before?.pending?.length) throw Error('deployment_writer_floor');
+  if (floor && !before.v1BaselineID) throw Error('deployment_v1_history_unavailable');
   const client = await pool.connect();
   try {
     const result = await client.query(`SELECT count(*)::int AS count FROM pg_catalog.pg_stat_activity
@@ -67,10 +72,28 @@ export async function armV1CommitFence({ pool, fence }) {
   // could be a restored older database whose lost writes must not be hidden.
   if (!floor) await installV1CommitFence(pool);
   await assertV1CommitFence((sql, values) => pool.query(sql, values));
-  if (!floor) await fence.append({ version: 2, type: 'V1_WRITER_FLOOR', writerProtocol: 1 });
+  const snapshotClient=await pool.connect();
+  try {
+    await snapshotClient.query('BEGIN');
+    await snapshotClient.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN SHARE MODE');
+    let state=await fence.snapshot();
+    if(state.v1BaselineID)await assertV1DataFloor((sql,values)=>snapshotClient.query(sql,values),state);
+    else {
+      const vaults=await readV1VaultState((sql,values)=>snapshotClient.query(sql,values));
+      await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults});
+      state=await fence.snapshot();
+      await assertV1DataFloor((sql,values)=>snapshotClient.query(sql,values),state);
+    }
+    if (!floor) await fence.append({ version: 2, type: 'V1_WRITER_FLOOR', writerProtocol: 1 });
+    await snapshotClient.query('COMMIT');
+  } catch(error) {
+    try { await snapshotClient.query('ROLLBACK'); } catch {}
+    throw error;
+  } finally { snapshotClient.release(); }
   const after = await fence.snapshot();
-  if (after?.writerFloor !== 1 || after.pending?.length) throw Error('deployment_writer_floor');
+  if (after?.writerFloor !== 1 || !after.v1BaselineID || after.pending?.length || after.v1Pending?.length) throw Error('deployment_writer_floor');
   await assertV1CommitFence((sql, values) => pool.query(sql, values));
+  await assertV1DataFloor((sql, values) => pool.query(sql, values),after);
   return { writerFloor: 1 };
 }
 
@@ -78,8 +101,8 @@ export async function armV1CommitFence({ pool, fence }) {
 // protected controller and restricted DDL privileges are still mandatory.
 export async function assertV1CommitFence(query) {
   const expected = new Map(tables.map(([name, event]) => [name, {
-    type: event.startsWith('UPDATE OF ') ? 19 : 23,
-    columns: event.startsWith('UPDATE OF ') ? event.slice(10).split(', ') : [],
+    type: 31,
+    columns: event.includes('UPDATE OF ') ? event.split('UPDATE OF ')[1].split(', ') : [],
   }]));
   const result = await query(`SELECT c.relname, t.tgtype, t.tgenabled, t.tgnargs,
       t.tgdeferrable, t.tginitdeferred, t.tgconstraint,

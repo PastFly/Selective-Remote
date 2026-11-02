@@ -2,9 +2,11 @@ import { VaultMigrationStore } from './vault-migration-store.mjs';
 import { VaultPublicationStore } from './vault-publication-store.mjs';
 import { WholePublicationStore } from './whole-publication-store.mjs';
 import { holdV1CommitFence } from './v1-commit-fence.mjs';
+import { createPublicationFenceTransaction } from './publication-fence-coordinator.mjs';
+import { assertV1DataFloor, readV1VaultState, v1CiphertextHash } from './v1-data-fence.mjs';
 import pg from "pg";
 import { AccessSurfaceStore } from "./access-surface-store.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   requireInvitationPermission,
   requireMembershipChange,
@@ -102,10 +104,11 @@ async function finishResourceMutation(client, receipt, { teamID, vaultID }, resu
 }
 
 export class PostgresStore {
-  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence } = {}) {
+  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null } = {}) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
     this.access = new AccessSurfaceStore(this.pool);
     this.writerFence = writerFence;
+    this.v1Fence = v1Fence;
   }
 
   migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
@@ -1165,9 +1168,15 @@ export class PostgresStore {
 
   async putVault(userID, deviceID, envelope) {
     const client = await this.pool.connect();
+    const fenced=this.v1Fence?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");
       await this.writerFence(client);
+      if(fenced){
+        const snapshot=await this.v1Fence.snapshot();
+        if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
+        await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
+      }
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);
       const vault = locked.rows[0];
       if (!vault) throw new Error("vault_missing");
@@ -1189,10 +1198,17 @@ export class PostgresStore {
         [vault.id, revision, envelope.envelopeVersion, envelope.wrappedKey ?? null, envelope.ciphertext,
           envelope.nonce, envelope.authTag, envelope.contentHash, deviceID],
       );
-      await client.query("COMMIT");
+      if(fenced){
+        const committed=(await readV1VaultState((sql,values)=>client.query(sql,values))).find(row=>row.vaultKind==='PERSONAL'&&row.vaultID===vault.id);
+        if(!committed)throw Error('deployment_v1_data_mismatch');
+        await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind:'PERSONAL',ownerID:userID,vaultID:vault.id,
+          baseRevision:envelope.baseRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash});
+        await fenced.commit();
+        await fenced.confirm();
+      }else await client.query("COMMIT");
       return { conflict: false, revision };
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
       throw error;
     } finally {
       client.release();
@@ -2432,8 +2448,8 @@ export class PostgresStore {
     envelope,
     idempotencyKey,
   }) {
-    return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client) => {
-      await this.writerFence(client);
+    return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client, fenced) => {
+      if(!fenced)await this.writerFence(client);
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) { await this.requireLegacyPublication(teamID, vaultID, actorUserID, client); throw new Error("team_not_found"); }
       if (!context.device_key_authorized) throw new Error("device_approval_required");
@@ -2511,6 +2527,12 @@ export class PostgresStore {
         targetVaultID: vaultID,
         metadata: { revision, keyGeneration: nextGeneration },
       });
+      if(fenced){
+        const committed=(await readV1VaultState((sql,values)=>client.query(sql,values))).find(row=>row.vaultKind==='TEAM'&&row.vaultID===vaultID);
+        if(!committed)throw Error('deployment_v1_data_mismatch');
+        await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind:'TEAM',ownerID:teamID,vaultID,
+          baseRevision:currentRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash});
+      }
       return { conflict: false, revision, keyGeneration: nextGeneration, rotationCompleted: rotating };
     });
   }
@@ -2608,8 +2630,16 @@ export class PostgresStore {
 
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
     const client = await this.pool.connect();
+    const fenced=operation==='team.vault.put'&&this.v1Fence
+      ?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");
+      if(fenced){
+        await this.writerFence(client);
+        const snapshot=await this.v1Fence.snapshot();
+        if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
+        await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
+      }
       const reservation = await client.query(
         `INSERT INTO team_mutation_receipts (actor_user_id, operation, idempotency_key, response)
          VALUES ($1, $2, $3, '{}'::jsonb)
@@ -2626,16 +2656,16 @@ export class PostgresStore {
         await client.query("COMMIT");
         return replay.rows[0]?.response ?? {};
       }
-      const response = await mutation(client);
+      const response = await mutation(client,fenced);
       await client.query(
         `UPDATE team_mutation_receipts SET response = $4::jsonb
          WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
         [actorUserID, operation, idempotencyKey, JSON.stringify(response)],
       );
-      await client.query("COMMIT");
+      if(fenced){await fenced.commit();await fenced.confirm();}else await client.query("COMMIT");
       return response;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
       throw error;
     } finally {
       client.release();

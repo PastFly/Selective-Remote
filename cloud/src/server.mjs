@@ -19,9 +19,9 @@ import { browserSessionBinding } from './browser-session-binding.mjs';
 import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write } from './v1-write-fence.mjs';
 
 const config = loadConfig();
-const store = new PostgresStore(config.databaseURL);
-const mailer = config.smtp ? createVerificationMailer(config) : null;
 const deploymentFence = config.deployment.fencePath ? new MigrationFence(config.deployment.fencePath) : null;
+const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence });
+const mailer = config.smtp ? createVerificationMailer(config) : null;
 const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
   publication: Object.freeze({ ...config.publication, fence: deploymentFence }),
   wholePublication: Object.freeze({ ...config.wholePublication, fence: deploymentFence }),

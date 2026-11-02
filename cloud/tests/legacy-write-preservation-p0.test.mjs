@@ -50,6 +50,13 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     await isolated.pool.query(`UPDATE personal_vaults SET revision=1,envelope_version=1,wrapped_key=$2,ciphertext=$3,
       nonce=$4,auth_tag=$5,content_hash=$6,updated_by_device_id=$7 WHERE user_id=$1`,
       [user, envelope.wrappedKey, envelope.ciphertext, envelope.nonce, envelope.authTag, envelope.contentHash, device]);
+    const team = randomUUID(), teamVault = randomUUID();
+    await isolated.pool.query("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,'TEST-ONLY-CODEX-P0',$2)", [team, user]);
+    await isolated.pool.query("INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,'owner')", [team, user]);
+    await isolated.pool.query(`INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,envelope_version,ciphertext,nonce,auth_tag,content_hash,updated_by_device_id)
+      VALUES($1,$2,'TEST-ONLY-CODEX-VAULT',$3,1,1,$4,$5,$6,$7,$8)`,
+      [teamVault, team, user, envelope.ciphertext, envelope.nonce, envelope.authTag, envelope.contentHash, device]);
+
     const previous = await isolated.pool.query("SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1", [user]);
     const legacyRead = await fetch(`${origin}/v1/vault`, { headers });
     assert.equal(legacyRead.status, 200);
@@ -69,7 +76,10 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1", [user])).rows, previous.rows);
     const { installV1CommitFence } = await import('../src/v1-commit-fence.mjs');
     const { MigrationFence } = await import('../src/migration-fence.mjs');
+    const { readV1VaultState } = await import('../src/v1-data-fence.mjs');
     await installV1CommitFence(isolated.pool);
+    await new MigrationFence(fence.path).append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),
+      vaults:await readV1VaultState((sql,values)=>isolated.pool.query(sql,values))});
     await new MigrationFence(fence.path).append({ version:2,type:'V1_WRITER_FLOOR',writerProtocol:1 });
     assert.equal((await fetch(`${origin}/v1/meta`)).headers.get('x-selective-v1-write-fence'),'1');
     const malformed = await fetch(`${origin}/v1/vault`, {
@@ -121,12 +131,6 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     assert.equal((await fetch(`${origin}/v1/meta`)).status,200);
 
 
-    const team = randomUUID(), teamVault = randomUUID();
-    await isolated.pool.query("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,'TEST-ONLY-CODEX-P0',$2)", [team, user]);
-    await isolated.pool.query("INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,'owner')", [team, user]);
-    await isolated.pool.query(`INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,envelope_version,ciphertext,nonce,auth_tag,content_hash,updated_by_device_id)
-      VALUES($1,$2,'TEST-ONLY-CODEX-VAULT',$3,1,1,$4,$5,$6,$7,$8)`,
-      [teamVault, team, user, envelope.ciphertext, envelope.nonce, envelope.authTag, envelope.contentHash, device]);
     const beforeTeam = await isolated.pool.query("SELECT id,revision,ciphertext FROM shared_vaults WHERE id=$1", [teamVault]);
     const { wrappedKey: _, ...teamEnvelope } = envelope;
     const oldTeamWrite = await fetch(`${origin}/v1/teams/${team}/vaults/${teamVault}`, {
