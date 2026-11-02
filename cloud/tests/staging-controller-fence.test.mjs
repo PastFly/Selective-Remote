@@ -17,7 +17,7 @@ import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import pg from 'pg';
-import {verifyControllerFixture,validateControllerSettings,validateCandidateIdentity,validateControllerCompose,validateControllerProject} from '../scripts/verify-staging-controller.mjs';
+import {verifyControllerFixture,validateControllerSettings,validateCandidateIdentity,validateCandidateCapabilities,validateControllerCompose,validateControllerProject} from '../scripts/verify-staging-controller.mjs';
 import {verifyDeploymentCompatibility,currentCapabilities} from '../src/deployment-compatibility.mjs';
 import {MigrationFence} from '../src/migration-fence.mjs';
 import {applyMigrations,loadMigrations} from '../src/migrations.mjs';
@@ -245,4 +245,24 @@ test('additional env-file dependencies are rejected even when their present valu
  const s=settings(),model=compose(s);
  for(const envFiles of [undefined,[],[{path:s.envPath,required:true},{path:'/opt/unpinned.env',required:true}], [{path:s.envPath,format:'raw'}]])
   assert.throws(()=>validateControllerCompose(model,s,{...environmentEvidence,envFiles}),/deployment_environment_mismatch/);
+});
+
+
+test('controller validates writer capability metadata without accepting unknown versions', () => {
+  assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
+  const {v1WriterProtocol: _, ...oldCandidate}=currentCapabilities;
+  assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
+  for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
+  assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
+});
+
+
+test('retained writer floor prevents old image startup before migration or traffic',async()=>{
+ const {v1WriterProtocol:_,...oldMetadata}=currentCapabilities;
+ const fence={snapshot:async()=>({schemaFloor:19,writerFloor:1,pending:[],committed:[],outcomes:[]})};
+ const f=await fixtureController({query:emptyDB,fence,metadata:oldMetadata});
+ await assert.rejects(f.promise,/deployment_writer_floor/);
+ assert.ok(!f.stages.includes('migrate'));
+ assert.ok(!f.stages.includes('open-traffic'));
+ assert.deepEqual(f.queries,[]);
 });

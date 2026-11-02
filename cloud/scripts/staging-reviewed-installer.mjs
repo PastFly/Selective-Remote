@@ -10,6 +10,12 @@ const execute=promisify(execFile),cloud='/opt/selective-remote/cloud',root='/opt
 const archiveSHA='c1bfeecf1d7404fa74728f9db72e697decbd8119ccc6f5a294d795756dfcfca7';
 const hash=value=>createHash('sha256').update(value).digest('hex'),hex=(value,n)=>typeof value==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(value);
 const fail=code=>{throw Error('staging_install_'+code);};
+export function validateInstallerCapabilities(capabilities){
+ if(!capabilities||Object.keys(capabilities).length!==6||capabilities.version!==1||capabilities.fenceVersion!==2
+  ||capabilities.maxSchemaVersion!==22||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
+  ||capabilities.v1WriterProtocol!==1)fail('candidate_code');
+ return true;
+}
 const same=(a,b)=>a&&b&&['sourceSHA','tree','imageDigest','controllerDigest'].every(key=>a[key]===b[key]);
 function identity(value){return value&&hex(value.sourceSHA,40)&&hex(value.tree,40)&&/^sha256:[a-f0-9]{64}$/.test(value.imageDigest)&&hex(value.controllerDigest,64);}
 export function validateInstallationPlan(plan){
@@ -182,8 +188,9 @@ async function runHost(phase,planPath,archivePath,dryRun){
    finally{await docker(['rm',id]);}
    if(env.NODE_VERSION!=='22.18.0')fail('runtime');
    const capabilities=JSON.parse(await readFile(join(bundle,'deployment-compatibility.json'),'utf8'));
-   if(Object.keys(capabilities).length!==5||capabilities.version!==1||capabilities.fenceVersion!==2||capabilities.maxSchemaVersion!==22||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1)fail('candidate_code');
+   validateInstallerCapabilities(capabilities);
    for(const file of ['staging-controller.sh','verify-staging-controller.mjs','staging-migration-operator.sh','staging-migration-operator-helper.mjs','staging-vault-inventory.mjs'])if(!(await lstat(join(bundle,'scripts',file))).isFile())fail('candidate_code');
+   if(!(await lstat(join(bundle,'src','v1-commit-fence.mjs'))).isFile())fail('candidate_code');
    Object.assign(env,{ALLOW_REGISTRATION:'false',PUBLICATION_ENVIRONMENT:'staging',PUBLICATION_READER_ENABLED:'false',WHOLE_PUBLICATION_ENABLED:'false',PUBLICATION_FENCE_PATH:'/publication-fence/journal'});
    delete env.STAGING_REGISTRATION_EMAIL_ALLOWLIST;delete env.PUBLICATION_ALLOWED_VAULT_IDS;
    await save(join(run,'effective.env'),envText(env));const envDigest=hash(await privateFile(join(run,'effective.env')));

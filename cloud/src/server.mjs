@@ -59,14 +59,15 @@ async function route(request, response) {
   const url = new URL(request.url, config.publicOrigin);
   const method = request.method ?? "GET";
   if (method === "GET" && url.pathname === "/healthz") return sendJSON(response, 200, { status: "ok" });
-  try { await checkDeployment(); }
+  let deploymentEvidence;
+  try { deploymentEvidence = await checkDeployment(); }
   catch { return sendError(response, 503, "publication_guard_unavailable"); }
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
     return sendJSON(response, 200, { status: "ready" });
   }
   if (method === "GET" && url.pathname === "/v1/meta") {
-    response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
+    if (deploymentEvidence?.writerFloor === 1) response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "GET" && url.pathname === "/v1/auth/username-availability") {
@@ -138,6 +139,9 @@ async function route(request, response) {
     if (!browserBinding.allowed) return sendError(response, 409, "browser_session_changed");
     if (v1WriteRequiresFence(method, url.pathname) && !v1WriteFenceAccepted(request.headers)) {
       return sendError(response, 426, "vault_client_upgrade_required");
+    }
+    if (v1WriteRequiresFence(method, url.pathname) && deploymentEvidence?.writerFloor !== 1) {
+      return sendError(response, 503, "vault_write_fence_unavailable");
     }
     if (method === "GET" && url.pathname === "/v1/me") {
       response.setHeader("X-Selective-Session-Binding", browserBinding.binding);

@@ -19,7 +19,7 @@ function fixture(respond) {
       return respond(sql, parameters);
     },
   };
-  return { store: new PostgresStore("unused", pool), queries };
+  return { store: new PostgresStore("unused", pool, { writerFence: async () => {} }), queries };
 }
 
 const actorUserID = "1f386e3d-d7b7-4365-a116-19f68e7f512d";

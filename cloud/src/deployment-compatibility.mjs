@@ -1,13 +1,22 @@
 import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
+import { assertV1CommitFence } from './v1-commit-fence.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
 function requireCandidate(candidate) {
   const keys = ['fenceVersion', 'maxSchemaVersion', 'readerProjectionVersion', 'version', 'wholePublicationVersion'];
-  if (!candidate || Object.keys(candidate).sort().join(',') !== keys.join(',')
+  const legacy = candidate && Object.keys(candidate).sort().join(',') === keys.join(',');
+  const writerAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol'].sort().join(',')
+    && candidate.v1WriterProtocol === 1;
+  if ((!legacy && !writerAware)
       || candidate.version !== 1 || candidate.fenceVersion !== 2 || candidate.maxSchemaVersion !== 22
       || candidate.readerProjectionVersion !== 1 || candidate.wholePublicationVersion !== 1)
     throw Error('deployment_code_floor');
+}
+function requireWriterFloor(snapshot, candidate) {
+  const floor = snapshot?.writerFloor ?? 0;
+  if (![0, 1].includes(floor) || floor > (candidate.v1WriterProtocol ?? 0)) throw Error('deployment_writer_floor');
+  return floor;
 }
 function requireResolved(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.pending) || !Array.isArray(snapshot.committed) || !Array.isArray(snapshot.outcomes))
@@ -70,13 +79,16 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (!['traffic', 'maintenance-upgrade'].includes(mode)) throw Error('invalid_deployment_mode');
   const before = await fence.snapshot();
   requireResolved(before);
+  const beforeWriterFloor = requireWriterFloor(before, candidate);
   const version = await readMigrationSchemaVersion(query);
   if (version > candidate.maxSchemaVersion) throw Error('deployment_schema_floor');
   // Explicit maintenance keeps traffic closed. Only a pristine journal may
   // forward-upgrade an old V1 database; a retained intent/floor cannot be erased.
   if (mode === 'maintenance-upgrade' && version < 19 && !before.committed.length && !before.outcomes.length) {
+    if (beforeWriterFloor) throw Error('deployment_writer_floor');
     const after = await fence.snapshot();
     requireResolved(after);
+    if (requireWriterFloor(after, candidate)) throw Error('deployment_writer_floor');
     if (after.committed.length || after.outcomes.length) throw Error('deployment_schema_floor');
     return { compatible: true, schemaVersion: version, maintenanceOnly: true };
   }
@@ -85,6 +97,9 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const publications = await readActivePublications(query, version);
   const after = await fence.snapshot();
   requireResolved(after);
+  const afterWriterFloor = requireWriterFloor(after, candidate);
+  if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
+  if (afterWriterFloor) await assertV1CommitFence(query);
   if (!Number.isSafeInteger(after.schemaFloor) || version < after.schemaFloor
       || after.committed.some(record => version < record.schemaFloor)) throw Error('deployment_schema_floor');
   // Every active pointer must be recorded as well as every recorded pointer
@@ -99,5 +114,5 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (publications.length !== after.committed.length
       || after.committed.some(record => !samePublication(record, byScope.get(`${record.teamID}\0${record.vaultID}`))))
     throw Error('deployment_fence_mismatch');
-  return { compatible: true, schemaVersion: version };
+  return { compatible: true, schemaVersion: version, ...(afterWriterFloor ? { writerFloor: afterWriterFloor } : {}) };
 }

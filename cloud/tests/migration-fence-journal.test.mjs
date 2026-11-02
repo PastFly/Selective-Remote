@@ -197,3 +197,24 @@ test('assertWritable refuses missing symlink readonly storage and barrier failur
  }
  await mkdir(path+'.lock');await assert.rejects(fence.assertWritable(),/deployment_fence_locked/);
 });
+
+test('a retained V1 writer floor is monotonic, idempotent and fails closed on malformed records', async () => {
+  const { reduceFenceEvents } = await journal();
+  const floor = { version: 2, type: 'V1_WRITER_FLOOR', writerProtocol: 1 };
+  const once = reduceFenceEvents([floor]);
+  assert.equal(once.writerFloor, 1);
+  assert.equal(reduceFenceEvents([floor, floor]).writerFloor, 1);
+  for (const malformed of [{ ...floor, writerProtocol: 0 }, { ...floor, writerProtocol: 2 }, { ...floor, extra: true }]) {
+    assert.throws(() => reduceFenceEvents([malformed]), /invalid_deployment_fence/);
+  }
+});
+
+test('writer floor survives journal reopen and duplicate append', async t => {
+  const { path, fence } = await fixture(t);
+  const floor = { version: 2, type: 'V1_WRITER_FLOOR', writerProtocol: 1 };
+  await fence.append(floor);
+  const first = await readFile(path);
+  await fence.append(floor);
+  assert.deepEqual(await readFile(path), first);
+  assert.equal((await new MigrationFence(path).snapshot()).writerFloor, 1);
+});

@@ -60,7 +60,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        RETURNING id, email`,
     );
     const byEmail = Object.fromEntries(users.rows.map((row) => [row.email, row.id]));
-    const store = new PostgresStore(databaseURL, pool);
+    const store = new PostgresStore(databaseURL, pool, { writerFence: async () => {} });
 
     const created = await store.createTeam({
       actorUserID: byEmail["owner@example.com"],
@@ -1110,7 +1110,7 @@ test("new Team admits only its creator's current eligible device without global 
         CASE WHEN $3::text IS NULL THEN NULL ELSE now() END,
         CASE WHEN $5 THEN now() ELSE NULL END, CASE WHEN $6 THEN now() ELSE NULL END)`,
     [id, userID, hasKey ? publicKey : null, hasKey ? 'p256-ecdh-v1' : null, isApproved, isRevoked]);
-    const store = new PostgresStore(databaseURL, pool), service = new CloudService(store, {});
+    const store = new PostgresStore(databaseURL, pool, { writerFence: async () => {} }), service = new CloudService(store, {});
     await assert.rejects(store.bootstrapDeviceKey({ actorUserID, actorDeviceID: current,
       expectedPublicKey: publicKey, idempotencyKey: `creator:bootstrap:${suffix}` }), /device_approval_required/);
 

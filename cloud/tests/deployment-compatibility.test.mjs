@@ -152,3 +152,17 @@ test('only explicit empty-journal maintenance can upgrade a pre019 DB; never tra
   await assert.rejects(verifyDeploymentCompatibility({ ...scenario({ schema: '12', committed: [a] }), candidate, mode: 'maintenance-upgrade' }), /deployment_schema_floor/);
   await assert.rejects(verifyDeploymentCompatibility({ ...scenario(), candidate, mode: 'unknown' }), /invalid_deployment_mode/);
 });
+
+test('a retained writer floor denies an old candidate before database access', async () => {
+  const s = scenario();
+  s.fence.snapshot = async () => ({ schemaFloor:19, writerFloor:1, committed:[], pending:[], outcomes:[] });
+  const { v1WriterProtocol: _, ...oldCandidate } = candidate;
+  await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: oldCandidate }), /deployment_writer_floor/);
+  assert.deepEqual(s.events, []);
+});
+
+test('a writer-capable candidate cannot pass an armed floor without the database barrier', async () => {
+  const s = scenario();
+  s.fence.snapshot = async () => ({ schemaFloor:19, writerFloor:1, committed:[], pending:[], outcomes:[] });
+  await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: { ...candidate, v1WriterProtocol:1 } }), /v1_writer_fence_missing/);
+});

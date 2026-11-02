@@ -34,6 +34,10 @@ export function validateFenceEvent(value){
   const {schemaFloor,...v}=value;return {...tuple(v,false),schemaFloor};
  }
  if(!object(value)||value.version!==2)invalid();
+ if(value.type==='V1_WRITER_FLOOR'){
+  if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
+  return {version:2,type:value.type,writerProtocol:value.writerProtocol};
+ }
  if(value.type==='PENDING_INTENT'){
   if(!keys(value,['version','type','intentID','operationID','kind','schemaFloor','vaults'])||!isUUID(value.intentID)||!isUUID(value.operationID))invalid();
   if(!((value.kind==='MIGRATION'&&[19,20].includes(value.schemaFloor))||(value.kind==='PUBLICATION'&&value.schemaFloor===22)))invalid();
@@ -57,8 +61,10 @@ export function fenceIntentDigest(value){
 export function reduceFenceEvents(events){
  if(!Array.isArray(events))invalid();
  const intents=new Map(),outcomes=new Map(),committed=new Map(),pending=new Map(),generations=new Map(),vaultTeams=new Map();
+ let writerFloor=0;
  for(const raw of events){
   const event=validateFenceEvent(raw);
+  if(event.type==='V1_WRITER_FLOOR'){writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
   if(!event.version||event.type==='PENDING_INTENT'){
    const intentDigest=fenceIntentDigest(event);
    const intent=event.version===2?{...event,intentDigest}:{version:1,type:'PENDING_INTENT',legacy:true,intentID:'legacy:'+intentDigest,
@@ -95,6 +101,6 @@ export function reduceFenceEvents(events){
   }
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
- return {schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
+ return {...(writerFloor?{writerFloor}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }

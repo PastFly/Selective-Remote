@@ -3,7 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import test from 'node:test';
 import { PostgresStore } from '../src/postgres-store.mjs';
 import { isolatedPublicationDatabase } from './publication-runtime-fixture.mjs';
-import { installV1CommitFence, useFramedV1Writer } from '../src/v1-commit-fence.mjs';
+import { installV1CommitFence, useFramedV1Writer, assertV1CommitFence } from '../src/v1-commit-fence.mjs';
 
 test('database writer barrier drains in-flight legacy writes and rejects later legacy commits', {
   skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
@@ -17,6 +17,7 @@ test('database writer barrier drains in-flight legacy writes and rejects later l
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES ($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')", [user]);
     await db.pool.query("INSERT INTO teams(id,name,created_by_user_id) VALUES ($1,'TEST-ONLY-CODEX-FENCE',$2)", [team,user]);
     await db.pool.query("INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,envelope_version,ciphertext,nonce,auth_tag,content_hash) VALUES ($1,$2,'TEST-ONLY-CODEX-FENCE',$3,1,1,'c2VlZA','bm9uY2U','dGFn','aGFzaA')", [vault,team,user]);
+    await assert.rejects(assertV1CommitFence((sql,values)=>db.pool.query(sql,values)), /v1_writer_fence_missing/);
     old = await db.pool.connect(); writer = await db.pool.connect(); late = await db.pool.connect();
     await late.query('BEGIN');
     await old.query('BEGIN');
@@ -27,6 +28,15 @@ test('database writer barrier drains in-flight legacy writes and rejects later l
     assert.equal(installed, false, 'installation must wait for old write transactions');
     await old.query('COMMIT');
     await barrier;
+    await assertV1CommitFence((sql,values)=>db.pool.query(sql,values));
+    await db.pool.query('ALTER TABLE public.personal_vaults DISABLE TRIGGER selective_remote_framed_v1_writer');
+    await assert.rejects(assertV1CommitFence((sql,values)=>db.pool.query(sql,values)), /v1_writer_fence_missing/);
+    await db.pool.query('ALTER TABLE public.personal_vaults ENABLE TRIGGER selective_remote_framed_v1_writer');
+    await assertV1CommitFence((sql,values)=>db.pool.query(sql,values));
+    await db.pool.query("CREATE OR REPLACE FUNCTION public.selective_remote_require_framed_v1_writer() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$");
+    await assert.rejects(assertV1CommitFence((sql,values)=>db.pool.query(sql,values)), /v1_writer_fence_missing/);
+    await installV1CommitFence(db.pool);
+    await assertV1CommitFence((sql,values)=>db.pool.query(sql,values));
     await assert.rejects(late.query('UPDATE personal_vaults SET revision=4 WHERE user_id=$1',[user]), /v1_writer_upgrade_required/, 'transaction begun before installation must not write after it');
     await late.query('ROLLBACK');
     const before = (await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1', [user])).rows;
@@ -109,4 +119,151 @@ test('failed installation leaves no partial database barrier', {
     assert.equal(triggers.rows[0].n,0,'all DDL must roll back');
     await db.pool.query('UPDATE personal_vaults SET updated_at=now() WHERE user_id=$1',[user]);
   } finally { await db.cleanup(); }
+});
+
+test('retained writer floor denies an actual pre-barrier PostgreSQL backup restore', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 120000,
+}, async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { MigrationFence } = await import('../src/migration-fence.mjs');
+  const { currentCapabilities, verifyDeploymentCompatibility } = await import('../src/deployment-compatibility.mjs');
+  const { publicationRuntimeFixture } = await import('./publication-runtime-fixture.mjs');
+  const exec=promisify(execFile), directory=await mkdtemp(join(tmpdir(),'sr-v1-fence-restore-'));
+  const original=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  let restored, fixture;
+  try {
+    const user=randomUUID();
+    await original.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'restore-p0@example.test','restore_p0_test',now())",[user]);
+    await original.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
+    const before=(await original.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
+    const archive=join(directory,'before-fence.dump');
+    try { await exec(process.env.PG_DUMP_PATH??'pg_dump',['--format=custom','--no-owner','--no-acl','--file',archive,original.databaseURL]); }
+    catch { throw Error('synthetic_pg_dump_failed'); }
+    fixture=await publicationRuntimeFixture(original.databaseURL);
+    await installV1CommitFence(original.pool);
+    const fence=new MigrationFence(fixture.path);
+    await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
+    const guard=pool=>verifyDeploymentCompatibility({query:(sql,values)=>pool.query(sql,values),fence,candidate:currentCapabilities});
+    assert.equal((await guard(original.pool)).writerFloor,1);
+    const {v1WriterProtocol:_,...oldCandidate}=currentCapabilities;
+    await assert.rejects(verifyDeploymentCompatibility({query:(sql,values)=>original.pool.query(sql,values),fence,candidate:oldCandidate}),/deployment_writer_floor/);
+    restored=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+    await restored.pool.query('DROP SCHEMA public CASCADE');
+    await restored.pool.query('CREATE SCHEMA public');
+    try { await exec(process.env.PG_RESTORE_PATH??'pg_restore',['--exit-on-error','--no-owner','--no-acl','--dbname',restored.databaseURL,archive]); }
+    catch { throw Error('synthetic_pg_restore_failed'); }
+    assert.deepEqual((await restored.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,before);
+    await assert.rejects(guard(restored.pool),/v1_writer_fence_missing/);
+  } finally { await fixture?.cleanup(); await restored?.cleanup(); await original.cleanup(); await rm(directory,{recursive:true,force:true}); }
+});
+
+test('current writer holds barrier integrity until its transaction commits', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  let release;
+  try {
+    const user=randomUUID(),device=randomUUID();
+    await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-commit@example.test','p0_commit_test',now())",[user]);
+    await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
+    await installV1CommitFence(db.pool);
+    let reached;
+    const atWrite=new Promise(resolve=>{reached=resolve;});
+    const pause=new Promise(resolve=>{release=resolve;});
+    const pool={async connect(){const c=await db.pool.connect();return {
+      async query(sql,values){if(sql.includes('SELECT id, revision FROM personal_vaults')){reached();await pause;}return c.query(sql,values);},
+      release(){c.release();},
+    };}};
+    const store=new PostgresStore(null,pool);
+    const write=store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'});
+    await atWrite;
+    let tampered=false;
+    const disable=db.pool.query('ALTER TABLE public.personal_vaults DISABLE TRIGGER selective_remote_framed_v1_writer').then(()=>{tampered=true;});
+    await new Promise(resolve=>setTimeout(resolve,150));
+    try { assert.equal(tampered,false,'barrier DDL must wait until the writer transaction ends'); } finally { release(); release=null; }
+    assert.deepEqual(await write,{conflict:false,revision:2});
+    await disable;
+    await assert.rejects(assertV1CommitFence((sql,values)=>db.pool.query(sql,values)),/v1_writer_fence_missing/);
+  } finally { release?.(); await db.cleanup(); }
+});
+
+test('arming fails closed with an undrained writer and retains the floor only after barrier verification', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const { armV1CommitFence }=await import('../src/v1-commit-fence.mjs');
+  const { MigrationFence }=await import('../src/migration-fence.mjs');
+  const { publicationRuntimeFixture }=await import('./publication-runtime-fixture.mjs');
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let fixture,blocker;
+  try {
+    fixture=await publicationRuntimeFixture(db.databaseURL);
+    const fence=new MigrationFence(fixture.path);
+    blocker=await db.pool.connect();
+    await blocker.query('BEGIN');
+    await assert.rejects(armV1CommitFence({pool:db.pool,fence}),/v1_writer_not_drained/);
+    assert.equal((await fence.snapshot()).writerFloor,undefined);
+    await assert.rejects(assertV1CommitFence((sql,values)=>db.pool.query(sql,values)),/v1_writer_fence_missing/);
+    await blocker.query('ROLLBACK');blocker.release(true);blocker=null;
+    assert.equal((await armV1CommitFence({pool:db.pool,fence})).writerFloor,1);
+    assert.equal((await fence.snapshot()).writerFloor,1);
+    assert.equal((await armV1CommitFence({pool:db.pool,fence})).writerFloor,1,'repeat is idempotent');
+    await assertV1CommitFence((sql,values)=>db.pool.query(sql,values));
+    await db.pool.query('ALTER TABLE public.personal_vaults DISABLE TRIGGER selective_remote_framed_v1_writer');
+    await assert.rejects(armV1CommitFence({pool:db.pool,fence}),/v1_writer_fence_missing/,'a retained floor must never repair a restored or altered database silently');
+    assert.equal((await fence.snapshot()).writerFloor,1);
+  } finally { if(blocker){try{await blocker.query('ROLLBACK');}catch{}blocker.release(true);} await fixture?.cleanup();await db.cleanup(); }
+});
+
+test('arming interruption never exposes an unprotected current writer', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const { armV1CommitFence }=await import('../src/v1-commit-fence.mjs');
+  const { MigrationFence }=await import('../src/migration-fence.mjs');
+  const { publicationRuntimeFixture }=await import('./publication-runtime-fixture.mjs');
+  for (const afterAppend of [false,true]) {
+    const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let fixture;
+    try {
+      fixture=await publicationRuntimeFixture(db.databaseURL);
+      const fence=new MigrationFence(fixture.path);
+      const failing={assertWritable:()=>fence.assertWritable(),snapshot:()=>fence.snapshot(),
+        async append(event){if(afterAppend)await fence.append(event);throw Error('synthetic_interruption');}};
+      await assert.rejects(armV1CommitFence({pool:db.pool,fence:failing}),/synthetic_interruption/);
+      await assertV1CommitFence((sql,values)=>db.pool.query(sql,values));
+      assert.equal((await fence.snapshot()).writerFloor,afterAppend?1:undefined);
+      assert.equal((await armV1CommitFence({pool:db.pool,fence})).writerFloor,1);
+    } finally { await fixture?.cleanup();await db.cleanup(); }
+  }
+});
+
+test('an older post-floor backup must not serve after newer V1 data was committed', {skip:!process.env.TEST_DATABASE_URL,todo:'per-Vault V1 restore history is not implemented',timeout:60000}, async()=>{
+ const {mkdtemp,rm}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const {join}=await import('node:path');
+ const {execFile}=await import('node:child_process');
+ const {promisify}=await import('node:util');
+ const {MigrationFence}=await import('../src/migration-fence.mjs');
+ const {publicationRuntimeFixture}=await import('./publication-runtime-fixture.mjs');
+ const {verifyDeploymentCompatibility,currentCapabilities}=await import('../src/deployment-compatibility.mjs');
+ const original=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL),dir=await mkdtemp(join(tmpdir(),'sr-v1-post-floor-'));let restored,fixture;
+ try{
+  const user=randomUUID(),device=randomUUID();
+  await original.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-postfloor@example.test','p0_postfloor',now())",[user]);
+  await original.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+  await original.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
+  fixture=await publicationRuntimeFixture(original.databaseURL);const fence=new MigrationFence(fixture.path);
+  await installV1CommitFence(original.pool);await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
+  const exec=promisify(execFile),archive=join(dir,'post-floor.dump');await exec('pg_dump',['--format=custom','--no-owner','--no-acl','--file',archive,original.databaseURL]);
+  const store=new PostgresStore(null,original.pool);
+  assert.equal((await store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'})).revision,2);
+  restored=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);await restored.pool.query('DROP SCHEMA public CASCADE');await restored.pool.query('CREATE SCHEMA public');
+  await exec('pg_restore',['--exit-on-error','--no-owner','--no-acl','--dbname',restored.databaseURL,archive]);
+  const old=(await restored.pool.query('SELECT revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows[0];
+  assert.equal(Number(old.revision),1);
+  const guard=()=>verifyDeploymentCompatibility({query:(sql,values)=>restored.pool.query(sql,values),fence,candidate:currentCapabilities});
+  await assert.rejects(guard,/deployment|fence|rollback/,'restored older V1 data must not be accepted');
+ }finally{await fixture?.cleanup();await restored?.cleanup();await original.cleanup();await rm(dir,{recursive:true,force:true});}
 });
