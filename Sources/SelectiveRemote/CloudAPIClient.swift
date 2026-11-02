@@ -46,6 +46,11 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
             )
         case let .serviceError(status, code):
             switch code {
+            case "vault_client_upgrade_required":
+                UpdateLocalization.text(
+                    ru: "Обновите приложение или сервер Cloud перед синхронизацией. Синхронизация остановлена.",
+                    en: "Update the app or Cloud server before synchronizing. Synchronization has stopped."
+                )
             case "invalid_credentials":
                 UpdateLocalization.text(
                     ru: "Неверная электронная почта или пароль.",
@@ -115,6 +120,13 @@ struct SelectiveRemoteCloudMetadata: Codable, Equatable, Sendable {
     var apiVersion: Int
     var vaultSchemaVersion: Int
     var registrationEnabled: Bool
+}
+
+struct SelectiveRemoteV1WriteFrame<Envelope: Encodable>: Encodable {
+    let protocolName = "framed-v1"
+    let envelope: Envelope
+
+    enum CodingKeys: String, CodingKey { case protocolName = "protocol", envelope }
 }
 
 struct SelectiveRemoteCloudUser: Codable, Equatable, Sendable {
@@ -442,6 +454,24 @@ actor SelectiveRemoteCloudAPIClient {
             throw SelectiveRemoteCloudError.incompatibleAPI(metadata.apiVersion)
         }
         return metadata
+    }
+
+    func requireV1WriteFence(endpoint: URL, session: SelectiveRemoteCloudSessionBinding) async throws {
+        guard session.endpoint == endpoint else { throw CancellationError() }
+        try checkSession(session)
+        try boundPublicationSession?.check()
+        var request = URLRequest(url: endpoint.appending(path: "v1/meta"))
+        request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        let (_, response) = try await dataLoader(request)
+        try checkSession(session)
+        try boundPublicationSession?.check()
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"
+        else { throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required") }
     }
 
     func hasStoredSession(endpoint: URL) -> Bool {
@@ -1114,13 +1144,19 @@ actor SelectiveRemoteCloudAPIClient {
               Self.validIdempotencyKey(idempotencyKey),
               uploadIsValid
         else { throw SelectiveRemoteCloudError.invalidRequest }
+        let session = try sessionBinding(endpoint: endpoint)
+        try await requireV1WriteFence(endpoint: endpoint, session: session)
+        try checkSession(session)
         let (data, http) = try await authorizedResponse(
             endpoint: endpoint,
             path: "v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)",
             method: "PUT",
-            body: try encoder.encode(upload),
-            headers: ["Idempotency-Key": idempotencyKey]
+            body: try encoder.encode(SelectiveRemoteV1WriteFrame(envelope: upload)),
+            headers: ["Idempotency-Key": idempotencyKey, "X-Selective-V1-Write-Fence": "1"]
         )
+        if http.statusCode == 426 || (http.statusCode == 400 && (try? decoder.decode(CloudServiceError.self, from: data).error) == "invalid_vault_envelope") {
+            throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required")
+        }
         guard http.statusCode == 200 || http.statusCode == 409,
               Self.validTeamVaultWriteJSON(data, conflict: http.statusCode == 409),
               let response = try? decoder.decode(TeamVaultWriteResponse.self, from: data),

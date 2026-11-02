@@ -129,6 +129,7 @@ test("authenticated client keeps its bearer token in memory and uses only the pe
           deviceID: deviceA,
         });
       }
+      if (path === "/v1/meta") return Response.json({}, { headers: { "X-Selective-V1-Write-Fence": "1" } });
       if (path === "/v1/vault" && options.method === "PUT") {
         return jsonResponse(200, { conflict: false, revision: 1 });
       }
@@ -148,8 +149,9 @@ test("authenticated client keeps its bearer token in memory and uses only the pe
   assert.equal(calls.length, 1, "unsupported scopes must fail before a network request");
 
   await client.putVault(personalVaultScope, envelope);
-  assert.equal(calls[1].options.headers.Authorization, `Bearer ${token}`);
-  assert.equal(calls[1].options.credentials, "same-origin");
+  const write = calls.find(call => call.path === "/v1/vault" && call.options.method === "PUT");
+  assert.equal(write.options.headers.Authorization, `Bearer ${token}`);
+  assert.equal(write.options.credentials, "same-origin");
   await client.logout();
   assert.equal(client.session(), null);
 });
@@ -430,6 +432,7 @@ test("a cookie replaced by another tab cannot authorize the old tab's Vault writ
   const newBinding = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   let cookieBinding = oldBinding, mutations = 0;
   const client = createAuthenticatedVaultClient({ sessionStorageValue: bindingStorage(oldBinding), fetchValue: async (path, options = {}) => {
+    if (path === "/v1/meta") return Response.json({}, { headers: { "X-Selective-V1-Write-Fence": "1" } });
     if (path === "/v1/me") return new Response(JSON.stringify({
       id: userID, deviceID: deviceA, email: "user@example.invalid",
     }), { status: 200, headers: { "Content-Type": "application/json", "X-Selective-Session-Binding": cookieBinding } });

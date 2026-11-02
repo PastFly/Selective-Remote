@@ -7,6 +7,15 @@ import { IDBFactory } from "./approved-idb-fixture.mjs";
 import { encryptVaultPayload } from "../public/vault-crypto.js";
 import { capturePersonalVaultSession, synchronizeVault } from "../public/vault-sync.js";
 import * as application from "../public/app.js";
+
+test("writer compatibility errors tell Personal and Team users to update without clearing data", async () => {
+  const message = application.vaultStorageCompatibilityMessage("vault_client_upgrade_required");
+  assert.match(message, /Обновите/u);
+  assert.match(message, /Не очищайте данные браузера/u);
+  assert.equal(application.teamVaultSynchronizationErrorMessage("vault_client_upgrade_required"), message);
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.match(i18n, /Update the app or Cloud server before synchronizing/u);
+});
 import {
   accountVaultPassphrase,
   appearancePreference,

@@ -707,6 +707,9 @@ export function teamVaultRecoveryMode({
 }
 
 export function vaultStorageCompatibilityMessage(code) {
+  if (code === "vault_client_upgrade_required") {
+    return "Обновите приложение или сервер Cloud перед синхронизацией. Синхронизация остановлена. Не очищайте данные браузера.";
+  }
   if (code === "vault_storage_upgrade_confirmation_required" || code === "vault_storage_upgrade_cancelled") {
     return "Локальное хранилище Cloud не открыто. Сохраните изменения в других вкладках, закройте их и повторите открытие. Сохранённые данные не изменены.";
   }

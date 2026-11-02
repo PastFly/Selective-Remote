@@ -871,6 +871,9 @@ struct CloudMacOSFoundationTests {
         let store = SelectiveRemoteCloudMemoryTokenStore()
         store.saveToken(token, for: endpoint)
         let stub = CloudHTTPStub { request in
+            if request.url?.path == "/v1/meta" {
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
             switch (request.httpMethod, request.url?.path) {
             case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/vaults"):
@@ -929,6 +932,10 @@ struct CloudMacOSFoundationTests {
                 ])
             case ("PUT", "/v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)"):
                 #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == "macos:team:vault:synthetic-1")
+                #expect(request.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1")
+                let body = try #require(request.httpBody)
+                let frame = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                #expect(frame["protocol"] as? String == "framed-v1")
                 #expect(request.httpBody.map { String(decoding: $0, as: UTF8.self) }?.contains("schemaVersion") == false)
                 return Self.response(request, status: 409, json: [
                     "conflict": true, "revision": 6, "keyGeneration": 7

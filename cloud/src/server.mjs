@@ -16,6 +16,7 @@ import {wholePublicationRoute,runWholePublicationRoute} from './whole-publicatio
 import { MigrationFence } from './migration-fence.mjs';
 import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 import { browserSessionBinding } from './browser-session-binding.mjs';
+import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write } from './v1-write-fence.mjs';
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
@@ -65,6 +66,7 @@ async function route(request, response) {
     return sendJSON(response, 200, { status: "ready" });
   }
   if (method === "GET" && url.pathname === "/v1/meta") {
+    response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "GET" && url.pathname === "/v1/auth/username-availability") {
@@ -134,6 +136,9 @@ async function route(request, response) {
     const browserBinding = browserSessionBinding({ sessionID: session.session_id, bearer, cookie, method,
       path: url.pathname, supplied: request.headers["x-selective-session-binding"] });
     if (!browserBinding.allowed) return sendError(response, 409, "browser_session_changed");
+    if (v1WriteRequiresFence(method, url.pathname) && !v1WriteFenceAccepted(request.headers)) {
+      return sendError(response, 426, "vault_client_upgrade_required");
+    }
     if (method === "GET" && url.pathname === "/v1/me") {
       response.setHeader("X-Selective-Session-Binding", browserBinding.binding);
     }
@@ -275,7 +280,7 @@ async function route(request, response) {
     }
     if (method === "PUT" && url.pathname === "/v1/vault") {
       try {
-        const result = await service.putVault(session, await readJSON(request));
+        const result = await service.putVault(session, unwrapV1Write(await readJSON(request)));
         return result.conflict ? sendJSON(response, 409, result) : sendJSON(response, 200, result);
       } catch (error) {
         return handleOperationError(response, error);
@@ -763,7 +768,7 @@ async function route(request, response) {
             session,
             teamVaultMatch[1],
             teamVaultMatch[2],
-            await readJSON(request),
+            unwrapV1Write(await readJSON(request)),
             idempotencyKey(request),
           );
           return sendJSON(response, result.conflict ? 409 : 200, result);

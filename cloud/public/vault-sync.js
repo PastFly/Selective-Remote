@@ -556,6 +556,21 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
   const identityListeners = new Set();
   function invalidateIdentity(cause = undefined) { sessionEpoch++; for (const listener of identityListeners) listener(cause); }
 
+  async function requireV1WriteFence() {
+    const epoch = sessionEpoch, account = user?.id, device = currentDeviceID;
+    if (!account) throw new Error("authentication_required");
+    const requireCurrent = () => {
+      if (sessionEpoch !== epoch || user?.id !== account || currentDeviceID !== device) throw new Error("authentication_required");
+    };
+    const response = await fetchValue("/v1/meta", { headers: { Accept: "application/json" },
+      cache: "no-store", credentials: "same-origin", referrerPolicy: "no-referrer" });
+    requireCurrent();
+    if (!response.ok || response.headers?.get("x-selective-v1-write-fence") !== "1") {
+      throw new Error("vault_client_upgrade_required");
+    }
+    return requireCurrent;
+  }
+
   async function authorizedRequest(path, options = {}, { reauthenticationErrors = [] } = {}) {
     const requestEpoch = sessionEpoch;
     const requestHadUser = Boolean(user?.id);
@@ -1393,11 +1408,17 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     async putVault(scope = personalVaultScope, envelope) {
       normalizedScope(scope);
       const normalized = normalizedEnvelope(envelope);
+      const requireCurrent = await requireV1WriteFence();
+      requireCurrent();
       const response = await authorizedRequest("/v1/vault", {
         method: "PUT",
-        body: JSON.stringify(normalized),
+        headers: { "X-Selective-V1-Write-Fence": "1" },
+        body: JSON.stringify({ protocol: "framed-v1", envelope: normalized }),
       });
       const result = await responseJSON(response, "vault_upload_failed");
+      if (response.status === 426 || (response.status === 400 && result?.error === "invalid_vault_envelope")) {
+        throw new Error("vault_client_upgrade_required");
+      }
       if (response.status === 409) {
         if (result.conflict !== true || !Number.isSafeInteger(result.revision) || result.revision < 0) {
           throw new Error("vault_upload_failed");
@@ -1470,15 +1491,20 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
 
     async putTeamVault(scope, envelope, idempotencyKey) {
       const normalized = normalizeTeamVaultScope(scope);
+      const requireCurrent = await requireV1WriteFence();
+      requireCurrent();
       const response = await authorizedRequest(
         `/v1/teams/${normalized.teamID}/vaults/${normalized.vaultID}`,
         {
           method: "PUT",
-          headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
-          body: JSON.stringify(normalizedTeamEnvelope(envelope)),
+          headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey), "X-Selective-V1-Write-Fence": "1" },
+          body: JSON.stringify({ protocol: "framed-v1", envelope: normalizedTeamEnvelope(envelope) }),
         },
       );
       const result = await responseJSON(response, "team_vault_upload_failed");
+      if (response.status === 426 || (response.status === 400 && result?.error === "invalid_vault_envelope")) {
+        throw new Error("vault_client_upgrade_required");
+      }
       if (response.status === 409) {
         if (result.conflict !== true || !Number.isSafeInteger(result.revision) || result.revision < 0
           || !Number.isSafeInteger(result.keyGeneration) || result.keyGeneration < 1) {

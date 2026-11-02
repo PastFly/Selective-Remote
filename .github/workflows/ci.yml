@@ -87,6 +87,7 @@ jobs:
           node --test tests/team-postgres-integration.test.mjs
           node --test tests/account-switch-login-postgres.test.mjs
           node --test tests/browser-session-binding-postgres.test.mjs
+          node --test tests/legacy-write-preservation-p0.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/device-revoke-publication-postgres.test.mjs
           node --test tests/active-publication-inspection.test.mjs

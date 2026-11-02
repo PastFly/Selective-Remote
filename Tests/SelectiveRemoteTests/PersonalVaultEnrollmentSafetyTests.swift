@@ -292,6 +292,8 @@ private actor PasswordResetMemoryHTTP {
         }
         paths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
         switch (request.httpMethod, request.url?.path) {
+        case ("GET", "/v1/meta"):
+            return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
         case ("POST", "/v1/auth/login"):
             let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
             guard body?["password"] as? String == acceptedPassword else {
@@ -324,7 +326,13 @@ private actor PasswordResetMemoryHTTP {
             return try response(request, json: body)
         case ("PUT", "/v1/vault"):
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
-            let value = try JSONDecoder().decode(SelectiveRemotePersonalVaultEnvelope.self, from: #require(request.httpBody))
+            #expect(request.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1")
+            let body = try #require(request.httpBody)
+            let frame = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(frame["protocol"] as? String == "framed-v1")
+            let envelopeValue = try #require(frame["envelope"])
+            let payload = try JSONSerialization.data(withJSONObject: envelopeValue)
+            let value = try JSONDecoder().decode(SelectiveRemotePersonalVaultEnvelope.self, from: payload)
             uploads.append(value)
             return try response(request, json: ["conflict": false, "revision": revision + 1])
         default:
