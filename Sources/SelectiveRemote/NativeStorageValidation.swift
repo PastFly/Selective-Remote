@@ -37,6 +37,13 @@ enum NativeStorageValidation {
     }
 
     static func validate(_ values: [String: Any]) throws {
+        let workspacePrefix = "SelectiveRemote.native032.terminal.workspace.v1."
+        for (key, value) in values where key.hasPrefix(workspacePrefix) {
+            guard let id = UUID(uuidString: String(key.dropFirst(workspacePrefix.count))),
+                  key == NativeStorageMigration.workspaceKey(for: id), let data = value as? Data,
+                  (try? JSONDecoder().decode(StoredTerminalWorkspace.self, from: data)) != nil
+            else { throw NativeStorageMigration.MigrationError.invalidSource }
+        }
         try decode([ConnectionProfile].self, "SelectiveRemote.connectionProfiles.v2", values)
         try decode(LegacyConnectionProfile.self, "SelectiveRemote.connectionProfile.v1", values)
         try decode([SSHKeyRecord].self, "SelectiveRemote.sshKeys.v1", values)

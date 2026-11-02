@@ -7,6 +7,7 @@ final class FakePreferences: NativePreferencesAccess {
     var changingKey: String?
     var changedValue: Any?
     var readCount = 0
+    func dictionaryRepresentation() -> [String: Any] { values }
     func object(forKey key: String) -> Any? {
         if key == changingKey {
             readCount += 1
@@ -31,6 +32,42 @@ let newHosts = NativeStorageMigration.newKey(for: oldHosts)!
 let newSnippets = NativeStorageMigration.newKey(for: oldSnippets)!
 let oldData = try json(["original"])
 let preferences = FakePreferences()
+let workspaceID = UUID()
+let oldWorkspace = "SelectiveRemote.terminal.workspace.v1.\(workspaceID.uuidString)"
+let newWorkspace = NativeStorageMigration.workspaceKey(for: workspaceID)
+let oldWorkspaceData = try JSONSerialization.data(withJSONObject: ["tabs": [], "layout": "single"])
+preferences.set(oldWorkspaceData, forKey: oldWorkspace)
+try NativeStorageMigration.prepareWorkspaces(preferences)
+check("WORKSPACE_IS_COPIED_WITHOUT_CHANGING_031", preferences.object(forKey: oldWorkspace) as? Data == oldWorkspaceData && preferences.object(forKey: newWorkspace) as? Data == oldWorkspaceData)
+let newWorkspaceData = try JSONSerialization.data(withJSONObject: ["tabs": [], "layout": "split"])
+preferences.set(newWorkspaceData, forKey: newWorkspace)
+try NativeStorageMigration.prepareWorkspaces(preferences)
+check("WORKSPACE_WRITES_DO_NOT_OVERWRITE_031", preferences.object(forKey: oldWorkspace) as? Data == oldWorkspaceData && preferences.object(forKey: newWorkspace) as? Data == newWorkspaceData)
+preferences.values.removeValue(forKey: newWorkspace)
+try NativeStorageMigration.prepareWorkspaces(preferences)
+check("DELETED_WORKSPACE_IS_NOT_REIMPORTED", preferences.object(forKey: oldWorkspace) as? Data == oldWorkspaceData && preferences.object(forKey: newWorkspace) == nil)
+let interruptedWorkspace = FakePreferences()
+interruptedWorkspace.set(oldWorkspaceData, forKey: oldWorkspace)
+interruptedWorkspace.blockedKey = newWorkspace
+var interruptedWorkspaceRejected = false
+do { try NativeStorageMigration.prepareWorkspaces(interruptedWorkspace) } catch { interruptedWorkspaceRejected = true }
+interruptedWorkspace.blockedKey = nil
+try NativeStorageMigration.prepareWorkspaces(interruptedWorkspace)
+check("INTERRUPTED_WORKSPACE_COPY_RETRIES", interruptedWorkspaceRejected && interruptedWorkspace.object(forKey: oldWorkspace) as? Data == oldWorkspaceData && interruptedWorkspace.object(forKey: newWorkspace) as? Data == oldWorkspaceData)
+let changedWorkspace = FakePreferences()
+changedWorkspace.set(oldWorkspaceData, forKey: oldWorkspace)
+changedWorkspace.blockedKey = newWorkspace
+do { try NativeStorageMigration.prepareWorkspaces(changedWorkspace) } catch {}
+changedWorkspace.blockedKey = nil
+changedWorkspace.set(newWorkspaceData, forKey: oldWorkspace)
+var changedWorkspaceRejected = false
+do { try NativeStorageMigration.prepareWorkspaces(changedWorkspace) } catch { changedWorkspaceRejected = true }
+check("CHANGED_WORKSPACE_SOURCE_FAILS_CLOSED", changedWorkspaceRejected && changedWorkspace.object(forKey: oldWorkspace) as? Data == newWorkspaceData && changedWorkspace.object(forKey: newWorkspace) == nil)
+let corruptWorkspace = FakePreferences()
+corruptWorkspace.set(Data("invalid".utf8), forKey: oldWorkspace)
+var corruptWorkspaceRejected = false
+do { try NativeStorageMigration.prepareWorkspaces(corruptWorkspace) } catch { corruptWorkspaceRejected = true }
+check("CORRUPT_WORKSPACE_FAILS_CLOSED", corruptWorkspaceRejected && corruptWorkspace.object(forKey: newWorkspace) == nil)
 preferences.set(oldData, forKey: oldHosts)
 preferences.set(oldData, forKey: oldSnippets)
 preferences.set(oldData, forKey: oldFavorites)

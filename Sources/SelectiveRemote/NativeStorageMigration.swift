@@ -5,6 +5,7 @@ protocol NativePreferencesAccess {
     func object(forKey key: String) -> Any?
     func set(_ value: Any?, forKey key: String)
     func synchronize() -> Bool
+    func dictionaryRepresentation() -> [String: Any]
 }
 extension UserDefaults: NativePreferencesAccess {}
 
@@ -17,6 +18,10 @@ enum NativeStorageMigration {
     private static let snapshotKey = versionPrefix + "migration.snapshot.v1"
     private static let markerKey = versionPrefix + "migration.complete.v1"
     private static let restoreJournalKey = versionPrefix + "restore.pending.v1"
+    private static let workspacePrefix = prefix + "terminal.workspace.v1."
+    private static let versionedWorkspacePrefix = versionPrefix + "terminal.workspace.v1."
+    private static let workspaceSnapshotKey = versionPrefix + "workspace-migration.snapshot.v1"
+    private static let workspaceMarkerKey = versionPrefix + "workspace-migration.complete.v1"
     private static let ignoredBackupMetadata: Set<String> = [
         "SelectiveRemote.keychain.unifiedVault.index.v1", "SelectiveRemote.keychain.unifiedVault.index.v2",
         "SelectiveRemote.keychain.unifiedVault.suppressedLegacy.v1"
@@ -58,6 +63,65 @@ enum NativeStorageMigration {
     }
 
     static var versionedKeys: [String] { legacyKeys.compactMap { newKey(for: $0) } }
+
+    static func workspaceKey(for profileID: UUID) -> String {
+        versionedWorkspacePrefix + profileID.uuidString
+    }
+
+    /// Dynamic workspace keys need their own durable checkpoint: copying them
+    /// lazily would resurrect a workspace deleted by the new version.
+    static func prepareWorkspaces(_ defaults: any NativePreferencesAccess) throws {
+        func source() throws -> [String: Any] {
+            let values = defaults.dictionaryRepresentation().filter { $0.key.hasPrefix(workspacePrefix) }
+            for (key, value) in values {
+                guard let id = UUID(uuidString: String(key.dropFirst(workspacePrefix.count))),
+                      key == workspacePrefix + id.uuidString, let data = value as? Data,
+                      (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
+                else { throw MigrationError.invalidSource }
+            }
+            return values
+        }
+        if let marker = defaults.object(forKey: workspaceMarkerKey) {
+            guard let bytes = defaults.object(forKey: workspaceSnapshotKey) as? Data,
+                  marker as? String == "complete:" + digest(bytes),
+                  (try? decodeEnvelope(bytes)) != nil else { throw MigrationError.inconsistentCheckpoint }
+            return
+        }
+        let snapshot: [String: Any]
+        if let entry = defaults.object(forKey: workspaceSnapshotKey) {
+            guard let bytes = entry as? Data else { throw MigrationError.inconsistentCheckpoint }
+            snapshot = try decodeEnvelope(bytes)
+        } else {
+            guard defaults.synchronize() else { throw MigrationError.incompleteWrite }
+            snapshot = try source()
+            guard defaults.synchronize(), NSDictionary(dictionary: snapshot).isEqual(to: try source())
+            else { throw MigrationError.inconsistentCheckpoint }
+            let bytes = try encodeEnvelope(snapshot)
+            defaults.set(bytes, forKey: workspaceSnapshotKey)
+            guard defaults.synchronize(), defaults.object(forKey: workspaceSnapshotKey) as? Data == bytes
+            else { throw MigrationError.incompleteWrite }
+        }
+        guard NSDictionary(dictionary: snapshot).isEqual(to: try source()) else { throw MigrationError.inconsistentCheckpoint }
+        for (key, value) in snapshot {
+            guard key.hasPrefix(workspacePrefix), let id = UUID(uuidString: String(key.dropFirst(workspacePrefix.count))),
+                  key == workspacePrefix + id.uuidString else { throw MigrationError.inconsistentCheckpoint }
+            let target = workspaceKey(for: id)
+            if let existing = defaults.object(forKey: target) {
+                guard equal(existing, value) else { throw MigrationError.inconsistentCheckpoint }
+            } else { defaults.set(value, forKey: target) }
+        }
+        guard defaults.synchronize() else { throw MigrationError.incompleteWrite }
+        for (key, value) in snapshot {
+            guard let id = UUID(uuidString: String(key.dropFirst(workspacePrefix.count))),
+                  let actual = defaults.object(forKey: workspaceKey(for: id)), equal(actual, value)
+            else { throw MigrationError.incompleteWrite }
+        }
+        guard let bytes = defaults.object(forKey: workspaceSnapshotKey) as? Data else { throw MigrationError.incompleteWrite }
+        let marker = "complete:" + digest(bytes)
+        defaults.set(marker, forKey: workspaceMarkerKey)
+        guard defaults.synchronize(), defaults.object(forKey: workspaceMarkerKey) as? String == marker
+        else { throw MigrationError.incompleteWrite }
+    }
 
     /// Never apply legacy storage names or overwrite the migration checkpoint.
     /// Unisolated preferences must already match, otherwise restoring them could

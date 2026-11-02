@@ -2235,7 +2235,7 @@ final class AppModel: NSObject, ObservableObject {
         terminalWorkspaces.removeValue(forKey: id)
         terminalWorkspaceObservers.removeValue(forKey: id)
         UserDefaults.standard.removeObject(
-            forKey: "SelectiveRemote.terminal.workspace.v1.\(id.uuidString)"
+            forKey: NativeStorageMigration.workspaceKey(for: id)
         )
         profiles.removeAll { $0.id == id }
         if profiles.isEmpty {

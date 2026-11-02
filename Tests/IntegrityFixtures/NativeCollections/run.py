@@ -36,6 +36,7 @@ final class FakePreferences: NativePreferencesAccess {
  func data(forKey key: String) -> Data? { values[key] as? Data }
  func set(_ value: Any?, forKey key: String) { values[key] = value }
  func synchronize() -> Bool { true }
+ func dictionaryRepresentation() -> [String: Any] { values }
 }
 '''
 main += make_app(old(profile_path), 'OldApp') + make_app(current(profile_path), 'NewApp')

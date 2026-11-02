@@ -175,6 +175,7 @@ struct SelectiveRemoteApp: App {
         do {
             let lease = try NativeStorageLease()
             try NativeStorageMigration.prepare(UserDefaults.standard)
+            try NativeStorageMigration.prepareWorkspaces(UserDefaults.standard)
             try NativeStorageValidation.validate(UserDefaults.standard)
             try NativeStorageValidation.finishLegacyProfileMigration(UserDefaults.standard)
             return lease
