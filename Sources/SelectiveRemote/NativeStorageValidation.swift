@@ -11,7 +11,12 @@ enum NativeStorageValidation {
         }
         let profilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.connectionProfiles.v2")!
         let legacyKey = NativeStorageMigration.newKey(for: "SelectiveRemote.connectionProfile.v1")!
-        if defaults.object(forKey: profilesKey) == nil, let data = defaults.data(forKey: legacyKey) {
+        let hasProfiles: Bool
+        if let value = defaults.object(forKey: profilesKey) {
+            guard let data = value as? Data else { throw NativeStorageMigration.MigrationError.invalidSource }
+            hasProfiles = try !JSONDecoder().decode([ConnectionProfile].self, from: data).isEmpty
+        } else { hasProfiles = false }
+        if !hasProfiles, let data = defaults.data(forKey: legacyKey) {
             let legacy = try JSONDecoder().decode(LegacyConnectionProfile.self, from: data)
             var migrated = ConnectionProfile()
             migrated.friendlyName = legacy.host.isEmpty

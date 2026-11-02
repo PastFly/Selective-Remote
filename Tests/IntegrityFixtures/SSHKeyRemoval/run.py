@@ -9,6 +9,10 @@ import tempfile
 fixture = Path(__file__).resolve().parent
 repo = fixture.parents[2]
 source = (repo / 'Sources/SelectiveRemote/SSHService.swift').read_text()
+vault_source = (repo / 'Sources/SelectiveRemote/CredentialVaultView.swift').read_text()
+agent_button = re.search(r'Button\("Убрать из ssh-agent".*?\n\s*\}', vault_source, re.S)
+if not agent_button or 'model.removeSSHKeyFromAgent(key.id)' not in agent_button.group(0):
+    raise RuntimeError('agent-only action must not call shared-Keychain removal')
 def method(name):
     match = re.search(r'    static func ' + name + r'\(_ key: SSHKeyRecord\) throws \{\n(.*?)\n    \}', source, re.S)
     if not match:
