@@ -154,6 +154,11 @@ jobs:
           python3 Tests/IntegrityFixtures/UnifiedVault/envelope_parallel.py
           SR_TEST_LOGOUT=1 python3 Tests/IntegrityFixtures/UnifiedVault/envelope_parallel.py
           python3 Tests/IntegrityFixtures/UnifiedVault/logout.py
+          python3 Tests/IntegrityFixtures/NativeLease/run.py
+          python3 Tests/IntegrityFixtures/NativeStorageMigration/run.py
+          python3 Tests/IntegrityFixtures/NativeCollections/run.py
+          python3 Tests/IntegrityFixtures/SSHKeyRemoval/run.py
+          python3 Tests/IntegrityFixtures/KeychainRepair/run.py
 
       - name: Test native host evidence validation
         run: python3 -m unittest discover -s scripts/tests -p 'test_staging_native_gui_host.py' -v

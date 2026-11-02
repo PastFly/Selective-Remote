@@ -116,8 +116,8 @@ enum KeychainService {
     static let legacyService = "local.selectiveremote.credentials"
     static let service = "local.selectiveremote.credentials.v2"
 
-    private static let sshPasswordTouchIDDefaultsKey = "SelectiveRemote.sshPasswordUserPresenceProfiles.v1"
-    private static let forwardingPasswordTouchIDDefaultsKey = "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1"
+    private static let sshPasswordTouchIDDefaultsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshPasswordUserPresenceProfiles.v1")!
+    private static let forwardingPasswordTouchIDDefaultsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1")!
 
     static var touchIDAvailable: Bool {
         let context = LAContext()
@@ -470,10 +470,8 @@ enum KeychainService {
     /// longer access (for example after an ad-hoc signature changed and the
     /// user accidentally chose an incorrect permanent authorization).
     ///
-    /// First use SecItemDelete. If macOS reports a stale authorization problem,
-    /// ask the system `security` utility to remove only this app-owned generic
-    /// password record. The caller must then ask the user to save the SSH
-    /// password again; no secret is exported or copied during recovery.
+    /// The caller must ask the user to save the SSH password again. Legacy
+    /// items remain intact for older versions, and failure must be reported.
     static func repairPasswordAccess(
         profileID: UUID,
         kind: KeychainCredentialKind
@@ -482,15 +480,7 @@ enum KeychainService {
         // namespace is used for SSH/Forwarding, so recovery simply clears the
         // current app-owned record and leaves any unreadable legacy record
         // orphaned and harmless.
-        try? deletePassword(profileID: profileID, kind: kind)
-        if kind == .ssh || kind == .forwarding {
-            let legacyQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: legacyService,
-                kSecAttrAccount as String: kind.account(profileID: profileID)
-            ]
-            _ = SecItemDelete(legacyQuery as CFDictionary)
-        }
+        try deletePassword(profileID: profileID, kind: kind)
     }
 
     static func deleteAllPasswords(profileID: UUID) throws {

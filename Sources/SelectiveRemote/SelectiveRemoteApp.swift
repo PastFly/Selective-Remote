@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 
 extension Notification.Name {
@@ -156,6 +157,9 @@ private struct SelectiveRemoteCloudCommands: Commands {
 
 @main
 struct SelectiveRemoteApp: App {
+    // Acquire before initializing stores that cache whole local collections.
+    private static let sharedStorageLease = acquireStorageLease()
+    private let storageLease = Self.sharedStorageLease
     @NSApplicationDelegateAdaptor(SelectiveRemoteApplicationDelegate.self)
     private var appDelegate
     @StateObject private var model = AppModel()
@@ -166,6 +170,26 @@ struct SelectiveRemoteApp: App {
     @State private var personalUploadGeneration = UUID()
     private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync.shared
     private let syncPresentation = SyncPresentationStore.shared
+
+    private static func acquireStorageLease() -> NativeStorageLease {
+        do {
+            let lease = try NativeStorageLease()
+            try NativeStorageMigration.prepare(UserDefaults.standard)
+            try NativeStorageValidation.validate(UserDefaults.standard)
+            try NativeStorageValidation.finishLegacyProfileMigration(UserDefaults.standard)
+            return lease
+        }
+        catch {
+            let alert = NSAlert()
+            alert.messageText = UpdateLocalization.text(ru: "Не удалось открыть хранилище", en: "Unable to open storage")
+            alert.informativeText = UpdateLocalization.text(
+                ru: "Другая копия приложения уже работает либо не удалось безопасно подготовить хранилище. Закройте другие копии и повторите попытку.",
+                en: "Another app copy is running or storage could not be prepared safely. Close other copies and try again."
+            )
+            alert.runModal()
+            Darwin.exit(EXIT_FAILURE)
+        }
+    }
 
     private var menuBarSystemImage: String {
         if appLock.isLocked { return "lock.fill" }

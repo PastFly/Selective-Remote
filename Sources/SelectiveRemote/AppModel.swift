@@ -449,18 +449,17 @@ final class AppModel: NSObject, ObservableObject {
     var deleteProfilePasswords: (UUID) throws -> Void = {
         try KeychainService.deleteAllPasswords(profileID: $0)
     }
-    private let profilesKey = "SelectiveRemote.connectionProfiles.v2"
-    private let selectedProfileKey = "SelectiveRemote.selectedProfileID.v2"
-    private let legacyProfileKey = "SelectiveRemote.connectionProfile.v1"
-    private let storedPasswordProfilesKey = "SelectiveRemote.storedPasswordProfiles.v1"
-    private let storedGatewayPasswordProfilesKey = "SelectiveRemote.storedGatewayPasswordProfiles.v1"
-    private let storedSSHPasswordProfilesKey = "SelectiveRemote.storedSSHPasswordProfiles.v1"
-    private let sshPasswordUserPresenceProfilesKey = "SelectiveRemote.sshPasswordUserPresenceProfiles.v1"
-    private let sshKeyUserPresenceProfilesKey = "SelectiveRemote.sshKeyUserPresenceProfiles.v1"
-    private let storedForwardingPasswordIDsKey = "SelectiveRemote.storedForwardingPasswordIDs.v1"
-    private let forwardingPasswordUserPresenceIDsKey = "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1"
-    private let sshKeysKey = "SelectiveRemote.sshKeys.v1"
-    private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
+    private let profilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.connectionProfiles.v2")!
+    private let selectedProfileKey = NativeStorageMigration.newKey(for: "SelectiveRemote.selectedProfileID.v2")!
+    private let storedPasswordProfilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.storedPasswordProfiles.v1")!
+    private let storedGatewayPasswordProfilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.storedGatewayPasswordProfiles.v1")!
+    private let storedSSHPasswordProfilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.storedSSHPasswordProfiles.v1")!
+    private let sshPasswordUserPresenceProfilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshPasswordUserPresenceProfiles.v1")!
+    private let sshKeyUserPresenceProfilesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshKeyUserPresenceProfiles.v1")!
+    private let storedForwardingPasswordIDsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.storedForwardingPasswordIDs.v1")!
+    private let forwardingPasswordUserPresenceIDsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1")!
+    private let sshKeysKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshKeys.v1")!
+    private let storedSSHKeyPassphrasesKey = NativeStorageMigration.newKey(for: "SelectiveRemote.storedSSHKeyPassphrases.v1")!
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
     private let profileCollectionDisplayModeKey =
         "SelectiveRemote.profileCollectionDisplayMode.v1"
@@ -471,7 +470,7 @@ final class AppModel: NSObject, ObservableObject {
     private let lastNotifiedUpdateVersionKey = "SelectiveRemote.update.lastNotifiedVersion.v1"
     private let lastNotifiedUpdateDateKey = "SelectiveRemote.update.lastNotifiedDate.v1"
     private let lastSeenUpdateVersionKey = "SelectiveRemote.update.lastSeenVersion.v1"
-    private let independentPortForwardsKey = "SelectiveRemote.independentPortForwards.v1"
+    private let independentPortForwardsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.independentPortForwards.v1")!
     private static let globalTerminalWorkspaceID = UUID(
         uuidString: "72A7656C-289F-4E2D-9775-8AC0C24EFD55"
     )!
@@ -523,20 +522,8 @@ final class AppModel: NSObject, ObservableObject {
     override init() {
         let savedProfiles: [ConnectionProfile]
         if let data = UserDefaults.standard.data(forKey: profilesKey),
-           let decoded = try? JSONDecoder().decode([ConnectionProfile].self, from: data),
-           !decoded.isEmpty {
-            savedProfiles = decoded
-        } else if let data = UserDefaults.standard.data(forKey: legacyProfileKey),
-                  let legacy = try? JSONDecoder().decode(LegacyConnectionProfile.self, from: data) {
-            var migrated = ConnectionProfile()
-            migrated.friendlyName = legacy.host.isEmpty
-                ? UpdateLocalization.text(ru: "Первое подключение", en: "First Connection")
-                : legacy.host
-            migrated.host = legacy.host
-            migrated.username = legacy.username
-            migrated.selectedDisplayIDs = legacy.selectedDisplayIDs
-            migrated.primaryDisplayID = legacy.primaryDisplayID
-            savedProfiles = [migrated]
+           let decoded = try? JSONDecoder().decode([ConnectionProfile].self, from: data) {
+            savedProfiles = decoded.isEmpty ? [ConnectionProfile()] : decoded
         } else {
             savedProfiles = [ConnectionProfile()]
         }
@@ -2783,7 +2770,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func removeSSHKey(_ keyID: UUID) {
-        guard let key = sshKeys.first(where: { $0.id == keyID }) else { return }
+        guard sshKeys.contains(where: { $0.id == keyID }) else { return }
         if let activeRule = sshTunnels.values.first(where: { summary in
             guard let profile = profiles.first(where: { $0.id == summary.profileID })
             else { return false }
@@ -2792,7 +2779,8 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = UpdateLocalization.text(ru: "Сначала остановите SSH-туннель «\(activeRule.ruleName)»", en: "Stop SSH tunnel “\(activeRule.ruleName)” first")
             return
         }
-        try? SSHKeyService.removeFromAgentAndKeychain(key)
+        // The system agent and its Keychain entry may be shared with 0.31.
+        // Removing this app's record must not change those shared resources.
         setSSHKeyPassphraseStored(false, keyID: keyID)
         sshKeys.removeAll { $0.id == keyID }
         profiles = profiles.map { profile in

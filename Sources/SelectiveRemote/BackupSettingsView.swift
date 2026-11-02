@@ -323,6 +323,8 @@ private struct BackupImportSheet: View {
     private func restore() {
         busy = true
         errorMessage = nil
+        do { try SelectiveRemoteBackupService.shared.checkRestoreAvailability() }
+        catch { errorMessage = error.localizedDescription; busy = false; return }
         Task { @MainActor in
             do {
                 try await KeychainService.authenticateDeviceOwner(

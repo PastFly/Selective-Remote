@@ -33,7 +33,7 @@ enum SSHCertificateAuthorityError: LocalizedError {
 }
 
 enum SSHCertificateAuthorityService {
-    private static let defaultsKey = "SelectiveRemote.sshCertificateAuthorities.v1"
+    private static let defaultsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshCertificateAuthorities.v1")!
     private static let sshKeygenPath = "/usr/bin/ssh-keygen"
 
     static func registered() -> [SSHCertificateAuthorityRecord] {

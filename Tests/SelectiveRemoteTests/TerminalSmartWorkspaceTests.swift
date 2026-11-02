@@ -690,6 +690,7 @@ func migratesLegacyTemplatesToSnippetGroups() throws {
         try JSONEncoder().encode(legacy),
         forKey: "SelectiveRemote.terminal.commandTemplates.v1"
     )
+    try NativeStorageMigration.prepare(defaults)
 
     var store = TerminalCommandHistoryStore(defaults: defaults)
     let migrated = try #require(store.template(id: firstID, profileID: firstProfile))
