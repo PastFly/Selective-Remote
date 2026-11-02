@@ -16,6 +16,7 @@
     "pg": "8.16.3"
   },
   "devDependencies": {
-    "fake-indexeddb": "^6.2.7"
+    "fake-indexeddb": "^6.2.7",
+    "playwright-core": "1.64.1"
   }
 }

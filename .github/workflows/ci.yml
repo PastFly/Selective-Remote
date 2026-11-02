@@ -67,6 +67,14 @@ jobs:
         working-directory: cloud
         run: npm ci
 
+      - name: Test mobile Cloud status layout
+        working-directory: cloud
+        run: |
+          browser="$(command -v google-chrome || command -v chromium || true)"
+          test -n "$browser" || { echo "Chrome or Chromium is required"; exit 1; }
+          PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
+            node --test tests/workspace-mobile-sync-status-browser.test.mjs
+
       - name: Apply migrations and test Team and device-trust storage
         working-directory: cloud
         env:
