@@ -225,9 +225,7 @@ struct PersonalVaultAutoSyncCheckTests {
         let release = AsyncStream<Void>.makeStream()
         let failed = AsyncStream<SyncIssue>.makeStream()
         let fixture = try PersonalCheckFixture(remoteRevision: 5, uploadResponse: { request, _, _ in
-            let envelope = try JSONDecoder().decode(
-                SelectiveRemotePersonalVaultEnvelope.self, from: #require(request.httpBody)
-            )
+            let envelope = try decodePersonalCheckFrame(request)
             #expect(envelope.baseRevision == 5)
             started.continuation.yield(())
             for await _ in release.stream { break }
@@ -593,6 +591,9 @@ private struct PersonalCheckFixture {
         ])
         let remote = PersonalCheckRemote(body: body)
         let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            if request.url?.path == "/v1/meta" {
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
             requests.record()
             #expect(request.url?.path == "/v1/vault")
             if verifyAuthorization {
@@ -615,6 +616,19 @@ private struct PersonalCheckFixture {
         self.tokens = tokens
         self.sync = SelectiveRemotePersonalVaultAutoSync(client: client, keyStore: keys)
     }
+}
+
+private struct PersonalCheckWireFrame: Decodable {
+    let protocolName: String
+    let envelope: SelectiveRemotePersonalVaultEnvelope
+    enum CodingKeys: String, CodingKey { case protocolName = "protocol", envelope }
+}
+
+private func decodePersonalCheckFrame(_ request: URLRequest) throws -> SelectiveRemotePersonalVaultEnvelope {
+    #expect(request.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1")
+    let frame = try JSONDecoder().decode(PersonalCheckWireFrame.self, from: #require(request.httpBody))
+    #expect(frame.protocolName == "framed-v1")
+    return frame.envelope
 }
 
 private final class PersonalCheckRemote: @unchecked Sendable {
@@ -640,9 +654,7 @@ private final class PersonalCheckRemote: @unchecked Sendable {
     }
     func acknowledge(_ request: URLRequest) throws -> Data {
         try lock.withLock {
-            let envelope = try JSONDecoder().decode(
-                SelectiveRemotePersonalVaultEnvelope.self, from: #require(request.httpBody)
-            )
+            let envelope = try decodePersonalCheckFrame(request)
             let old = try #require(JSONSerialization.jsonObject(with: stored) as? [String: Any])
             #expect(old["revision"] as? Int == envelope.baseRevision)
             var next = try #require(JSONSerialization.jsonObject(
