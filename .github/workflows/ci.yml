@@ -158,6 +158,7 @@ jobs:
           python3 Tests/IntegrityFixtures/NativeStorageMigration/run.py
           python3 Tests/IntegrityFixtures/NativeCollections/run.py
           python3 Tests/IntegrityFixtures/SSHKeyRemoval/run.py
+          python3 Tests/IntegrityFixtures/SSHCARecords/run.py
           python3 Tests/IntegrityFixtures/KeychainRepair/run.py
 
       - name: Test native host evidence validation
