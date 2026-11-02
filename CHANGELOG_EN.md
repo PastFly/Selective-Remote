@@ -4,7 +4,7 @@
 - **Personal Vault** — Hosts, Credentials, and Snippets are encrypted on the device and synced across trusted devices.
 - **Team Vaults** — share Hosts, Credentials, and Snippets with roles, invitations, and device admission.
 - **Find Hosts faster** — use the persistent Host Shelf, nested folders, search, sorting, and scope aware Host moves.
-- **More reliable daily work** — Sync Center and notifications, improved SSH password entry, Jump Host, Snippets, and layouts; Keychain deletion and backup migration failures are handled safely.
+- **Daily work** — Sync Center and notifications, improved SSH password entry, Jump Host, Snippets, and layouts; Keychain preservation and archive restore remain under verification.
 
 0.32 is not released. V2 remains test-only; real-workflow and official-DMG acceptance are pending. v0.31.0 is available now.
 
