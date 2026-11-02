@@ -69,8 +69,9 @@ test('database writer barrier drains in-flight legacy writes and rejects later l
     await writer.query('ROLLBACK');
     await assert.rejects(writer.query('UPDATE personal_vaults SET revision=5 WHERE user_id=$1',[user]), /v1_writer_upgrade_required/, 'writer capability must not leak after ROLLBACK');
     const store = new PostgresStore(null,db.pool);
-    const result = await store.putVault(user,device,{baseRevision:4,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'});
-    assert.deepEqual(result,{conflict:false,revision:5}, 'real current store must set the transaction-local capability');
+    const beforeUnfenced=(await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
+    await assert.rejects(store.putVault(user,device,{baseRevision:4,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/deployment_fence_required/);
+    assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,beforeUnfenced);
   } finally {
     if (late) { try { await late.query('ROLLBACK'); } catch {} late.release(); }
     if (old) { try { await old.query('ROLLBACK'); } catch {} old.release(); }
@@ -103,10 +104,13 @@ test('current Team writer can initialize through the database barrier', {
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
-    store.v1Fence=fence;
-    const result=await store.putSharedVault({actorUserID:user,actorDeviceID:device,teamID:team.team.id,vaultID:created.vault.id,
+    const request={actorUserID:user,actorDeviceID:device,teamID:team.team.id,vaultID:created.vault.id,
       envelope:{baseRevision:0,keyGeneration:1,envelopeVersion:1,ciphertext:'AA',nonce:'B'.repeat(16),authTag:'C'.repeat(22),contentHash:'D'.repeat(43),wrappers:[wrapper]},
-      idempotencyKey:'p0-vault-initialize-0001'});
+      idempotencyKey:'p0-vault-initialize-0001'};
+    await assert.rejects(store.putSharedVault(request),/deployment_fence_required/);
+    assert.equal(Number((await db.pool.query('SELECT revision FROM shared_vaults WHERE id=$1',[created.vault.id])).rows[0].revision),0);
+    store.v1Fence=fence;
+    const result=await store.putSharedVault(request);
     assert.equal(result.revision,1);
     assert.equal((await fence.snapshot()).v1Committed.find(v=>v.vaultID===created.vault.id).revision,1);
     const row=(await db.pool.query('SELECT id,revision,ciphertext FROM shared_vaults WHERE id=$1',[created.vault.id])).rows[0];
@@ -121,6 +125,32 @@ test('current Team writer can initialize through the database barrier', {
     } finally {client.release();}
     await assert.rejects(assertV1DataFloor(query,snapshot),/deployment_v1_data_mismatch/,'restored or altered wrapper set must not pass the retained floor');
   } finally { await fixture?.cleanup();await db.cleanup(); }
+});
+
+test('an unavailable or corrupted V1 journal cannot authorize a direct writer', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const {mkdtemp,writeFile,rm}=await import('node:fs/promises');
+  const {join}=await import('node:path');
+  const {tmpdir}=await import('node:os');
+  const {MigrationFence}=await import('../src/migration-fence.mjs');
+  const directory=await mkdtemp(join(tmpdir(),'sr-v1-journal-denial-'));
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  try {
+    const user=randomUUID(),device=randomUUID();
+    await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'journal-denial@example.test','journal_denial_test',now())",[user]);
+    await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
+    await installV1CommitFence(db.pool);
+    const before=(await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
+    const journal=join(directory,'journal');await writeFile(journal,'invalid journal\n',{mode:0o600});
+    const payload={baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'};
+    for(const [path,expected] of [[journal,/corrupt_deployment_fence/],[join(directory,'missing'),{code:'ENOENT'}]]) {
+      const store=new PostgresStore(null,db.pool,{v1Fence:new MigrationFence(path)});
+      await assert.rejects(store.putVault(user,device,payload),expected);
+      assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,before);
+    }
+  } finally {await db.cleanup();await rm(directory,{recursive:true,force:true});}
 });
 
 
@@ -239,13 +269,19 @@ test('current writer holds barrier integrity until its transaction commits', {
   skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
 }, async () => {
   const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
-  let release;
+  let release,fixture;
   try {
     const user=randomUUID(),device=randomUUID();
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-commit@example.test','p0_commit_test',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     await installV1CommitFence(db.pool);
+    const {MigrationFence}=await import('../src/migration-fence.mjs');
+    const {readV1VaultState}=await import('../src/v1-data-fence.mjs');
+    const {publicationRuntimeFixture}=await import('./publication-runtime-fixture.mjs');
+    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=new MigrationFence(fixture.path);
+    await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
+    await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     let reached;
     const atWrite=new Promise(resolve=>{reached=resolve;});
     const pause=new Promise(resolve=>{release=resolve;});
@@ -253,7 +289,7 @@ test('current writer holds barrier integrity until its transaction commits', {
       async query(sql,values){if(sql.includes('SELECT id, revision FROM personal_vaults')){reached();await pause;}return c.query(sql,values);},
       release(){c.release();},
     };}};
-    const store=new PostgresStore(null,pool);
+    const store=new PostgresStore(null,pool,{v1Fence:fence});
     const write=store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'});
     await atWrite;
     let tampered=false;
@@ -263,7 +299,7 @@ test('current writer holds barrier integrity until its transaction commits', {
     assert.deepEqual(await write,{conflict:false,revision:2});
     await disable;
     await assert.rejects(assertV1CommitFence((sql,values)=>db.pool.query(sql,values)),/v1_writer_fence_missing/);
-  } finally { release?.(); await db.cleanup(); }
+  } finally { release?.(); await fixture?.cleanup(); await db.cleanup(); }
 });
 
 test('arming fails closed with an undrained writer and retains the floor only after barrier verification', {

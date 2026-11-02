@@ -45,7 +45,10 @@ export async function useFramedV1Writer(client) {
   await client.query('SELECT pg_catalog.set_config($1, $2, true)', [marker, 'framed-v1']);
 }
 
-export async function holdV1CommitFence(client) {
+export async function holdV1CommitFence(client, fence) {
+  // The database marker alone is not durable history. Never grant it to the
+  // ordinary writer without the independently retained journal.
+  if (typeof fence?.snapshot !== 'function' || typeof fence?.append !== 'function') throw Error('deployment_fence_required');
   // Hold the table locks through COMMIT/ROLLBACK: a concurrent restore or DDL
   // cannot invalidate the verified triggers after the check and before write.
   await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ROW EXCLUSIVE MODE');

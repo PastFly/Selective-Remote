@@ -1171,7 +1171,7 @@ export class PostgresStore {
     const fenced=this.v1Fence?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");
-      await this.writerFence(client);
+      await this.writerFence(client, this.v1Fence);
       if(fenced){
         const snapshot=await this.v1Fence.snapshot();
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
@@ -2449,7 +2449,7 @@ export class PostgresStore {
     idempotencyKey,
   }) {
     return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client, fenced) => {
-      if(!fenced)await this.writerFence(client);
+      if(!fenced)await this.writerFence(client, this.v1Fence);
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) { await this.requireLegacyPublication(teamID, vaultID, actorUserID, client); throw new Error("team_not_found"); }
       if (!context.device_key_authorized) throw new Error("device_approval_required");
@@ -2635,7 +2635,7 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       if(fenced){
-        await this.writerFence(client);
+        await this.writerFence(client, this.v1Fence);
         const snapshot=await this.v1Fence.snapshot();
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
