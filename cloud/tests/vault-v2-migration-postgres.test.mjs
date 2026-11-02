@@ -3,6 +3,8 @@ import test from "node:test";
 import pg from "pg";
 import { fileURLToPath } from "node:url";
 import { loadMigrations, applyMigrations } from "../src/migrations.mjs";
+import { isolatedPublicationDatabase } from "./publication-runtime-fixture.mjs";
+import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 export const migrationDirectory = fileURLToPath(
   new URL("../migrations/", import.meta.url),
 );
@@ -692,3 +694,16 @@ test("enabled operator consumes bounded stdin and reaches typed validation", () 
  assert.equal(p.stderr.trim(),"invalid_migration_operation");
 });
 import {spawnSync} from "node:child_process";
+
+test('V1 writer barrier preserves already-authorized V2 activation', {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  try {
+    const f=await readyCandidate(db.pool);
+    const hash=await f.store.manifestHash(f.input);
+    await installV1CommitFence(db.pool);
+    await f.store.activate(f.input,hash);
+    assert.equal((await db.pool.query('SELECT format_state FROM shared_vaults WHERE id=$1',[f.input.vaultID])).rows[0].format_state,'V2_ACTIVE');
+  } finally { await db.cleanup(); }
+});

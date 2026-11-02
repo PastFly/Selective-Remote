@@ -16,6 +16,7 @@ import {
 import { requireAccessMutation } from "./team-policy.mjs";
 import { publicationHash, validateReaderProjection, prepareAdministrativeSidecarCommitment } from "../public/vault-publication-v1.js";
 import { PublicationFenceCoordinator, createPublicationFenceTransaction } from "./publication-fence-coordinator.mjs";
+import { useFramedV1Writer } from "./v1-commit-fence.mjs";
 export const migrationLockTables = [
   "devices",
   "device_trust_certificates_v1",
@@ -837,6 +838,9 @@ export class VaultMigrationStore {
         [input.attemptID],
       );
       await this.faultAt("active_attempt");
+      // Activation has passed its signed-manifest and controller guards; its
+      // retirement of the legacy ciphertext is part of this same transaction.
+      await useFramedV1Writer(c);
       await c.query(
         "UPDATE shared_vaults SET format_state='V2_ACTIVE',format_schema_version=2,active_publication_attempt_id=$2,access_policy_version=$3,envelope_version=NULL,ciphertext=NULL,nonce=NULL,auth_tag=NULL,content_hash=NULL,updated_by_device_id=NULL WHERE id=$1",
         [input.vaultID, input.attemptID, a.scope.policyVersion],
