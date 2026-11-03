@@ -65,6 +65,11 @@ jobs:
           shopt -s nullglob
           run_build="$SR_BUILD_KIND"
           if [[ "$run_build" == upgrade ]]; then export SR_BUILD_KIND=baseline; fi
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
+          original_default=$(security default-keychain -d user | python3 -c 'import shlex,sys; a=shlex.split(sys.stdin.read()); print(a[0] if a else "")')
+          original_keychains=()
+          while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
           images=("$RUNNER_TEMP"/candidate/*.dmg)
           mount="$RUNNER_TEMP/candidate-mount"
           mkdir "$mount"
@@ -87,8 +92,20 @@ jobs:
               kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true
             fi
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
+            if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
+            if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
+            security delete-keychain "$keychain" || true
+            rm -f "$RUNNER_TEMP/synthetic-keychain-password"
           }
           trap cleanup EXIT
+          keychain_password=$(openssl rand -hex 24)
+          umask 077
+          printf '%s' "$keychain_password" > "$RUNNER_TEMP/synthetic-keychain-password"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 1800 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
           app_pid=$!
           sleep 12
