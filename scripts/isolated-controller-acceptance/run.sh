@@ -75,6 +75,7 @@ docker rm "$id" >/dev/null
 mkdir -p "$root/runtime/node-v22.18.0-linux-x64/bin"
 install -m 0755 "$(readlink -f "$(command -v node)")" "$root/runtime/node-v22.18.0-linux-x64/bin/node"
 (cd "$root"; sha256sum runtime/node-v22.18.0-linux-x64/bin/node > runtime-node.sha256; find . -type f ! -name bundle.sha256 ! -name settings.json -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > bundle.sha256)
+chmod 600 "$root/runtime-node.sha256" "$root/bundle.sha256"
 controller_digest=$(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1)
 composefiles=("$cloud/compose.yaml" "$cloud/compose.443-only.yaml" "$cloud/compose.small-host.yaml" "$cloud/compose.publication-fence.yaml" "$cloud/compose.postgres-bind.yaml")
 composejson=$(for f in "${composefiles[@]}"; do jq -cn --arg path "$f" --arg hash "$(sha256sum "$f"|cut -d ' ' -f 1)" '{path:$path,sha256:$hash}'; done | jq -s .)
