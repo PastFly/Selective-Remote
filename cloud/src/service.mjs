@@ -195,6 +195,7 @@ export class CloudService {
     const token = createSessionToken();
     await this.store.createSession({
       userID: identity.id,
+      verifiedPasswordHash: identity.password_hash,
       device,
       sessionHash: hashSessionToken(token, this.config.sessionPepper),
       expiresAt: this.sessionExpiry(),

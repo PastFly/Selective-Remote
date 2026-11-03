@@ -1339,9 +1339,11 @@ test("Viewer writes and unapproved-device reads fail before ciphertext access", 
 });
 
 test("login cannot revive a revoked device or replace an approved device key", async () => {
-  const f = fixture((sql) => sql.includes("INSERT INTO devices") ? { rows: [] } : { rows: [], rowCount: 0 });
+  const f = fixture((sql) => sql.includes("FOR KEY SHARE") || sql.includes("SELECT id FROM account_identities") ? { rows: [{ id: 'identity' }] }
+    : sql.includes("INSERT INTO devices") ? { rows: [] } : { rows: [], rowCount: 0 });
   await assert.rejects(f.store.createSession({
     userID: actorUserID,
+    verifiedPasswordHash: 'synthetic-hash',
     device: {
       id: deviceID,
       name: "Browser",
@@ -1361,11 +1363,13 @@ test("login cannot revive a revoked device or replace an approved device key", a
 
 test("login auto-admits a registered P-256 device only through enabled Team policies", async () => {
   const f = fixture((sql) => {
+    if (sql.includes("FOR KEY SHARE") || sql.includes("SELECT id FROM account_identities")) return { rows: [{ id: 'identity' }] };
     if (sql.includes("INSERT INTO devices")) return { rows: [{ id: deviceID }], rowCount: 1 };
     return { rows: [], rowCount: 1 };
   });
   await f.store.createSession({
     userID: actorUserID,
+    verifiedPasswordHash: 'synthetic-hash',
     device: {
       id: deviceID,
       name: "Browser",

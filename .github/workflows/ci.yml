@@ -121,6 +121,7 @@ jobs:
           sudo "$(command -v node)" --test tests/staging-installer-runtime-owner.test.mjs
           node --test tests/team-postgres-integration.test.mjs
           node --test tests/account-switch-login-postgres.test.mjs
+          node --test tests/login-reset-race.test.mjs
           node --test tests/browser-session-binding-postgres.test.mjs
           node --test tests/legacy-write-preservation-p0.test.mjs
           node --test tests/legacy-write-preservation-prior-server-p0.test.mjs

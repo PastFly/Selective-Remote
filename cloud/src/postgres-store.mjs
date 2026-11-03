@@ -952,10 +952,26 @@ export class PostgresStore {
     }
   }
 
-  async createSession({ userID, device, sessionHash, expiresAt }) {
+  async createSession({ userID, verifiedPasswordHash, device, sessionHash, expiresAt }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      // Password verification happens before this transaction. Hold the
+      // identity lock through session insertion so a concurrent reset either
+      // invalidates this login or subsequently revokes the new session.
+      // Take the user's key lock first: account deletion locks that row before
+      // cascading into identities. It remains compatible with password reset.
+      const user = await client.query(
+        `SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL
+         AND email_verified_at IS NOT NULL FOR KEY SHARE`, [userID],
+      );
+      if (!user.rows[0]) throw new Error("invalid_credentials");
+      const identity = await client.query(
+        `SELECT id FROM account_identities WHERE user_id = $1
+         AND provider = 'password' AND password_hash = $2 FOR UPDATE`,
+        [userID, verifiedPasswordHash],
+      );
+      if (!identity.rows[0]) throw new Error("invalid_credentials");
       const deviceResult = await client.query(
         `INSERT INTO devices
           (id, user_id, name, platform, app_version, public_key, public_key_algorithm, key_registered_at)
