@@ -119,7 +119,7 @@ print("CONNECTIONS_OPEN_REQUESTED=YES")
 pressUnique("AXPopUpButton", "Add")
 pressUnique("AXMenuItem", "New SSH")
 print("SYNTHETIC_PROFILE_CREATION_REQUESTED=YES")
-func setUniqueField(_ placeholder: String, _ value: String) {
+func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: Bool = true) {
     let matches = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
     }
@@ -151,7 +151,7 @@ func setUniqueField(_ placeholder: String, _ value: String) {
         if current.count == 1 && (attr(current[0], "AXValue") as? String) == value { confirmed = true; break }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
     }
-    guard confirmed else { stop("typed field not confirmed: \(placeholder)") }
+    if verifyVisibleValue && !confirmed { stop("typed field not confirmed: \(placeholder)") }
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
@@ -161,6 +161,9 @@ setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.10")
 setUniqueField("username", "test")
 print("SYNTHETIC_PROFILE_FIELDS_ENTERED=YES")
 pressUnique("AXButton", "Authentication")
+setUniqueField("Пароль SSH-сервера", "TEST-ONLY-CODEX-UPGRADE-SECRET", verifyVisibleValue: false)
+pressUnique("AXButton", "Save")
+print("SYNTHETIC_CREDENTIAL_SAVE_REQUESTED=YES")
 for element in snapshot(app).prefix(500) {
     let role = attr(element, "AXRole") as? String ?? ""
     let title = attr(element, "AXTitle") as? String ?? ""

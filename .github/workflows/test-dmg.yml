@@ -94,6 +94,7 @@ jobs:
           python3 -m unittest discover -s scripts/isolated-gui-smoke/keyboard-tests -p 'test_*.py' -v
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
+          swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
           screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/termination.log"
@@ -105,6 +106,7 @@ jobs:
             sleep 1
             defaults export "$bundle" "$RUNNER_TEMP/second.plist"
             python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/second.plist" | tee "$RUNNER_TEMP/evidence/baseline-persistence.json"
+            "$RUNNER_TEMP/keychain-probe" 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/baseline-keychain.log"
             sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-restart.log" 2>&1 &
             app_pid=$!
             sleep 12
@@ -141,6 +143,8 @@ jobs:
               defaults export "$bundle" "$RUNNER_TEMP/upgraded.plist"
               python3 scripts/isolated-gui-smoke/compare-legacy.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/legacy-upgrade.json"
               python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/upgrade-persistence.json"
+              "$RUNNER_TEMP/keychain-probe" 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/legacy-keychain-after-upgrade.log"
+              "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/upgraded-keychain.log"
             fi
           fi
       - name: Upload synthetic evidence
