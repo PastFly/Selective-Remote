@@ -51,11 +51,17 @@ while Date() < deadline {
     guard CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { fail("unexpected prompt geometry") }
     var pids = [pid_t](repeating: 0, count: 8192)
     let count = pids.withUnsafeMutableBytes { listFn($0.baseAddress!, Int32($0.count)) }
+    if reported.insert("pid-count").inserted { print("SYNTHETIC_ASKPASS_PID_COUNT=\(count)") }
     if count > 0 {
         for candidate in pids.prefix(Int(count)) where candidate > 1 {
             var pathBuffer = [CChar](repeating: 0, count: 4096)
             guard pathBuffer.withUnsafeMutableBytes({ pathFn(candidate, $0.baseAddress!, UInt32($0.count)) }) > 0 else { continue }
             let path = URL(fileURLWithPath: String(cString: pathBuffer)).resolvingSymlinksInPath().path
+            let processName = URL(fileURLWithPath: path).lastPathComponent
+            if processName.localizedCaseInsensitiveContains("askpass") {
+                let diagnostic = "SYNTHETIC_ASKPASS_NAMED_PROCESS=\(processName) helperMatch=\(path == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path)"
+                if reported.insert(diagnostic).inserted { print(diagnostic) }
+            }
             guard path == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path else { continue }
             let nodes = snapshot(AXUIElementCreateApplication(candidate))
             let roles = nodes.compactMap { attribute($0, "AXRole") as? String }.joined(separator: ",")
