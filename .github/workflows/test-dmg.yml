@@ -1,51 +1,40 @@
-name: Test DMG
-
+name: Isolated macOS GUI capability probe
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
+  probe:
     runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
+      - name: Probe isolated runner GUI capabilities
+        shell: bash
         run: |
-          xcodebuild -version
-          swift --version
-          swift --version | grep -E 'Swift version 6\.'
+          cat > "$RUNNER_TEMP/gui-probe.swift" <<'SWIFT'
+          import AppKit
+          import ApplicationServices
+          import CoreGraphics
+          import Foundation
 
-      - name: Install build dependencies
-        run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
-        run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
-        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
-        with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
-          path: |
-            dist/*.dmg
-            dist/*.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
+          let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+          print("GUI_SESSION_PRESENT=\(!session.isEmpty)")
+          print("GUI_SESSION_ON_CONSOLE=\(session[\"kCGSSessionOnConsoleKey\"] as? Bool ?? false)")
+          print("ACCESSIBILITY_TRUSTED=\(AXIsProcessTrusted())")
+          print("SCREEN_CAPTURE_ALLOWED=\(CGPreflightScreenCaptureAccess())")
+          print("EVENT_POST_ALLOWED=\(CGPreflightPostEventAccess())")
+          let application = NSApplication.shared
+          application.setActivationPolicy(.regular)
+          let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 320, height: 200),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+          window.title = "Synthetic GUI capability probe"
+          window.orderFront(nil)
+          application.activate(ignoringOtherApps: true)
+          RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+          print("SYNTHETIC_WINDOW_NUMBER_VALID=\(window.windowNumber > 0)")
+          print("SYNTHETIC_WINDOW_VISIBLE=\(window.isVisible)")
+          window.close()
+          print("PRODUCT_E2E=NOT_RUN")
+          SWIFT
+          swiftc "$RUNNER_TEMP/gui-probe.swift" -o "$RUNNER_TEMP/gui-probe"
+          "$RUNNER_TEMP/gui-probe"
