@@ -73,7 +73,7 @@ if env["SR_BUILD_KIND"] == "baseline" {
 pressUnique("AXButton", "Connections")
 print("CONNECTIONS_OPEN_REQUESTED=YES")
 pressUnique("AXPopUpButton", "Add")
-pressUnique("AXMenuItem", "Новое SSH")
+pressUnique("AXMenuItem", "New SSH")
 print("SYNTHETIC_PROFILE_CREATION_REQUESTED=YES")
 func setUniqueField(_ placeholder: String, _ value: String) {
     let matches = snapshot(app).filter {
