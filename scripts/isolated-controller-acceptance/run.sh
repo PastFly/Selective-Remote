@@ -278,3 +278,49 @@ echo 'OVERSIZED_JOURNAL_REFUSED=PASS'
 echo 'TEST_ONLY_EXACT_SNAPSHOT_RESTORED=PASS'
 echo 'JOURNAL_CAPACITY_RECOVERY=NOT_PROVEN'
 
+# Feasibility only: Linux renameat2 atomic directory exchange. Both root-owned
+# installed bundles remain present; this is not a complete upgrade operator.
+old_bundle_hash=$(sha256sum "$oldroot/bundle.sha256" | cut -d ' ' -f 1)
+new_bundle_hash=$(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1)
+old_settings_hash=$(sha256sum "$oldroot/settings.json" | cut -d ' ' -f 1)
+new_settings_hash=$(sha256sum "$root/settings.json" | cut -d ' ' -f 1)
+pre_exchange_journal=$(sha256sum "$state/publication/journal" | cut -d ' ' -f 1)
+pre_exchange_row=$(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'")
+cat > /tmp/sr-controller-acceptance/exchange-test.py <<'PY'
+import ctypes, os, sys
+left,right,phase=sys.argv[1:]
+if phase=='crash-before': os._exit(93)
+lib=ctypes.CDLL(None,use_errno=True)
+fn=lib.renameat2
+fn.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint)
+fn.restype=ctypes.c_int
+if fn(-100,os.fsencode(left),-100,os.fsencode(right),2)!=0:
+    error=ctypes.get_errno(); raise OSError(error,os.strerror(error))
+if phase=='crash-after': os._exit(93)
+fd=os.open('/opt',os.O_RDONLY|os.O_DIRECTORY)
+try: os.fsync(fd)
+finally: os.close(fd)
+PY
+if /usr/bin/python3 -I /tmp/sr-controller-acceptance/exchange-test.py "$root" "$oldroot" crash-before; then exit 1; else rc=$?; [[ $rc == 93 ]]; fi
+[[ $(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1) == "$new_bundle_hash" ]]
+[[ $(sha256sum "$oldroot/bundle.sha256" | cut -d ' ' -f 1) == "$old_bundle_hash" ]]
+if /usr/bin/python3 -I /tmp/sr-controller-acceptance/exchange-test.py "$root" "$oldroot" crash-after; then exit 1; else rc=$?; [[ $rc == 93 ]]; fi
+[[ $(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1) == "$old_bundle_hash" ]]
+[[ $(sha256sum "$root/settings.json" | cut -d ' ' -f 1) == "$old_settings_hash" ]]
+[[ $(sha256sum "$oldroot/bundle.sha256" | cut -d ' ' -f 1) == "$new_bundle_hash" ]]
+[[ $(sha256sum "$oldroot/settings.json" | cut -d ' ' -f 1) == "$new_settings_hash" ]]
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/exchanged-old-controller.log 2>&1
+exchange_status=$?
+set -e
+[[ $exchange_status -ne 0 ]]
+grep -q '^invalid_deployment_fence$' /tmp/sr-controller-acceptance/results/exchanged-old-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/exchanged-old-controller.log
+/usr/bin/python3 -I /tmp/sr-controller-acceptance/exchange-test.py "$root" "$oldroot" restore
+[[ $(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1) == "$new_bundle_hash" ]]
+[[ $(sha256sum "$oldroot/bundle.sha256" | cut -d ' ' -f 1) == "$old_bundle_hash" ]]
+[[ $(sha256sum "$state/publication/journal" | cut -d ' ' -f 1) == "$pre_exchange_journal" ]]
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == "$pre_exchange_row" ]]
+echo 'LINUX_DIRECTORY_EXCHANGE_PROCESS_CRASH=PASS'
+echo 'CONTROLLER_BUNDLES_AND_JOURNAL_PRESERVED=PASS'
+echo 'FULL_CONTROLLER_UPDATE_OPERATOR=NOT_PROVEN'
