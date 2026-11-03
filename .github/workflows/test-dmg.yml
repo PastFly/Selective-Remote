@@ -62,7 +62,11 @@ jobs:
           test -x "$binary"
           shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/executable-sha256.txt"
           cleanup() {
-            if test -n "${app_pid:-}"; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            if test -n "${app_pid:-}"; then
+              ps -p "$app_pid" -o pid=,ppid=,state=,comm= > "$RUNNER_TEMP/evidence/cleanup-process.txt" 2>&1 || true
+              screencapture -x "$RUNNER_TEMP/evidence/cleanup-screen.png" || true
+              kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true
+            fi
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
           }
           trap cleanup EXIT

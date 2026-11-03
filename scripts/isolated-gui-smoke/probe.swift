@@ -29,7 +29,7 @@ guard "network-outbound".withCString({ check(pid, $0, 0) }) == 1 else { stop("ne
 if CommandLine.arguments.count == 3 {
     guard CommandLine.arguments[2] == "--terminate", running.terminate() else { stop("graceful termination request failed") }
     let deadline = Date(timeIntervalSinceNow: 15)
-    while !running.isTerminated && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
+    while !running.isTerminated && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2)) }
     guard running.isTerminated else { stop("application did not terminate") }
     print("APPLICATION_GRACEFUL_TERMINATION=YES")
     exit(0)
