@@ -6,6 +6,7 @@ import Foundation
 
 func fail(_ message: String) -> Never { fputs("SYNTHETIC_ASKPASS_BLOCKED: \(message)\n", stderr); exit(2) }
 typealias PidPath = @convention(c) (Int32, UnsafeMutableRawPointer, UInt32) -> Int32
+typealias ListPids = @convention(c) (UnsafeMutableRawPointer, Int32) -> Int32
 let env = ProcessInfo.processInfo.environment
 var console = stat()
 guard env["GITHUB_ACTIONS"] == "true", env["RUNNER_ENVIRONMENT"] == "github-hosted", env["USER"] == "runner",
@@ -20,8 +21,10 @@ guard lstat(key, &file) == 0, (file.st_mode & S_IFMT) == S_IFREG, file.st_uid ==
       (file.st_mode & 0o777) == 0o600, file.st_nlink == 1,
       let bytes = try? Data(contentsOf: URL(fileURLWithPath: helper), options: .mappedIfSafe),
       SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == expectedHash,
-      let lib = dlopen("/usr/lib/libproc.dylib", RTLD_NOW), let symbol = dlsym(lib, "proc_pidpath") else { fail("synthetic fixture or helper") }
+      let lib = dlopen("/usr/lib/libproc.dylib", RTLD_NOW), let symbol = dlsym(lib, "proc_pidpath"),
+      let listSymbol = dlsym(lib, "proc_listallpids") else { fail("synthetic fixture or helper") }
 let pathFn = unsafeBitCast(symbol, to: PidPath.self)
+let listFn = unsafeBitCast(listSymbol, to: ListPids.self)
 func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success ? value : nil
@@ -46,6 +49,20 @@ var reported = Set<String>()
 while Date() < deadline {
     guard kill(appPID, 0) == 0 else { fail("target app terminated") }
     guard CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { fail("unexpected prompt geometry") }
+    var pids = [pid_t](repeating: 0, count: 8192)
+    let count = pids.withUnsafeMutableBytes { listFn($0.baseAddress!, Int32($0.count)) }
+    if count > 0 {
+        for candidate in pids.prefix(Int(count)) where candidate > 1 {
+            var pathBuffer = [CChar](repeating: 0, count: 4096)
+            guard pathBuffer.withUnsafeMutableBytes({ pathFn(candidate, $0.baseAddress!, UInt32($0.count)) }) > 0 else { continue }
+            let path = URL(fileURLWithPath: String(cString: pathBuffer)).resolvingSymlinksInPath().path
+            guard path == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path else { continue }
+            let nodes = snapshot(AXUIElementCreateApplication(candidate))
+            let roles = nodes.compactMap { attribute($0, "AXRole") as? String }.joined(separator: ",")
+            let diagnostic = "SYNTHETIC_ASKPASS_PROCESS_MATCH=YES roles=\(roles)"
+            if reported.insert(diagnostic).inserted { print(diagnostic) }
+        }
+    }
     var hit: AXUIElement?
     if AXUIElementCopyElementAtPosition(system, 500, 317, &hit) == .success, let hit {
         var pid: pid_t = 0
