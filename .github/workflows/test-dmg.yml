@@ -6,14 +6,14 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, snippets, ci-gaps]
+        options: [baseline, candidate, upgrade, snippets, snippet-fix-tests, ci-gaps]
         default: candidate
 permissions:
   contents: read
   actions: read
 jobs:
   smoke:
-    if: ${{ inputs.build != 'ci-gaps' }}
+    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -240,6 +240,22 @@ jobs:
           path: ${{ runner.temp }}/evidence/
           if-no-files-found: error
           retention-days: 7
+  snippet-fix-tests:
+    if: ${{ inputs.build == 'snippet-fix-tests' }}
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: f9a83583c3eb2e674f07d2312025bffe1313966e
+      - name: Test exact temporary fix and related snippet suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = f9a83583c3eb2e674f07d2312025bffe1313966e
+          swift test --filter Snippet
   skipped-v1-and-browser:
     if: ${{ inputs.build == 'ci-gaps' }}
     runs-on: ubuntu-24.04
