@@ -39,6 +39,27 @@ func snapshot(_ root: AXUIElement) -> [AXUIElement] {
     return result
 }
 let system = AXUIElementCreateSystemWide()
+func syntheticPromptWindow(_ helperPID: pid_t) -> CGRect? {
+    guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+          let helperIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == helperPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
+          let appIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == appPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
+          helperIndex < appIndex, let raw = windows[helperIndex][kCGWindowBounds as String] as? [String: Any],
+          let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), (300...600).contains(rect.width), (150...400).contains(rect.height),
+          rect.minX >= 0, rect.minY >= 0, rect.maxX <= 1024, rect.maxY <= 768 else { return nil }
+    return rect
+}
+func syntheticPromptArgumentsMatch(_ helperPID: pid_t) -> Bool {
+    let process = Process(), pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/bin/ps")
+    process.arguments = ["-p", String(helperPID), "-o", "args="]
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return false }
+    let output = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0, output.count < 4096, let line = String(data: output, encoding: .utf8) else { return false }
+    return line.contains(key) && line.localizedCaseInsensitiveContains("passphrase")
+}
 func focusedPID() -> pid_t? {
     guard let focused = attribute(system, "AXFocusedUIElement"), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
     var pid: pid_t = 0
@@ -67,6 +88,27 @@ while Date() < deadline {
             let roles = nodes.compactMap { attribute($0, "AXRole") as? String }.joined(separator: ",")
             let diagnostic = "SYNTHETIC_ASKPASS_PROCESS_MATCH=YES roles=\(roles)"
             if reported.insert(diagnostic).inserted { print(diagnostic) }
+            if nodes.isEmpty, syntheticPromptArgumentsMatch(candidate), let rect = syntheticPromptWindow(candidate) {
+                let point = CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.72)
+                guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+                      let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { fail("synthetic AskPass click") }
+                down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+                for character in "TESTONLYCODEXPASSPHRASE" {
+                    guard syntheticPromptWindow(candidate) != nil, let stroke = syntheticKeyStroke(character),
+                          let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: true),
+                          let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: false) else { fail("synthetic AskPass input") }
+                    let flags: CGEventFlags = stroke.shift ? .maskShift : []
+                    keyDown.flags = flags; keyUp.flags = flags; keyDown.post(tap: .cghidEventTap); keyUp.post(tap: .cghidEventTap)
+                    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+                }
+                guard syntheticPromptWindow(candidate) != nil,
+                      let returnDown = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
+                      let returnUp = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else { fail("synthetic AskPass confirmation") }
+                returnDown.post(tap: .cghidEventTap); returnUp.post(tap: .cghidEventTap)
+                print("SYNTHETIC_ASKPASS_ENTERED=YES")
+                exit(0)
+            }
         }
     }
     var hit: AXUIElement?
