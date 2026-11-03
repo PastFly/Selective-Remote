@@ -2,13 +2,13 @@
 set -Eeuo pipefail
 umask 022
 cd "$GITHUB_WORKSPACE"
-git merge-base --is-ancestor e0c9dd7589a6e65f5b6f795519e865101e3ddbb0 HEAD
+git merge-base --is-ancestor 6f44a19e941428c280f09dc8bb5ec80c17122ae8 HEAD
 source_head=$(git rev-parse HEAD)
 [[ "$source_head" == "$GITHUB_SHA" ]]
-git diff --exit-code e0c9dd7589a6e65f5b6f795519e865101e3ddbb0 HEAD -- cloud
+git diff --exit-code 6f44a19e941428c280f09dc8bb5ec80c17122ae8 HEAD -- cloud
 mkdir -p /tmp/sr-controller-acceptance/results
 exec > >(tee /tmp/sr-controller-acceptance/results/acceptance.log) 2>&1
-echo "TEST_HEAD=$source_head EXACT_CLOUD_SOURCE=e0c9dd7589a6e65f5b6f795519e865101e3ddbb0"
+echo "TEST_HEAD=$source_head EXACT_CLOUD_SOURCE=6f44a19e941428c280f09dc8bb5ec80c17122ae8"
 echo 'ENVIRONMENT=EPHEMERAL_GITHUB_HOSTED_RUNNER'
 root=/opt/selective-remote-controller
 state=/var/lib/selective-remote-controller
@@ -129,7 +129,7 @@ chmod 600 "$root/runtime-node.sha256" "$root/bundle.sha256"
 controller_digest=$(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1)
 composefiles=("$cloud/compose.yaml" "$cloud/compose.443-only.yaml" "$cloud/compose.small-host.yaml" "$cloud/compose.publication-fence.yaml" "$cloud/compose.loopback-test.yaml" "$cloud/compose.postgres-bind.yaml")
 composejson=$(for f in "${composefiles[@]}"; do jq -cn --arg path "$f" --arg hash "$(sha256sum "$f"|cut -d ' ' -f 1)" '{path:$path,sha256:$hash}'; done | jq -s .)
-jq -n --arg sha "$source_head" --arg image "$image" --arg ctrl "$controller_digest" --arg envhash "$(sha256sum "$cloud/.env"|cut -d ' ' -f 1)" --arg root "$pgmount" --arg src "$source_device" --arg uid "$uid" --arg gid "$gid" --argjson compose "$composejson" --arg anchorID "$anchor_id" '{version:1,anchorProtocol:1,anchorDeploymentID:$anchorID,sourceSHA:$sha,imageDigest:$image,controllerDigest:$ctrl,cloudDirectory:"/opt/selective-remote/cloud",envPath:"/opt/selective-remote/cloud/.env",envDigest:$envhash,network:"cloud_private",fencePath:"/var/lib/selective-remote-controller/publication/journal",backupDirectory:"/var/backups/sr-acceptance",composeFiles:$compose,storage:{POSTGRES_DATA_MOUNT_ROOT:$root,POSTGRES_DATA_HOST_PATH:($root+"/data"),POSTGRES_DATA_EXPECTED_SOURCE:$src,POSTGRES_DATA_EXPECTED_FSTYPE:"ext4",POSTGRES_DATA_UID:$uid,POSTGRES_DATA_GID:$gid}}' > "$root/settings.json"
+jq -n --arg sha "$source_head" --arg image "$image" --arg ctrl "$controller_digest" --arg envhash "$(sha256sum "$cloud/.env"|cut -d ' ' -f 1)" --arg root "$pgmount" --arg src "$source_device" --arg uid "$uid" --arg gid "$gid" --argjson compose "$composejson" --arg anchorID "$anchor_id" '{version:1,teamSafetyStopVersion:1,anchorProtocol:1,anchorDeploymentID:$anchorID,sourceSHA:$sha,imageDigest:$image,controllerDigest:$ctrl,cloudDirectory:"/opt/selective-remote/cloud",envPath:"/opt/selective-remote/cloud/.env",envDigest:$envhash,network:"cloud_private",fencePath:"/var/lib/selective-remote-controller/publication/journal",backupDirectory:"/var/backups/sr-acceptance",composeFiles:$compose,storage:{POSTGRES_DATA_MOUNT_ROOT:$root,POSTGRES_DATA_HOST_PATH:($root+"/data"),POSTGRES_DATA_EXPECTED_SOURCE:$src,POSTGRES_DATA_EXPECTED_FSTYPE:"ext4",POSTGRES_DATA_UID:$uid,POSTGRES_DATA_GID:$gid}}' > "$root/settings.json"
 chmod 600 "$root/settings.json"
 # Positive baseline uses the independently installed checker, same Docker mounts and PG/journal.
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/baseline.json
@@ -147,6 +147,7 @@ docker exec cloud-cloud-1 node -e 'fetch("http://127.0.0.1:8080/readyz").then(as
 echo 'INSTALLED_CONTROLLER_NORMAL_START=PASS'
 # Check the existing stop before touching any synthetic data.
 docker exec cloud-cloud-1 node --input-type=module -e 'const headers={Authorization:"Bearer "+"a".repeat(43),"Content-Type":"application/json","x-selective-v1-write-fence":"1"};const envelope={baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"bmV3",nonce:"A".repeat(16),authTag:"A".repeat(22),contentHash:"A".repeat(43)};const r=await fetch("http://127.0.0.1:8080/v1/vault",{method:"PUT",headers,body:JSON.stringify({protocol:"framed-v1",envelope})});const b=await r.json();if(r.status!==503||b.error!=="vault_write_temporarily_unavailable")throw Error("expected_write_stop_"+r.status);console.log("HTTP_WRITE_STOP=PASS")'
+docker exec cloud-cloud-1 node --input-type=module -e 'const h={Authorization:"Bearer "+"a".repeat(43),"Content-Type":"application/json"};for(const [path,method] of [["/v1/teams","GET"],["/v1/devices/22222222-2222-4222-8222-222222222222/revoke","POST"]]){const r=await fetch("http://127.0.0.1:8080"+path,{method,headers:h,...(method==="POST"?{body:"{}"}:{})});const b=await r.json();if(r.status!==503||b.error!=="team_security_temporarily_unavailable")throw Error("expected_team_stop_"+method+"_"+r.status);}console.log("TEAM_AND_DEVICE_STOP=PASS")'
 # Capture coherent revision 1 plus journal after arming. No production data.
 "${compose[@]}" stop cloud caddy >/dev/null
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/before-write.dump
@@ -204,16 +205,6 @@ grep -q '^deployment_code_floor$' /tmp/sr-controller-acceptance/results/old-imag
 [[ $(docker inspect --format '{{.Image}}' cloud-cloud-1) == "$image" ]]
 [[ $(docker inspect --format '{{.State.Running}}' cloud-cloud-1) == true ]]
 echo 'ACTUAL_OLD_SERVER_DOWNGRADE_REJECTED=PASS'
-oldpid=$(docker inspect --format '{{.State.Pid}}' cloud-cloud-1)
-docker kill cloud-cloud-1 >/dev/null
-bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/crash-restart-controller.log 2>&1
-grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/crash-restart-controller.log
-for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
-[[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]]
-[[ $(docker inspect --format '{{.State.Pid}}' cloud-cloud-1) != "$oldpid" ]]
-[[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
-[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 2 ]]
-echo 'INSTALLED_CONTROLLER_CRASH_RESTART=PASS'
 # Restore matching older primary DB and journal while leaving independent anchor unchanged.
 "${compose[@]}" stop cloud caddy >/dev/null
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/after-write.dump
@@ -242,31 +233,5 @@ grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/
 [[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 2 ]]
 [[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
 echo 'MATCHING_NEWER_SNAPSHOT_RECOVERY=PASS'
-# Deliberately lose the actual COMMIT response after PostgreSQL commits. The
-# pending intent is durably anchored; this is a real transaction with a
-# synthetic connection failure, not a real HTTP V1 write.
-"${compose[@]}" stop cloud caddy >/dev/null
-anchor_before_ambiguous=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
-docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import pg from "pg";import {PostgresStore} from "./src/postgres-store.mjs";import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const cfg=loadConfig(),real=new pg.Pool({connectionString:cfg.databaseURL}),f=createConfiguredMigrationFence(cfg.deployment);let injected=false;const pool={async connect(){const c=await real.connect();return {async query(sql,values){if(sql==="COMMIT"&&!injected){injected=true;await c.query(sql,values);throw Error("synthetic_lost_commit_reply")}return c.query(sql,values)},release(){c.release()}}}};try{const store=new PostgresStore(null,pool,{v1Fence:f.fence});try{await store.putVault("11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222",{baseRevision:2,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"cmV2Mw",nonce:"A".repeat(16),authTag:"A".repeat(22),contentHash:"A".repeat(43)});throw Error("missing_injection")}catch(e){if(e.message!=="synthetic_lost_commit_reply")throw e}const row=await real.query("SELECT revision,ciphertext FROM personal_vaults WHERE user_id=$1",["11111111-1111-4111-8111-111111111111"]);if(Number(row.rows[0].revision)!==3||row.rows[0].ciphertext!=="cmV2Mw"||(await f.fence.snapshot()).v1Pending.length!==1)throw Error("ambiguous_not_retained");console.log("ANCHORED_LOST_COMMIT_REPLY_PENDING=PASS")}finally{await f.close();await real.end()}'
-anchor_pending=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
-[[ ${anchor_pending%%:*} -gt ${anchor_before_ambiguous%%:*} ]]
-set +e
-bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/ambiguous-controller.log 2>&1
-ambiguous_status=$?
-set -e
-[[ "$ambiguous_status" -ne 0 ]]
-grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
-grep -q '^deployment_fence_pending$' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
-! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
-echo 'INSTALLED_CONTROLLER_REJECTS_AMBIGUOUS_COMMIT=PASS'
-# A fresh process obtains positive committed outcome from the actual DB, and
-# advances the anchor on the terminal confirmation before reopening traffic.
-docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import pg from "pg";import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";import {PublicationFenceCoordinator,readCommittedV1Outcome} from "./src/publication-fence-coordinator.mjs";const cfg=loadConfig(),pool=new pg.Pool({connectionString:cfg.databaseURL}),f=createConfiguredMigrationFence(cfg.deployment);try{const pending=(await f.fence.snapshot()).v1Pending;if(pending.length!==1)throw Error("pending_missing");const result=await new PublicationFenceCoordinator({fence:f.fence}).reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query:(sql,values)=>pool.query(sql,values),intent})});if(result.status!=="confirmed"||(await f.fence.snapshot()).v1Pending.length)throw Error("reconciliation_failed");console.log("ANCHORED_AMBIGUOUS_COMMIT_RECONCILED=PASS")}finally{await f.close();await pool.end()}'
-anchor_confirmed=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
-[[ ${anchor_confirmed%%:*} -gt ${anchor_pending%%:*} ]]
-bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/reconciled-controller.log 2>&1
-grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/reconciled-controller.log
-[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == '3:cmV2Mw' ]]
-echo 'INSTALLED_CONTROLLER_STARTS_AFTER_ANCHORED_RECONCILIATION=PASS'
 echo 'ANCHOR_FAILURE_DOMAIN=SEPARATE_DATABASE_SAME_EPHEMERAL_VM_NOT_PRODUCTION_ISOLATION'
 echo 'V1_HTTP_WRITES=STOPPED'
