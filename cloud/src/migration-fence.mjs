@@ -2,6 +2,7 @@ import {open, mkdir, rmdir, lstat} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {dirname, isAbsolute} from 'node:path';
 import {FENCE_MAX_BYTES,validateFenceEvent,reduceFenceEvents} from './migration-fence-journal.mjs';
+import {fenceHistoryHead,sameFenceHistoryHead} from './fence-history-head.mjs';
 
 function verifySchemaFloor(schemaVersion,snapshot){
  if(!Number.isSafeInteger(schemaVersion)||schemaVersion<snapshot.schemaFloor)throw Error('deployment_schema_floor');
@@ -10,9 +11,15 @@ function verifySchemaFloor(schemaVersion,snapshot){
 export class MigrationFence{
  #recovery=null;
  #writes=Promise.resolve();
- constructor(path,{openFile=open}={}){
+ constructor(path,{openFile=open,anchor=null}={}){
   if(!isAbsolute(path))throw Error('invalid_deployment_fence_path');
-  this.path=path;this.openFile=openFile;
+  if(anchor!==null&&(typeof anchor?.read!=='function'||typeof anchor?.advance!=='function'))throw Error('invalid_deployment_anchor');
+  this.path=path;this.openFile=openFile;this.anchor=anchor;
+ }
+ async assertAnchor(records){
+  if(!this.anchor)return;
+  const current=await this.anchor.read();
+  if(!sameFenceHistoryHead(current,fenceHistoryHead(records)))throw Error('deployment_anchor_mismatch');
  }
  async records(file,{validateHistory=true}={}){
   const stat=await file.stat();
@@ -44,7 +51,8 @@ export class MigrationFence{
   await this.assertUnlocked();
   const file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
   try{
-   const snapshot=reduceFenceEvents(await this.records(file));
+   const records=await this.records(file);await this.assertAnchor(records);
+   const snapshot=reduceFenceEvents(records);
    if(snapshot.pending.length||snapshot.v1Pending?.length)throw Error('deployment_fence_pending');
    await file.sync();
    const dir=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);
@@ -69,12 +77,20 @@ export class MigrationFence{
    }
   }
   if(!acquired)throw Error('deployment_fence_locked');
-  let file;
+  let file,anchorPrevious,anchorNext;
   try{
    // Provisioning is an explicit operator step. Missing retained history must
    // never be replaced with an empty journal after a successful earlier check.
    file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
    const records=await this.records(file);
+   if(this.anchor){
+    const local=fenceHistoryHead(records),remote=await this.anchor.read();
+    if(!sameFenceHistoryHead(remote,local)){
+     if(!this.#recovery||!sameFenceHistoryHead(remote,this.#recovery.anchorPrevious)
+       ||!sameFenceHistoryHead(local,this.#recovery.anchorNext))throw Error('deployment_anchor_mismatch');
+     anchorPrevious=remote;anchorNext=local;
+    }else anchorPrevious=remote;
+   }
    if(!records.some(r=>JSON.stringify(r)===key)){
     const snapshot=reduceFenceEvents([...records,record]);
     const line=Buffer.from(key+'\n'),size=(await file.stat()).size;
@@ -97,13 +113,16 @@ export class MigrationFence{
      if(!Number.isSafeInteger(bytesWritten)||bytesWritten<=0||bytesWritten>line.length-offset)throw Error('deployment_fence_short_write');
      offset+=bytesWritten;
     }
+    if(this.anchor)anchorNext=fenceHistoryHead([...records,record]);
    }
    retain=true;await file.sync();
    const dir=await this.openFile(directory,constants.O_RDONLY);
    try{await dir.sync();}finally{await dir.close();}
+   if(this.anchor&&anchorNext&&!sameFenceHistoryHead(anchorPrevious,anchorNext))
+    await this.anchor.advance(anchorPrevious,anchorNext);
    retain=false;
   }finally{
-   if(retain)this.#recovery={key,ino:identity.ino,dev:identity.dev};
+   if(retain)this.#recovery={key,ino:identity.ino,dev:identity.dev,anchorPrevious,anchorNext};
    try{await file?.close();}finally{
     if(!retain){this.#recovery=null;await rmdir(lock);}
    }
@@ -116,13 +135,14 @@ export class MigrationFence{
  async readRecords(){
   await this.assertUnlocked();
   const file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
-  try{const records=await this.records(file);await this.assertUnlocked();return records;}finally{await file.close();}
+  try{const records=await this.records(file);await this.assertAnchor(records);await this.assertUnlocked();return records;}finally{await file.close();}
  }
  async snapshot(){
   await this.assertUnlocked();
   const file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
   try{
-   const snapshot=reduceFenceEvents(await this.records(file,{validateHistory:false}));
+   const records=await this.records(file,{validateHistory:false});await this.assertAnchor(records);
+   const snapshot=reduceFenceEvents(records);
    await this.assertUnlocked();return snapshot;
   }finally{await file.close();}
  }
