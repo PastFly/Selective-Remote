@@ -92,7 +92,12 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
         let current = snapshot(app).filter {
             (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
         }
-        if current.count == 1 && (attr(current[0], "AXValue") as? String) == value { confirmed = true; break }
+        if current.count == 1 {
+            let fieldValue = attr(current[0], "AXValue")
+            if (fieldValue as? String) == value || (fieldValue as? NSNumber)?.stringValue == value {
+                confirmed = true; break
+            }
+        }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
     }
     if verifyVisibleValue && !confirmed { stop("typed field not confirmed: \(placeholder)") }
@@ -266,7 +271,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
         (attr($0, "AXRole") as? String) == "AXButton" &&
         (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK"
     }
-    guard hosts.count == 1, let position = attr(hosts[0], "AXPosition"), let size = attr(hosts[0], "AXSize"),
+    guard hosts.count == 1 else { stop("synthetic host row unavailable") }
+    _ = AXUIElementPerformAction(hosts[0], "AXScrollToVisible" as CFString)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+    guard let position = attr(hosts[0], "AXPosition"), let size = attr(hosts[0], "AXSize"),
           CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic host row unavailable") }
     var point = CGPoint.zero, dimensions = CGSize.zero
     guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
