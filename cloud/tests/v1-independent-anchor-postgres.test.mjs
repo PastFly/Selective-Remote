@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {MigrationFence} from '../src/migration-fence.mjs';
+import {fenceIntentDigest} from '../src/migration-fence-journal.mjs';
 
 const url=process.env.SR_TEST_ANCHOR_DATABASE_URL;
 const genesis=createHash('sha256').update('selective-remote/fence-history/v1\0').digest('hex');
@@ -90,8 +91,12 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
    assert.deepEqual(await anchor.read(),one);
    await assert.rejects(()=>new PostgresFenceAnchor(client,randomUUID()).read(),/deployment_anchor_unavailable/);
    const integrated=new PostgresFenceAnchor(client,integratedID),fence=new MigrationFence(path,{anchor:integrated});
-   await fence.intent(record('11111111-1111-4111-8111-111111111111'));
+   const pending={version:2,type:'PENDING_INTENT',intentID:randomUUID(),operationID:randomUUID(),kind:'PUBLICATION',schemaFloor:22,
+    vaults:[{teamID:randomUUID(),vaultID:randomUUID(),generationID:randomUUID(),sequence:1,headerHash:'a'.repeat(64),manifestHash:'b'.repeat(64)}]};
+   await fence.append(pending);
+   await fence.append({version:2,type:'CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:fenceIntentDigest(pending)});
    const old=await readFile(path);
+   await fence.compact();assert.equal((await integrated.read()).position,2);
    await fence.intent(record('22222222-2222-4222-8222-222222222222'));
    await writeFile(path,old);
    await assert.rejects(()=>fence.snapshot(),/deployment_anchor_mismatch/);
