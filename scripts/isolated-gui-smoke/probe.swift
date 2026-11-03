@@ -142,7 +142,20 @@ if CommandLine.arguments.count == 3 && ["--inspect-passphrase", "--add-passphras
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     if CommandLine.arguments[2] == "--add-passphrase" {
-        pressUnique("AXButton", "Add")
+        let buttons = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXButton" && ((attr($0, "AXTitle") as? String) == "Add" || (attr($0, "AXDescription") as? String) == "Add") }
+        guard buttons.count == 1, let buttonPosition = attr(buttons[0], "AXPosition"), let buttonSize = attr(buttons[0], "AXSize"),
+              CFGetTypeID(buttonPosition) == AXValueGetTypeID(), CFGetTypeID(buttonSize) == AXValueGetTypeID() else { stop("synthetic Add geometry") }
+        var location = CGPoint.zero, extent = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(buttonPosition, to: AXValue.self), .cgPoint, &location),
+              AXValueGetValue(unsafeBitCast(buttonSize, to: AXValue.self), .cgSize, &extent), extent.width > 0, extent.height > 0 else { stop("synthetic Add bounds") }
+        location.x += extent.width / 2; location.y += extent.height / 2
+        var target: AXUIElement?, targetPID: pid_t = 0
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(location.x), Float(location.y), &target) == .success,
+              let target, AXUIElementGetPid(target, &targetPID) == .success, targetPID == pid,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              let addDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: location, mouseButton: .left),
+              let addUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: location, mouseButton: .left) else { stop("synthetic Add hit test") }
+        addDown.post(tap: .cghidEventTap); addUp.post(tap: .cghidEventTap)
         print("SYNTHETIC_SSH_KEY_ADD_REQUESTED=YES")
         exit(0)
     }
