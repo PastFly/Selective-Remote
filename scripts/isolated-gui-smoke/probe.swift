@@ -115,6 +115,40 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host"].contains(CommandLine.arguments[2]) {
+    let late = CommandLine.arguments[2] == "--create-late-host"
+    guard env["SR_BUILD_KIND"] == (late ? "baseline" : "candidate") else { stop("mixed-write version mismatch") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXButton", "Connections")
+    pressUnique("AXPopUpButton", "Add")
+    pressUnique("AXMenuItem", "New SSH")
+    setUniqueField("SSH Server", late ? "TEST-ONLY-CODEX-LATE-HOST" : "TEST-ONLY-CODEX-CURRENT-HOST")
+    setUniqueField("For example: Work", "TEST-ONLY-CODEX-MIXED-FOLDER")
+    setUniqueField("server.example.com or a Host from ~/.ssh/config", late ? "192.0.2.11" : "192.0.2.12")
+    setUniqueField("username", "test")
+    pressUnique("AXButton", "Authentication")
+    setUniqueField("Пароль SSH-сервера", late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-CURRENT-SECRET", verifyVisibleValue: false)
+    pressUnique("AXButton", "Save")
+    pressUnique("AXButton", "General")
+    print("SYNTHETIC_MIXED_PROFILE_SAVE_REQUESTED=YES")
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-late-host" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("mixed inspection version") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    let visible = snapshot(app).contains {
+        (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LATE-HOST" ||
+        (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LATE-HOST"
+    }
+    print("LATE_LEGACY_HOST_VISIBLE_IN_CURRENT_UI=\(visible)")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
     guard ["snippets", "snippets-current", "snippetfix"].contains(env["SR_BUILD_KIND"] ?? "") else { stop("snippet inspection requires isolated baseline") }
     let welcome = snapshot(app).filter {
