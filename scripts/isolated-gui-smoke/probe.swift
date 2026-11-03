@@ -61,6 +61,7 @@ let remainingWelcome = snapshot(app).filter {
 }
 guard remainingWelcome.isEmpty else { stop("welcome remains open") }
 print("WELCOME_CLOSED=YES")
+if env["SR_BUILD_KIND"] == "baseline" {
 pressUnique("AXButton", "Connections")
 print("CONNECTIONS_OPEN_REQUESTED=YES")
 pressUnique("AXRadioButton", "SSH")
@@ -78,6 +79,9 @@ setUniqueField("For example: Work", "TEST-ONLY-CODEX-UPGRADE-FOLDER")
 setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.10")
 setUniqueField("username", "test")
 print("SYNTHETIC_PROFILE_FIELDS_ENTERED=YES")
+} else if env["SR_BUILD_KIND"] == "candidate" {
+    print("CANDIDATE_WINDOW_INSPECTION=YES")
+} else { stop("unknown build kind") }
 for element in snapshot(app).prefix(500) {
     let role = attr(element, "AXRole") as? String ?? ""
     let title = attr(element, "AXTitle") as? String ?? ""

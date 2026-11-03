@@ -44,6 +44,8 @@ jobs:
           shasum -a 256 -c "${hashes[0]}"
           shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
       - name: Launch actual app in the disposable runner
+        env:
+          SR_BUILD_KIND: ${{ inputs.build }}
         shell: bash
         run: |
           set -euo pipefail
