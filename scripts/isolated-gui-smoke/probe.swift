@@ -115,6 +115,26 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-credentials" {
+    guard env["SR_BUILD_KIND"] == "credentials" else { stop("credential inspection requires isolated baseline") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXButton", "Connections")
+    pressUnique("AXButton", "Authentication")
+    for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
+        let role = attr(element, "AXRole") as? String ?? ""
+        let title = attr(element, "AXTitle") as? String ?? ""
+        let description = attr(element, "AXDescription") as? String ?? ""
+        let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
+        if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty {
+            print("CREDENTIAL_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
+        }
+    }
+    print("CREDENTIAL_INSPECTION_ONLY=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
     guard ["snippets", "snippets-current", "snippetfix"].contains(env["SR_BUILD_KIND"] ?? "") else { stop("snippet inspection requires isolated baseline") }
     let welcome = snapshot(app).filter {
