@@ -6,7 +6,7 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, credentials, forwarding, passphrase, network, network-current, snippet-fix-tests, ci-gaps]
+        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, credentials, forwarding, passphrase, passphrase-diagnostic, network, network-current, snippet-fix-tests, ci-gaps]
         default: candidate
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding || "$BUILD_KIND" == passphrase ]]; then
+          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding || "$BUILD_KIND" == passphrase || "$BUILD_KIND" == passphrase-diagnostic ]]; then
             gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/candidate"
             cd "$RUNNER_TEMP/candidate"
             printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
@@ -76,6 +76,7 @@ jobs:
           shopt -s nullglob
           run_build="$SR_BUILD_KIND"
           if [[ "$run_build" == upgrade ]]; then export SR_BUILD_KIND=baseline; fi
+          if [[ "$run_build" == passphrase-diagnostic ]]; then export SR_BUILD_KIND=passphrase; fi
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
           keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
           original_default=$(security default-keychain -d user | python3 -c 'import shlex,sys; a=shlex.split(sys.stdin.read()); print(a[0] if a else "")')
@@ -173,6 +174,7 @@ jobs:
             DISPLAY=:0 SSH_ASKPASS="$fixture/no-askpass" SSH_ASKPASS_REQUIRE=force /usr/bin/ssh-add --apple-load-keychain "$fixture/key" >/dev/null 2>&1
             /usr/bin/ssh-add -l | grep -Fq "$fingerprint"
             printf '%s\n' 'SYNTHETIC_OPENSSH_KEYCHAIN_RELOAD=PASS'
+            if [[ "$run_build" == passphrase-diagnostic ]]; then exit 0; fi
             defaults export "$bundle" "$RUNNER_TEMP/passphrase-before.plist"
             /usr/bin/ssh-add -d "$fixture/key" >/dev/null 2>&1
             if /usr/bin/ssh-add -l 2>/dev/null | grep -Fq "$fingerprint"; then echo 'Synthetic agent key was not unloaded'; exit 1; fi
