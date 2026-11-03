@@ -125,6 +125,18 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-fo
     pressUnique("AXPopUpButton", "New Tunnel")
     pressUnique("AXMenuItem", "Independent tunnel")
     pressUnique("AXMenuItem", "Local")
+    guard CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768,
+          running.activate(options: [.activateIgnoringOtherApps]) else { stop("forwarding window geometry") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    let point = CGPoint(x: 500, y: 340)
+    var hit: AXUIElement?, hitPID: pid_t = 0
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid,
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("synthetic forwarding row hit test") }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
