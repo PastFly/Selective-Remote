@@ -40,7 +40,7 @@ export function validateCandidateIdentity(settings,image){
 export function validateCandidateCapabilities(candidate){
   const expected={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1};
   const count=candidate&&Object.keys(candidate).length;
-  if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1))
+  if(!candidate||!(count===5||(count===6&&[1,2].includes(candidate.v1WriterProtocol)))
     ||Object.entries(expected).some(([k,v])=>candidate[k]!==v))fail('deployment_code_floor');
 }
 function safeBind(bind){

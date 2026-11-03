@@ -252,7 +252,8 @@ test('controller validates writer capability metadata without accepting unknown 
   assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
   const {v1WriterProtocol: _, ...oldCandidate}=currentCapabilities;
   assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
-  for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
+  assert.doesNotThrow(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:2}));
+  for(const value of [0,3,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
 });
 

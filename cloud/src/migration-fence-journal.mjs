@@ -39,6 +39,10 @@ export function validateFenceEvent(value){
   const {schemaFloor,...v}=value;return {...tuple(v,false),schemaFloor};
  }
  if(!object(value)||value.version!==2)invalid();
+ if(['V1_STOP_PENDING','V1_STOP_CONFIRMED'].includes(value.type)){
+  if(!keys(value,['version','type','stopID'])||!isUUID(value.stopID))invalid();
+  return {version:2,type:value.type,stopID:value.stopID};
+ }
  if(value.type==='V1_WRITER_FLOOR'){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
@@ -86,9 +90,21 @@ export function reduceFenceEvents(events){
  if(!Array.isArray(events))invalid();
  const intents=new Map(),outcomes=new Map(),committed=new Map(),pending=new Map(),generations=new Map(),vaultTeams=new Map();
  const v1Intents=new Map(),v1Outcomes=new Map(),v1Committed=new Map(),v1Pending=new Map(),v1Owners=new Map(),v1Operations=new Map();
- let writerFloor=0,v1Baseline=null;
+ let writerFloor=0,v1Baseline=null,v1StopID=null,v1StopPending=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
+  if(event.type==='V1_STOP_PENDING'){
+   if(v1StopID===event.stopID)continue;
+   if(v1StopID||writerFloor!==1||!v1Baseline||pending.size||v1Pending.size)conflict();
+   v1StopID=event.stopID;v1StopPending=event.stopID;continue;
+  }
+  if(event.type==='V1_STOP_CONFIRMED'){
+   if(v1StopID!==event.stopID)conflict();
+   if(v1StopPending===null&&writerFloor===2)continue;
+   if(v1StopPending!==event.stopID)conflict();
+   v1StopPending=null;writerFloor=2;continue;
+  }
+  if(v1StopPending)conflict();
   if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
   if(event.type==='V1_BASELINE'){
    if((writerFloor!==0&&!v1Baseline)||v1Intents.size||pending.size||v1Pending.size)conflict();
@@ -153,6 +169,6 @@ export function reduceFenceEvents(events){
   }
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
- return {...(writerFloor?{writerFloor}:{}),...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
+ return {...(writerFloor?{writerFloor}:{}),...(v1StopPending?{v1StopPending}:{}),...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }

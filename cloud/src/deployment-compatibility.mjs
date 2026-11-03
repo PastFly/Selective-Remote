@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
-import { assertV1CommitFence } from './v1-commit-fence.mjs';
+import { assertV1CommitFence, assertV1StopFence } from './v1-commit-fence.mjs';
 import { assertV1DataFloor } from './v1-data-fence.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
@@ -8,7 +8,7 @@ function requireCandidate(candidate) {
   const keys = ['fenceVersion', 'maxSchemaVersion', 'readerProjectionVersion', 'version', 'wholePublicationVersion'];
   const legacy = candidate && Object.keys(candidate).sort().join(',') === keys.join(',');
   const writerAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol'].sort().join(',')
-    && candidate.v1WriterProtocol === 1;
+    && [1, 2].includes(candidate.v1WriterProtocol);
   if ((!legacy && !writerAware)
       || candidate.version !== 1 || candidate.fenceVersion !== 2 || candidate.maxSchemaVersion !== 22
       || candidate.readerProjectionVersion !== 1 || candidate.wholePublicationVersion !== 1)
@@ -16,13 +16,13 @@ function requireCandidate(candidate) {
 }
 function requireWriterFloor(snapshot, candidate) {
   const floor = snapshot?.writerFloor ?? 0;
-  if (![0, 1].includes(floor) || floor > (candidate.v1WriterProtocol ?? 0)) throw Error('deployment_writer_floor');
+  if (![0, 1, 2].includes(floor) || floor > (candidate.v1WriterProtocol ?? 0)) throw Error('deployment_writer_floor');
   return floor;
 }
 function requireResolved(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.pending) || !Array.isArray(snapshot.committed) || !Array.isArray(snapshot.outcomes))
     throw Error('invalid_deployment_fence');
-  if (snapshot.pending.length || snapshot.v1Pending?.length) throw Error('deployment_fence_pending');
+  if (snapshot.pending.length || snapshot.v1Pending?.length || snapshot.v1StopPending) throw Error('deployment_fence_pending');
 }
 function samePublication(record, row) {
   if (!row || row.teamID !== record.teamID || row.vaultID !== record.vaultID || row.manifestHash !== record.manifestHash) return false;
@@ -102,6 +102,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
   if (afterWriterFloor) {
     await assertV1CommitFence(query);
+    if (afterWriterFloor === 2) await assertV1StopFence(query);
     await assertV1DataFloor(query,after);
     const final=await fence.snapshot();
     requireResolved(final);
