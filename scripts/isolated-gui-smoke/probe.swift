@@ -142,6 +142,15 @@ if CommandLine.arguments.count == 3 && ["--inspect-passphrase", "--add-passphras
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     if CommandLine.arguments[2] == "--add-passphrase" {
+        let scrollPoint = CGPoint(x: 800, y: 600)
+        var scrollHit: AXUIElement?, scrollPID: pid_t = 0
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(scrollPoint.x), Float(scrollPoint.y), &scrollHit) == .success,
+              let scrollHit, AXUIElementGetPid(scrollHit, &scrollPID) == .success, scrollPID == pid,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -600, wheel2: 0, wheel3: 0) else { stop("synthetic Add scroll hit test") }
+        scroll.location = scrollPoint
+        scroll.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         let buttons = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXButton" && ((attr($0, "AXTitle") as? String) == "Add" || (attr($0, "AXDescription") as? String) == "Add") }
         guard buttons.count == 1, let buttonPosition = attr(buttons[0], "AXPosition"), let buttonSize = attr(buttons[0], "AXSize"),
               CFGetTypeID(buttonPosition) == AXValueGetTypeID(), CFGetTypeID(buttonSize) == AXValueGetTypeID() else { stop("synthetic Add geometry") }
