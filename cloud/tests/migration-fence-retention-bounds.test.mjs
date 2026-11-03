@@ -12,8 +12,8 @@ function head(events){let digest=createHash('sha256').update('selective-remote/f
  for(const event of events){const n=Buffer.alloc(8);n.writeBigUInt64BE(BigInt(++i));digest=createHash('sha256').update('selective-remote/fence-history/v1\0').update(digest).update(n).update(JSON.stringify(validateFenceEvent(event))+'\n').digest();}
  return {position:i,digest:digest.toString('hex')};}
 
-async function isolatedSnapshot(path){
- const code=`import {MigrationFence} from ${JSON.stringify(moduleURL)};try{await new MigrationFence(process.argv[1]).snapshot();process.exit(9);}catch(e){if(e.message==='deployment_fence_history_limit'||e.message==='invalid_deployment_fence')process.exit(0);console.error(e.message);process.exit(10);}`;
+async function isolatedSnapshot(path,{expectSuccess=false}={}){
+ const code=`import {MigrationFence} from ${JSON.stringify(moduleURL)};try{await new MigrationFence(process.argv[1]).snapshot();process.exit(${expectSuccess?0:9});}catch(e){if(!${expectSuccess}&&(e.message==='deployment_fence_history_limit'||e.message==='invalid_deployment_fence'))process.exit(0);console.error(e.message);process.exit(10);}`;
  const child=spawn('/bin/sh',['-c','ulimit -c 0; exec "$@"','sr-retention-bound',process.execPath,'--max-old-space-size=96','--input-type=module','-e',code,path],{stdio:['ignore','ignore','pipe']});
  let stderr='';child.stderr.on('data',data=>stderr+=data);
  const outcome=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',(code,signal)=>resolve({code,signal}));});
@@ -75,4 +75,16 @@ test('terminal byte reservation covers archived and active history before dispat
  const sameTeam=id();next.vaults=next.vaults.map(v=>({...v,teamID:sameTeam})).sort((a,b)=>a.vaultID.localeCompare(b.vaultID));
  await assert.rejects(new MigrationFence(path).append(next),/deployment_fence_history_limit/);
  assert.deepEqual(await (await import('node:fs/promises')).readFile(path),before);
+});
+
+test('nearly 8 MiB valid retained history remains readable with 96 MiB heap',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'sr-near-bound-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const path=join(dir,'journal'),archiveDir=path+'.archives';await mkdir(archiveDir);
+ const id=()=>randomUUID(),teamID=id(),p={version:2,type:'PENDING_INTENT',intentID:id(),operationID:id(),kind:'PUBLICATION',schemaFloor:22,
+ vaults:Array.from({length:10},()=>({teamID,vaultID:id(),generationID:id(),sequence:1,headerHash:'a'.repeat(64),manifestHash:'b'.repeat(64)})).sort((a,b)=>a.vaultID.localeCompare(b.vaultID))};
+ const done={version:2,type:'CONFIRMED_COMMIT',intentID:p.intentID,intentDigest:fenceIntentDigest(p)},pair=JSON.stringify(p)+'\n'+JSON.stringify(done)+'\n';
+ const repeats=Math.floor((4*1024*1024-200)/Buffer.byteLength(pair)),old=Buffer.from(pair.repeat(repeats));
+ const digest=createHash('sha256').update(old).digest('hex');await writeFile(join(archiveDir,digest),old);
+ const marker=JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n';await writeFile(path,marker+pair.repeat(repeats));
+ const result=await isolatedSnapshot(path,{expectSuccess:true});assert.equal(result.signal,null,result.stderr);assert.equal(result.code,0,result.stderr);
 });
