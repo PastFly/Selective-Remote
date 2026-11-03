@@ -16,6 +16,7 @@ export class PostgresFenceAnchor {
       OR pg_catalog.pg_has_role(r.oid,n.nspowner,'MEMBER') OR pg_catalog.pg_has_role(r.oid,c.relowner,'MEMBER')
       OR pg_catalog.pg_has_role(r.oid,reader.proowner,'MEMBER') OR pg_catalog.pg_has_role(r.oid,writer.proowner,'MEMBER')
       OR pg_catalog.pg_has_role(r.oid,d.datdba,'MEMBER') OR pg_catalog.has_database_privilege(r.oid,d.oid,'CREATE')
+      OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m WHERE m.member=r.oid)
       OR pg_catalog.has_schema_privilege(r.oid,n.oid,'CREATE')
       OR pg_catalog.has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) AS constrained_role
     FROM selective_remote_anchor.read_head($1::uuid) h

@@ -29,5 +29,11 @@ test('configured fence passes verified TLS and anchor into the real journal, and
  const result=createConfiguredMigrationFence({fencePath:'/tmp/test-journal',anchor},{Pool:TestPool});
  assert.equal(options.connectionString,env.PUBLICATION_FENCE_ANCHOR_URL);
  assert.equal(options.ssl.rejectUnauthorized,true);assert.equal(options.ssl.ca,anchor.ca);
+ assert.equal(typeof options.ssl.checkServerIdentity,'function');
+ assert.ok(options.ssl.checkServerIdentity('localhost',{subjectaltname:'DNS:localhost',subject:{CN:'localhost'}}));
  assert.ok(result.fence.anchor);await result.close();assert.equal(closed,true);
+ const ipAnchor=loadFenceAnchorConfig({...env,PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:test@127.0.0.1:55432/fence'},db);
+ const ipResult=createConfiguredMigrationFence({fencePath:'/tmp/test-journal',anchor:ipAnchor},{Pool:TestPool});
+ assert.ok(options.ssl.checkServerIdentity('localhost',{subjectaltname:'DNS:localhost',subject:{CN:'localhost'}}));
+ await ipResult.close();
 });

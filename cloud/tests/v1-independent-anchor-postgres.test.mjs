@@ -72,7 +72,7 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
  const ddl=await readFile(new URL('../scripts/independent-fence-anchor.sql',import.meta.url),'utf8');
  try {
   await pool.query(ddl);
-  await pool.query(`CREATE ROLE ${role} NOLOGIN`);
+  await pool.query(`CREATE ROLE ${role} NOLOGIN NOINHERIT`);
   await pool.query(`GRANT USAGE ON SCHEMA selective_remote_anchor TO ${role}`);
   await pool.query(`GRANT EXECUTE ON FUNCTION selective_remote_anchor.read_head(uuid), selective_remote_anchor.advance_head(uuid,bigint,text,text) TO ${role}`);
   await pool.query('INSERT INTO selective_remote_anchor.heads (deployment_id,position,digest) VALUES ($1,0,$2)',[id,genesis]);
@@ -111,6 +111,17 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
    await pool.query(`GRANT CREATE ON DATABASE ${db} TO ${role}`);
    await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
    await pool.query(`REVOKE CREATE ON DATABASE ${db} FROM ${role}`);
+   const delegated='sr_anchor_delegate_'+randomUUID().replaceAll('-','');
+   await pool.query(`CREATE ROLE ${delegated} NOLOGIN`);
+   try {
+    await pool.query(`GRANT UPDATE ON selective_remote_anchor.heads TO ${delegated}`);
+    await pool.query(`GRANT ${delegated} TO ${role}`);
+    await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
+   } finally {
+    await pool.query(`REVOKE ${delegated} FROM ${role}`);
+    await pool.query(`REVOKE UPDATE ON selective_remote_anchor.heads FROM ${delegated}`);
+    await pool.query(`DROP ROLE ${delegated}`);
+   }
    await pool.query(`GRANT CREATE ON SCHEMA selective_remote_anchor TO ${role}`);
    await pool.query(`ALTER FUNCTION selective_remote_anchor.advance_head(uuid,bigint,text,text) OWNER TO ${role}`);
    await pool.query(`REVOKE CREATE ON SCHEMA selective_remote_anchor FROM ${role}`);
