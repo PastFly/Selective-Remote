@@ -88,7 +88,7 @@ while Date() < deadline {
             let roles = nodes.compactMap { attribute($0, "AXRole") as? String }.joined(separator: ",")
             let diagnostic = "SYNTHETIC_ASKPASS_PROCESS_MATCH=YES roles=\(roles)"
             if reported.insert(diagnostic).inserted { print(diagnostic) }
-            if nodes.isEmpty, syntheticPromptArgumentsMatch(candidate), let rect = syntheticPromptWindow(candidate) {
+            if roles.isEmpty, syntheticPromptArgumentsMatch(candidate), let rect = syntheticPromptWindow(candidate) {
                 let point = CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.72)
                 guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
                       let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { fail("synthetic AskPass click") }
