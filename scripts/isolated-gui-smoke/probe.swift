@@ -122,6 +122,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-fo
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Forwarding")
+    pressUnique("AXPopUpButton", "New Tunnel")
+    pressUnique("AXMenuItem", "Independent tunnel")
+    pressUnique("AXMenuItem", "Local")
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
