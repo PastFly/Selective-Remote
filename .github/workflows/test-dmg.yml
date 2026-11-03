@@ -161,6 +161,10 @@ jobs:
             responder_pid=""
             cat "$RUNNER_TEMP/evidence/passphrase-responder.log"
             test "$SSH_AUTH_SOCK" = "$fixture/agent.sock"
+            for attempt in {1..30}; do
+              if /usr/bin/ssh-add -l 2>/dev/null | grep -Fq "$fingerprint"; then break; fi
+              sleep 1
+            done
             /usr/bin/ssh-add -l | grep -Fq "$fingerprint"
             printf '%s\n' 'SYNTHETIC_SSH_AGENT_ADDED=YES'
             screencapture -x "$RUNNER_TEMP/evidence/passphrase-screen.png"

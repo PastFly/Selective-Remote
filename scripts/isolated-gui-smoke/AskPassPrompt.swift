@@ -115,10 +115,11 @@ while Date() < deadline {
                     keyDown.flags = flags; keyUp.flags = flags; keyDown.post(tap: .cghidEventTap); keyUp.post(tap: .cghidEventTap)
                     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
                 }
-                guard syntheticPromptWindow(candidate) != nil,
-                      let returnDown = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
-                      let returnUp = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else { fail("synthetic AskPass confirmation") }
-                returnDown.post(tap: .cghidEventTap); returnUp.post(tap: .cghidEventTap)
+                guard let confirmationRect = syntheticPromptWindow(candidate) else { fail("synthetic AskPass confirmation window") }
+                let confirmation = CGPoint(x: confirmationRect.minX + confirmationRect.width * 0.65, y: confirmationRect.minY + confirmationRect.height * 0.88)
+                guard let confirmDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: confirmation, mouseButton: .left),
+                      let confirmUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: confirmation, mouseButton: .left) else { fail("synthetic AskPass confirmation") }
+                confirmDown.post(tap: .cghidEventTap); confirmUp.post(tap: .cghidEventTap)
                 print("SYNTHETIC_ASKPASS_ENTERED=YES")
                 exit(0)
             }
