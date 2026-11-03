@@ -69,7 +69,7 @@ jobs:
           sleep 12
           kill -0 "$app_pid"
           swiftc scripts/isolated-gui-smoke/probe.swift -o "$RUNNER_TEMP/gui-app-probe"
-          "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
           screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
       - name: Upload synthetic evidence
         if: always()
