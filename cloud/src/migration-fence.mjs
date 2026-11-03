@@ -59,7 +59,11 @@ export class MigrationFence{
    finally{await archive.close();}
   }
   segments.push(parsed);const records=segments.reverse().flat().map(validateFenceEvent);
-  if(validateHistory)reduceFenceEvents(records);return withBudget?{records,budget}:records;
+  // Armed V1 history must never be read or extended through a caller that has
+  // not configured the independent high-water anchor (including CLIs).
+  const state=reduceFenceEvents(records);
+  if(state.writerFloor===1&&!this.anchor)throw Error('deployment_anchor_required');
+  return withBudget?{records,budget}:records;
  }
  // No production cutover may call this until the independent high-water anchor
  // validates the complete logical history before and after checkpoint recovery.
@@ -116,6 +120,7 @@ export class MigrationFence{
  async append(event){
   const validated=validateFenceEvent(event);
   if(validated.version!==2)throw Error('invalid_deployment_fence');
+  if(validated.type==='V1_WRITER_FLOOR'&&!this.anchor)throw Error('deployment_anchor_required');
   return this.#enqueue(()=>this.#writeRecord(validated));
  }
  #enqueue(work){

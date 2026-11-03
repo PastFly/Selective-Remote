@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
-import { assertV1CommitFence } from './v1-commit-fence.mjs';
+import { assertV1CommitFence, requireIndependentV1Anchor } from './v1-commit-fence.mjs';
 import { assertV1DataFloor } from './v1-data-fence.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
@@ -90,6 +90,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const before = await fence.snapshot();
   requireResolved(before);
   const beforeWriterFloor = requireWriterFloor(before, candidate);
+  if (beforeWriterFloor) requireIndependentV1Anchor(fence);
   const version = await readMigrationSchemaVersion(query);
   if (version > candidate.maxSchemaVersion) throw Error('deployment_schema_floor');
   // Explicit maintenance keeps traffic closed. Only a pristine journal may
@@ -108,6 +109,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const after = await fence.snapshot();
   requireResolved(after);
   const afterWriterFloor = requireWriterFloor(after, candidate);
+  if (afterWriterFloor) requireIndependentV1Anchor(fence);
   if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
   if (afterWriterFloor) {
     await assertV1CommitFence(query);
