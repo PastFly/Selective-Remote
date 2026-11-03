@@ -300,6 +300,44 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-sni
     print("SYNTHETIC_SNIPPET_VISIBLE_IN_CANDIDATE=YES")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-click-rdp" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("RDP fixture runner identity") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXPopUpButton", "Add")
+    pressUnique("AXMenuItem", "New RDP")
+    setUniqueField("Work Computer", "TEST-ONLY-CODEX-RDP")
+    setUniqueField("server.example.local", "127.0.0.1:53389")
+    let hosts = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-RDP"
+    }
+    guard hosts.count == 1 else { stop("synthetic RDP host row unavailable") }
+    _ = AXUIElementPerformAction(hosts[0], "AXScrollToVisible" as CFString)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+    guard let position = attr(hosts[0], "AXPosition"), let size = attr(hosts[0], "AXSize"),
+          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic RDP row frame") }
+    var point = CGPoint.zero, dimensions = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions), dimensions.width > 0, dimensions.height > 0 else { stop("synthetic RDP row frame") }
+    point.x += dimensions.width / 2; point.y += dimensions.height / 2
+    var hit: AXUIElement?, hitPID: pid_t = 0
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid,
+          running.activate(options: [.activateIgnoringOtherApps]) else { stop("synthetic RDP hit test") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("synthetic RDP host focus") }
+    for clicks in [1, 2] {
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("synthetic RDP mouse event") }
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(clicks)); up.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+    }
+    print("SYNTHETIC_RDP_HOST_DOUBLE_CLICK_POSTED=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-click-ssh" {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("network fixture runner identity") }
     let welcome = snapshot(app).filter {
