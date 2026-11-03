@@ -63,7 +63,7 @@ for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' clo
 touch "$state/publication/journal"
 chmod 644 "$state/publication/journal"
 docker run --rm --network cloud_private --env-file "$cloud/.env" --entrypoint node "$image" scripts/migrate.mjs >/tmp/sr-controller-acceptance/migrations.log
-docker exec cloud-postgres-1 psql -U sraccept -d sraccept -v ON_ERROR_STOP=1 -c "INSERT INTO users(id,email,username,email_verified_at) VALUES('11111111-1111-4111-8111-111111111111','test@example.test','synthetic_test',now()); INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES('11111111-1111-4111-8111-111111111111',1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA');" >/dev/null
+docker exec cloud-postgres-1 psql -U sraccept -d sraccept -v ON_ERROR_STOP=1 -c "INSERT INTO users(id,email,username,email_verified_at) VALUES('11111111-1111-4111-8111-111111111111','test@example.test','synthetic_test',now()); INSERT INTO devices(id,user_id,name,platform) VALUES('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','synthetic-device','web'); INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES('11111111-1111-4111-8111-111111111111',1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA');" >/dev/null
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/old.dump
 # Arm the real database barrier and independently retained history using candidate source.
 docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {randomUUID} from "node:crypto"; import {installV1CommitFence} from "./src/v1-commit-fence.mjs"; import {readV1VaultState} from "./src/v1-data-fence.mjs"; import {MigrationFence} from "./src/migration-fence.mjs"; const pool=new pg.Pool({connectionString:process.env.DATABASE_URL}); try { await installV1CommitFence(pool); const f=new MigrationFence("/publication-fence/journal"); await f.append({version:2,type:"V1_BASELINE",baselineID:randomUUID(),vaults:await readV1VaultState((s,v)=>pool.query(s,v))}); await f.append({version:2,type:"V1_WRITER_FLOOR",writerProtocol:1}); console.log("INDEPENDENT_JOURNAL_ARMED"); } finally {await pool.end();}'
@@ -88,6 +88,25 @@ chmod 600 "$root/settings.json"
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/baseline.json
 jq -e '.compatible == true and .writerFloor == 1' /tmp/sr-controller-acceptance/results/baseline.json >/dev/null
 echo 'INSTALLED_CHECKER_VALID_BASELINE=PASS'
+# Retain a genuine post-fence backup, then commit revision 2 through the real store.
+docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/post-floor.dump
+docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {PostgresStore} from "./src/postgres-store.mjs"; import {MigrationFence} from "./src/migration-fence.mjs"; const pool=new pg.Pool({connectionString:process.env.DATABASE_URL}), f=new MigrationFence("/publication-fence/journal"); try { const store=new PostgresStore(null,pool,{v1Fence:f}); const result=await store.putVault("11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222",{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"bmV3",nonce:"bm9uY2U",authTag:"dGFn",contentHash:"aGFzaA"}); if(result.revision!==2)throw Error("unexpected_revision"); const snapshot=await f.snapshot(); if(snapshot.v1Committed[0].revision!==2)throw Error("journal_wrong_revision"); console.log("REAL_STORE_REVISION_2_COMMITTED"); } finally {await pool.end();}'
+chmod 644 "$state/publication/journal"
+docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/new-baseline.json
+jq -e '.compatible == true and .writerFloor == 1' /tmp/sr-controller-acceptance/results/new-baseline.json >/dev/null
+# Restore the post-fence but old revision; the real controller must reject it.
+docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/post-floor.dump >/tmp/sr-controller-acceptance/post-floor-restore.log 2>&1
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 1 ]]
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/post-floor-controller.log 2>&1
+post_status=$?
+set -e
+cat /tmp/sr-controller-acceptance/results/post-floor-controller.log
+[[ $post_status -ne 0 ]]
+grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/post-floor-controller.log
+grep -q '^deployment_compatibility_failed$' /tmp/sr-controller-acceptance/results/post-floor-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/post-floor-controller.log
+echo 'INSTALLED_CONTROLLER_POST_FLOOR_ROLLBACK_REJECTED=PASS'
 # A restore from before fence activation must not be served against retained successor journal.
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/old.dump >/tmp/sr-controller-acceptance/restore.log 2>&1
 before=$(sha256sum "$state/publication/journal" | cut -d ' ' -f 1)
