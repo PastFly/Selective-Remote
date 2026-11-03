@@ -26,23 +26,18 @@ struct BackupSettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            Section("Восстановление") {
-                Text("Перед восстановлением Selective Remote проверяет пароль и целостность всех вложений, а затем создаёт зашифрованный rollback-архив текущего состояния.")
+            Section(UpdateLocalization.text(ru: "Восстановление", en: "Restore")) {
+                Text(UpdateLocalization.text(
+                    ru: "Восстановление временно недоступно для защиты данных. Сохраните существующие архивы до обновления приложения.",
+                    en: "Restore is temporarily unavailable to protect your data. Keep your existing archives until the app is updated."
+                ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Проверить и восстановить архив…", systemImage: "arrow.counterclockwise") {
+                Button(UpdateLocalization.text(ru: "Восстановить архив…", en: "Restore archive…"), systemImage: "arrow.counterclockwise") {
                     chooseArchive()
                 }
-                .disabled(hasActiveSessions)
-                if hasActiveSessions {
-                    Label(
-                        "Перед восстановлением закройте активные RDP, SSH, SFTP, Terminal и туннели.",
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                }
+                .disabled(true)
             }
 
             Section("Криптография") {
@@ -74,15 +69,6 @@ struct BackupSettingsView: View {
         } message: {
             Text(message ?? "")
         }
-    }
-
-    private var hasActiveSessions: Bool {
-        model.runningSessionCount > 0
-            || model.runningSSHTerminalCount > 0
-            || model.runningLocalTerminalCount > 0
-            || model.runningSSHTunnelCount > 0
-            || model.sftpWorkspace.activeRemoteCount > 0
-            || model.sftpWorkspace.activeTransferCount > 0
     }
 
     private func chooseArchive() {
