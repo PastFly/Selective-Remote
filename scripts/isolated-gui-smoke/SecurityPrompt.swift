@@ -31,9 +31,15 @@ func snapshot(_ root: AXUIElement) -> [AXUIElement] {
     return result
 }
 let deadline = Date(timeIntervalSinceNow: 18)
+var reported = Set<pid_t>()
 while Date() < deadline {
     if kill(observedPID, 0) != 0 { print("SYNTHETIC_PROMPT=NOT_NEEDED"); exit(0) }
     for agent in NSWorkspace.shared.runningApplications where agent.localizedName == "SecurityAgent" {
+        if reported.insert(agent.processIdentifier).inserted {
+            print("SECURITY_AGENT bundle=\(agent.bundleURL?.path ?? "none") pid=\(agent.processIdentifier)")
+            let root = AXUIElementCreateApplication(agent.processIdentifier)
+            print("SECURITY_AGENT_AX_ROLES=\(snapshot(root).compactMap { attribute($0, "AXRole") as? String }.joined(separator: ","))")
+        }
         guard let path = agent.bundleURL?.resolvingSymlinksInPath().path,
               path == "/System/Library/CoreServices/SecurityAgent.app" else { continue }
         let root = AXUIElementCreateApplication(agent.processIdentifier)
