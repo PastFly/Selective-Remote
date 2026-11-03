@@ -137,6 +137,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-fo
           let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("synthetic forwarding row hit test") }
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+    setUniqueField("Tunnel name", "TEST-ONLY-CODEX-FORWARD")
+    setUniqueField("SSH server password", "TEST-ONLY-CODEX-FORWARD-SECRET", verifyVisibleValue: false)
+    pressUnique("AXButton", "Save to Keychain")
+    print("SYNTHETIC_FORWARDING_PASSWORD_SAVE_REQUESTED=YES")
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
@@ -317,6 +321,21 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-rdp
     }
     guard !host.isEmpty else { stop("synthetic RDP host unavailable after upgrade") }
     print("SYNTHETIC_RDP_HOST_VISIBLE=YES")
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-forwarding" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("forwarding verification requires candidate") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXButton", "Forwarding")
+    let nodes = snapshot(app).filter { element in
+        ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }
+            .contains(where: { $0.contains("TEST-ONLY-CODEX-FORWARD") })
+    }
+    guard !nodes.isEmpty else { stop("synthetic forwarding tunnel unavailable after upgrade") }
+    print("SYNTHETIC_FORWARDING_VISIBLE=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-snippets" {

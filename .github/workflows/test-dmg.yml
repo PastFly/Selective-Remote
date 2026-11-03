@@ -44,11 +44,11 @@ jobs:
           test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
           shasum -a 256 -c "${hashes[0]}"
           shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
-          if [[ "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials ]]; then
+          if [[ "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding ]]; then
             run=41628243576
             expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
             artifact=SelectiveRemote-test-229-arm64
-            if [[ "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == credentials ]]; then
+            if [[ "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding ]]; then
               run=41647499832
               expected=1bb9e373a86df43323c56d3c21c954bd4105c00a
             fi
@@ -129,14 +129,6 @@ jobs:
           swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          if [[ "$SR_BUILD_KIND" == forwarding ]]; then
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 40 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-forwarding | tee "$RUNNER_TEMP/evidence/forwarding-ui.log"
-            screencapture -x "$RUNNER_TEMP/evidence/forwarding-screen.png"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
-            wait "$app_pid" || true
-            app_pid=""
-            exit 0
-          fi
           inspect_synthetic_keychain() {
             local version="$1" output="$2" baseline="${3:-$RUNNER_TEMP/evidence/baseline-persistence.json}"
             python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$baseline" > "$output" 2>&1 &
@@ -149,6 +141,40 @@ jobs:
             wait "$probe_pid"
             cat "$output"
           }
+          if [[ "$SR_BUILD_KIND" == forwarding ]]; then
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-forwarding | tee "$RUNNER_TEMP/evidence/forwarding-ui.log"
+            screencapture -x "$RUNNER_TEMP/evidence/forwarding-screen.png"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+            wait "$app_pid" || true
+            app_pid=""
+            bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+            defaults export "$bundle" "$RUNNER_TEMP/forwarding-before.plist"
+            python3 scripts/isolated-gui-smoke/verify-forwarding.py "$RUNNER_TEMP/forwarding-before.plist" | tee "$RUNNER_TEMP/evidence/forwarding-baseline.json"
+            inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/forwarding-keychain-before.log" "$RUNNER_TEMP/evidence/forwarding-baseline.json"
+            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
+            upgraded_images=("$RUNNER_TEMP"/upgrade-image/*.dmg)
+            test "${#upgraded_images[@]}" -eq 1
+            hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${upgraded_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
+            codesign --verify --deep --strict "$app"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "$bundle"
+            executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+            binary="$app/Contents/MacOS/$executable"
+            export SR_BUILD_KIND=candidate
+            sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/forwarding-upgrade-app.log" 2>&1 &
+            app_pid=$!
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$app_pid" 031 candidate | tee "$RUNNER_TEMP/evidence/forwarding-candidate-prompt.log"
+            sleep 12
+            kill -0 "$app_pid"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-forwarding | tee "$RUNNER_TEMP/evidence/forwarding-upgrade-ui.log"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+            wait "$app_pid" || true
+            app_pid=""
+            defaults export "$bundle" "$RUNNER_TEMP/forwarding-after.plist"
+            python3 scripts/isolated-gui-smoke/verify-forwarding.py "$RUNNER_TEMP/forwarding-before.plist" "$RUNNER_TEMP/forwarding-after.plist" | tee "$RUNNER_TEMP/evidence/forwarding-upgrade.json"
+            inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/forwarding-legacy-keychain-after.log" "$RUNNER_TEMP/evidence/forwarding-baseline.json"
+            inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/forwarding-keychain-after.log" "$RUNNER_TEMP/evidence/forwarding-baseline.json"
+            exit 0
+          fi
           if [[ "$SR_BUILD_KIND" == credentials ]]; then
             SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-credentials | tee "$RUNNER_TEMP/evidence/credential-ui.log"
             screencapture -x "$RUNNER_TEMP/evidence/credential-screen.png"
