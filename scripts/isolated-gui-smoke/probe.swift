@@ -112,12 +112,17 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
     pressUnique("AXButton", "New Snippet")
     Thread.sleep(forTimeInterval: 3)
+    let capture = Process()
+    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    capture.arguments = ["-x", temp + "/evidence/snippet-editor-screen.png"]
+    try? capture.run()
+    capture.waitUntilExit()
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
         let description = attr(element, "AXDescription") as? String ?? ""
         let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
-        if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty {
+        if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty || ["AXTextField", "AXTextArea"].contains(role) {
             print("SNIPPET_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
         }
     }
