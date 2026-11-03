@@ -227,17 +227,24 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-sni
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Snippets")
-    let groups = snapshot(app).filter {
-        (attr($0, "AXRole") as? String) == "AXButton" &&
-        ((attr($0, "AXDescription") as? String) ?? "").hasPrefix("TEST-ONLY-CODEX-SNIPPET-GROUP,")
+    func visibleLabel(_ element: AXUIElement) -> String {
+        ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }.joined(separator: " ")
     }
-    guard groups.count == 1, AXUIElementPerformAction(groups[0], kAXPressAction as CFString) == .success else { stop("migrated snippet group unavailable") }
-    Thread.sleep(forTimeInterval: 1)
-    let items = snapshot(app).filter {
-        ((attr($0, "AXTitle") as? String) ?? "").contains("TEST-ONLY-CODEX-SNIPPET") ||
-        ((attr($0, "AXDescription") as? String) ?? "").contains("TEST-ONLY-CODEX-SNIPPET")
-    }.filter {
-        !((attr($0, "AXDescription") as? String) ?? "").contains("TEST-ONLY-CODEX-SNIPPET-GROUP")
+    var nodes = snapshot(app)
+    var groups = nodes.filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        visibleLabel($0).contains("TEST-ONLY-CODEX-SNIPPET-GROUP")
+    }
+    var items = nodes.filter { visibleLabel($0).contains("TEST-ONLY-CODEX-SNIPPET") && !visibleLabel($0).contains("TEST-ONLY-CODEX-SNIPPET-GROUP") }
+    if items.isEmpty && groups.count == 1 {
+        guard AXUIElementPerformAction(groups[0], kAXPressAction as CFString) == .success else { stop("migrated snippet group action") }
+        Thread.sleep(forTimeInterval: 1)
+        nodes = snapshot(app)
+        groups = nodes.filter { visibleLabel($0).contains("TEST-ONLY-CODEX-SNIPPET-GROUP") }
+        items = nodes.filter { visibleLabel($0).contains("TEST-ONLY-CODEX-SNIPPET") && !visibleLabel($0).contains("TEST-ONLY-CODEX-SNIPPET-GROUP") }
+    }
+    for element in nodes where visibleLabel(element).contains("TEST-ONLY-CODEX-SNIPPET") {
+        print("MIGRATED_SNIPPET_NODE role=\(attr(element, "AXRole") as? String ?? "") label=\(visibleLabel(element))")
     }
     guard !items.isEmpty else { stop("migrated snippet not visible") }
     print("SYNTHETIC_SNIPPET_VISIBLE_IN_CANDIDATE=YES")
