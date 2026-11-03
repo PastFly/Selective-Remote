@@ -46,14 +46,23 @@ let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString,
 guard result == .success, let windows = raw as? [AXUIElement], !windows.isEmpty else { stop("no accessible app window") }
 print("APP_PID=\(pid)")
 print("ACCESSIBLE_WINDOW_COUNT=\(windows.count)")
-let done = snapshot(app).filter {
-    (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXTitle") as? String) == "Done"
-}
-if done.count == 1 {
-    guard AXUIElementPerformAction(done[0], kAXPressAction as CFString) == .success else { stop("cannot close welcome") }
+func pressUnique(_ role: String, _ label: String) {
+    let matches = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == role &&
+        ((attr($0, "AXTitle") as? String) == label || (attr($0, "AXDescription") as? String) == label)
+    }
+    guard matches.count == 1 else { stop("unique control unavailable: \(label)") }
+    guard AXUIElementPerformAction(matches[0], kAXPressAction as CFString) == .success else { stop("action failed: \(label)") }
     Thread.sleep(forTimeInterval: 1)
-    print("WELCOME_CLOSED=YES")
-} else { print("WELCOME_CLOSED=NO_UNIQUE_DONE") }
+}
+pressUnique("AXButton", "Done")
+let remainingWelcome = snapshot(app).filter {
+    (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+}
+guard remainingWelcome.isEmpty else { stop("welcome remains open") }
+print("WELCOME_CLOSED=YES")
+pressUnique("AXButton", "Connections")
+print("CONNECTIONS_OPEN_REQUESTED=YES")
 for element in snapshot(app).prefix(500) {
     let role = attr(element, "AXRole") as? String ?? ""
     let title = attr(element, "AXTitle") as? String ?? ""
