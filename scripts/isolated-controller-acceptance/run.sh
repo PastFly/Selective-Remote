@@ -179,6 +179,31 @@ grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/
 for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
 [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]]
 echo 'INSTALLED_CONTROLLER_POST_WRITE_START=PASS'
+# Attempt to start an actual pre-fence server image. The retained controller
+# must reject its metadata before stopping the current or opening old traffic.
+legacy_source=9831990ce819e832110fef184020178274c014ae
+mkdir -p /tmp/sr-controller-acceptance/legacy-source
+git archive "$legacy_source" cloud | tar -x -C /tmp/sr-controller-acceptance/legacy-source
+docker build --quiet --label "org.opencontainers.image.revision=$legacy_source" -t sr-acceptance-legacy /tmp/sr-controller-acceptance/legacy-source/cloud >/tmp/sr-controller-acceptance/legacy-image-build.log
+legacy_image=$(docker image inspect --format '{{.Id}}' sr-acceptance-legacy)
+cp "$root/settings.json" /tmp/sr-controller-acceptance/current-settings.json
+jq --arg sha "$legacy_source" --arg img "$legacy_image" '.sourceSHA=$sha | .imageDigest=$img' "$root/settings.json" > "$root/settings.next"
+chmod 600 "$root/settings.next"
+mv "$root/settings.next" "$root/settings.json"
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/old-image-controller.log 2>&1
+legacy_status=$?
+set -e
+install -m 0600 /tmp/sr-controller-acceptance/current-settings.json "$root/settings.next"
+mv "$root/settings.next" "$root/settings.json"
+[[ "$legacy_status" -ne 0 ]]
+grep -q '"stage":"candidate-metadata"' /tmp/sr-controller-acceptance/results/old-image-controller.log
+grep -q '^deployment_code_floor$' /tmp/sr-controller-acceptance/results/old-image-controller.log
+! grep -q '"stage":"close-traffic"' /tmp/sr-controller-acceptance/results/old-image-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/old-image-controller.log
+[[ $(docker inspect --format '{{.Image}}' cloud-cloud-1) == "$image" ]]
+[[ $(docker inspect --format '{{.State.Running}}' cloud-cloud-1) == true ]]
+echo 'ACTUAL_OLD_SERVER_DOWNGRADE_REJECTED=PASS'
 oldpid=$(docker inspect --format '{{.State.Pid}}' cloud-cloud-1)
 docker kill cloud-cloud-1 >/dev/null
 bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/crash-restart-controller.log 2>&1
@@ -217,5 +242,31 @@ grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/
 [[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 2 ]]
 [[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
 echo 'MATCHING_NEWER_SNAPSHOT_RECOVERY=PASS'
+# Deliberately lose the actual COMMIT response after PostgreSQL commits. The
+# pending intent is durably anchored; this is a real transaction with a
+# synthetic connection failure, not a real HTTP V1 write.
+"${compose[@]}" stop cloud caddy >/dev/null
+anchor_before_ambiguous=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
+docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import pg from "pg";import {PostgresStore} from "./src/postgres-store.mjs";import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const cfg=loadConfig(),real=new pg.Pool({connectionString:cfg.databaseURL}),f=createConfiguredMigrationFence(cfg.deployment);let injected=false;const pool={async connect(){const c=await real.connect();return {async query(sql,values){if(sql==="COMMIT"&&!injected){injected=true;await c.query(sql,values);throw Error("synthetic_lost_commit_reply")}return c.query(sql,values)},release(){c.release()}}}};try{const store=new PostgresStore(null,pool,{v1Fence:f.fence});try{await store.putVault("11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222",{baseRevision:2,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"cmV2Mw",nonce:"A".repeat(16),authTag:"A".repeat(22),contentHash:"A".repeat(43)});throw Error("missing_injection")}catch(e){if(e.message!=="synthetic_lost_commit_reply")throw e}const row=await real.query("SELECT revision,ciphertext FROM personal_vaults WHERE user_id=$1",["11111111-1111-4111-8111-111111111111"]);if(Number(row.rows[0].revision)!==3||row.rows[0].ciphertext!=="cmV2Mw"||(await f.fence.snapshot()).v1Pending.length!==1)throw Error("ambiguous_not_retained");console.log("ANCHORED_LOST_COMMIT_REPLY_PENDING=PASS")}finally{await f.close();await real.end()}'
+anchor_pending=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
+[[ ${anchor_pending%%:*} -gt ${anchor_before_ambiguous%%:*} ]]
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/ambiguous-controller.log 2>&1
+ambiguous_status=$?
+set -e
+[[ "$ambiguous_status" -ne 0 ]]
+grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
+grep -q '^deployment_fence_pending$' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
+echo 'INSTALLED_CONTROLLER_REJECTS_AMBIGUOUS_COMMIT=PASS'
+# A fresh process obtains positive committed outcome from the actual DB, and
+# advances the anchor on the terminal confirmation before reopening traffic.
+docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import pg from "pg";import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";import {PublicationFenceCoordinator,readCommittedV1Outcome} from "./src/publication-fence-coordinator.mjs";const cfg=loadConfig(),pool=new pg.Pool({connectionString:cfg.databaseURL}),f=createConfiguredMigrationFence(cfg.deployment);try{const pending=(await f.fence.snapshot()).v1Pending;if(pending.length!==1)throw Error("pending_missing");const result=await new PublicationFenceCoordinator({fence:f.fence}).reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query:(sql,values)=>pool.query(sql,values),intent})});if(result.status!=="confirmed"||(await f.fence.snapshot()).v1Pending.length)throw Error("reconciliation_failed");console.log("ANCHORED_AMBIGUOUS_COMMIT_RECONCILED=PASS")}finally{await f.close();await pool.end()}'
+anchor_confirmed=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
+[[ ${anchor_confirmed%%:*} -gt ${anchor_pending%%:*} ]]
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/reconciled-controller.log 2>&1
+grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/reconciled-controller.log
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == '3:cmV2Mw' ]]
+echo 'INSTALLED_CONTROLLER_STARTS_AFTER_ANCHORED_RECONCILIATION=PASS'
 echo 'ANCHOR_FAILURE_DOMAIN=SEPARATE_DATABASE_SAME_EPHEMERAL_VM_NOT_PRODUCTION_ISOLATION'
 echo 'V1_HTTP_WRITES=STOPPED'
