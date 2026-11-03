@@ -411,6 +411,15 @@ jobs:
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           binary="$app/Contents/MacOS/$executable"
           policy='(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:52222"))'
+          python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); s.settimeout(5); exec("try:\n c,_=s.accept(); c.close()\nexcept TimeoutError:\n pass"); s.close()' "$fixture/probe.sock" &
+          unix_probe_pid=$!
+          sleep 1
+          if sandbox-exec -p "$policy" python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.close()' "$fixture/probe.sock" 2>/dev/null; then
+            printf '%s\n' 'SYNTHETIC_UNIX_SOCKET_OUTBOUND=ALLOWED'
+          else
+            printf '%s\n' 'SYNTHETIC_UNIX_SOCKET_OUTBOUND=DENIED'
+          fi
+          wait "$unix_probe_pid" || true
           printf 'ls -1\n' | sandbox-exec -p "$policy" /usr/bin/sftp -b - -o BatchMode=yes -o ConnectTimeout=5 -P 52222 runner@127.0.0.1 | grep -Fx TEST-ONLY-CODEX-SFTP-CHECK
           printf '%s\n' 'SYNTHETIC_SANDBOX_SFTP_ENDPOINT=PASS'
           sandbox-exec -p "$policy" "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
