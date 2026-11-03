@@ -37,16 +37,28 @@ func releaseMetadataStaysSynchronized() throws {
     let downloadURL = try #require(manifest?["downloadURL"] as? String)
     let releaseNotesURL = try #require(manifest?["releaseNotesURL"] as? String)
 
-    #expect(manifestVersion == version)
-    #expect(manifestBuild == Int(build))
+    let isMinimalCommunityPreview = FileManager.default.fileExists(
+        atPath: root.appendingPathComponent("releases/0.32.0-minimal-community.md").path
+    )
+    if isMinimalCommunityPreview {
+        // The 0.32 preview is not in the public update feed. Requiring a
+        // separate marker prevents accidentally promoting a non-notarized DMG.
+        #expect(version == "0.32.0")
+        #expect(build == "163")
+        #expect(manifestVersion == "0.31.0")
+        #expect(manifestBuild == 162)
+    } else {
+        #expect(manifestVersion == version)
+        #expect(manifestBuild == Int(build))
+    }
     #expect(
         downloadURL
             == "https://github.com/PastFly/Selective-Remote/releases/download/"
-                + "v\(version)/SelectiveRemote-\(version)-arm64.dmg"
+                + "v\(manifestVersion)/SelectiveRemote-\(manifestVersion)-arm64.dmg"
     )
     #expect(
         releaseNotesURL
-            == "https://github.com/PastFly/Selective-Remote/releases/tag/v\(version)"
+            == "https://github.com/PastFly/Selective-Remote/releases/tag/v\(manifestVersion)"
     )
 
     let changelog = try String(
