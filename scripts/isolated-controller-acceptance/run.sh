@@ -106,6 +106,8 @@ cat /tmp/sr-controller-acceptance/results/post-floor-controller.log
 grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/post-floor-controller.log
 grep -q '^deployment_compatibility_failed$' /tmp/sr-controller-acceptance/results/post-floor-controller.log
 ! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/post-floor-controller.log
+docker run --rm --network cloud_private --read-only --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" --entrypoint node node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b --input-type=module -e 'try { const {default:pg}=await import("/controller/node_modules/pg/lib/index.js"); const {loadConfig}=await import("/controller/src/config.mjs"); const {MigrationFence}=await import("/controller/src/migration-fence.mjs"); const {currentCapabilities,verifyDeploymentCompatibility}=await import("/controller/src/deployment-compatibility.mjs"); const c=loadConfig(),p=new pg.Pool({connectionString:c.databaseURL,max:1}); try {console.log(await verifyDeploymentCompatibility({query:(q,v)=>p.query(q,v),fence:new MigrationFence(c.deployment.fencePath),candidate:currentCapabilities}));} finally {await p.end();} } catch(e) { console.log("DIAGNOSTIC_NAME="+e.name); console.log("DIAGNOSTIC_CODE="+(e.code??"none")); console.log("DIAGNOSTIC_MESSAGE="+e.message); process.exit(1); }' | tee /tmp/sr-controller-acceptance/results/post-floor-diagnostic.log || true
+grep -q '^DIAGNOSTIC_MESSAGE=deployment_v1_data_mismatch$' /tmp/sr-controller-acceptance/results/post-floor-diagnostic.log
 echo 'INSTALLED_CONTROLLER_POST_FLOOR_ROLLBACK_REJECTED=PASS'
 # A restore from before fence activation must not be served against retained successor journal.
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/old.dump >/tmp/sr-controller-acceptance/restore.log 2>&1
@@ -133,4 +135,30 @@ grep -q '^DIAGNOSTIC_MESSAGE=v1_writer_fence_missing$' /tmp/sr-controller-accept
 echo 'INSTALLED_CONTROLLER_OLD_BACKUP_REJECTED=PASS'
 echo 'JOURNAL_RETAINED_HASH='$before
 echo 'CLOUD_CADDY_STOPPED=PASS'
-echo 'JOURNAL_CAPACITY_RECOVERY=NOT_TESTED'
+# Inject oversized journal only in this isolated test, then recover the exact saved bytes.
+cp "$state/publication/journal" /tmp/sr-controller-acceptance/journal-before-injection
+saved=$(sha256sum /tmp/sr-controller-acceptance/journal-before-injection | cut -d ' ' -f 1)
+[[ $saved == "$before" ]]
+truncate -s $((4 * 1024 * 1024 + 1)) "$state/publication/journal"
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/oversized-controller.log 2>&1
+over_status=$?
+set -e
+[[ $over_status -ne 0 ]]
+grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/oversized-controller.log
+grep -q '^corrupt_deployment_fence$' /tmp/sr-controller-acceptance/results/oversized-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/oversized-controller.log
+install -m 0644 /tmp/sr-controller-acceptance/journal-before-injection "$state/publication/journal.restored"
+mv "$state/publication/journal.restored" "$state/publication/journal"
+[[ $(sha256sum "$state/publication/journal" | cut -d ' ' -f 1) == "$saved" ]]
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/restored-controller.log 2>&1
+restore_status=$?
+set -e
+[[ $restore_status -ne 0 ]]
+grep -q '^deployment_compatibility_failed$' /tmp/sr-controller-acceptance/results/restored-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/restored-controller.log
+echo 'OVERSIZED_JOURNAL_REFUSED=PASS'
+echo 'TEST_ONLY_EXACT_SNAPSHOT_RESTORED=PASS'
+echo 'JOURNAL_CAPACITY_RECOVERY=NOT_PROVEN'
+
