@@ -39,6 +39,19 @@ PUBLICATION_READER_ENABLED=false
 WHOLE_PUBLICATION_ENABLED=false
 ENV
 chmod 600 "$cloud/.env"
+# Synthetic localhost-only proxy configuration; production files remain untouched.
+cat > "$cloud/compose.loopback-test.yaml" <<'LOOP'
+services:
+  caddy:
+    ports: !override
+      - "127.0.0.1:443:443"
+LOOP
+cat > "$cloud/Caddyfile.443-only" <<'CADDY'
+https://localhost:443 {
+  tls internal
+  respond "isolated controller acceptance" 200
+}
+CADDY
 # Restrict all possible test ingress even if a future regression reaches up.
 iptables -I DOCKER-USER -i eth0 -j DROP
 iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -55,7 +68,7 @@ image=$(docker image inspect --format '{{.Id}}' sr-acceptance-candidate)
 [[ $image =~ ^sha256:[a-f0-9]{64}$ ]]
 docker pull node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b >/dev/null
 export POSTGRES_DATA_MOUNT_ROOT="$pgmount" POSTGRES_DATA_HOST_PATH="$pgmount/data" POSTGRES_DATA_EXPECTED_SOURCE="$source_device" POSTGRES_DATA_EXPECTED_FSTYPE=ext4 POSTGRES_DATA_UID="$uid" POSTGRES_DATA_GID="$gid" PUBLICATION_IMAGE_DIGEST="$image" PUBLICATION_FENCE_DIRECTORY="$state/publication"
-compose=(docker compose --project-name cloud --project-directory "$cloud" --env-file "$cloud/.env" -f "$cloud/compose.yaml" -f "$cloud/compose.443-only.yaml" -f "$cloud/compose.small-host.yaml" -f "$cloud/compose.publication-fence.yaml" -f "$cloud/compose.postgres-bind.yaml")
+compose=(docker compose --project-name cloud --project-directory "$cloud" --env-file "$cloud/.env" -f "$cloud/compose.yaml" -f "$cloud/compose.443-only.yaml" -f "$cloud/compose.small-host.yaml" -f "$cloud/compose.publication-fence.yaml" -f "$cloud/compose.loopback-test.yaml" -f "$cloud/compose.postgres-bind.yaml")
 # The test starts only PostgreSQL; Cloud and Caddy must remain down throughout.
 "${compose[@]}" up -d postgres
 for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-postgres-1) == healthy ]] && break; sleep 2; done
@@ -67,7 +80,10 @@ docker exec cloud-postgres-1 psql -U sraccept -d sraccept -v ON_ERROR_STOP=1 -c 
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/old.dump
 # Arm the real database barrier and independently retained history using candidate source.
 docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {randomUUID} from "node:crypto"; import {installV1CommitFence} from "./src/v1-commit-fence.mjs"; import {readV1VaultState} from "./src/v1-data-fence.mjs"; import {MigrationFence} from "./src/migration-fence.mjs"; const pool=new pg.Pool({connectionString:process.env.DATABASE_URL}); try { await installV1CommitFence(pool); const f=new MigrationFence("/publication-fence/journal"); await f.append({version:2,type:"V1_BASELINE",baselineID:randomUUID(),vaults:await readV1VaultState((s,v)=>pool.query(s,v))}); await f.append({version:2,type:"V1_WRITER_FLOOR",writerProtocol:1}); console.log("INDEPENDENT_JOURNAL_ARMED"); } finally {await pool.end();}'
-chmod 644 "$state/publication/journal"
+cloudgid=$(docker run --rm --entrypoint id "$image" -g)
+chown root:"$cloudgid" "$state/publication" "$state/publication/journal"
+chmod 770 "$state/publication"
+chmod 660 "$state/publication/journal"
 # Install a separate root-owned controller copy and bundled runtime exactly as launcher expects.
 id=$(docker create --entrypoint /bin/true "$image")
 docker cp "$id:/app/." "$root/"
@@ -80,7 +96,7 @@ chmod 644 "$root/scripts/verify-staging-controller.mjs"
 (cd "$root"; sha256sum runtime/node-v22.18.0-linux-x64/bin/node > runtime-node.sha256; find . -type f ! -name bundle.sha256 ! -name settings.json -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > bundle.sha256)
 chmod 600 "$root/runtime-node.sha256" "$root/bundle.sha256"
 controller_digest=$(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1)
-composefiles=("$cloud/compose.yaml" "$cloud/compose.443-only.yaml" "$cloud/compose.small-host.yaml" "$cloud/compose.publication-fence.yaml" "$cloud/compose.postgres-bind.yaml")
+composefiles=("$cloud/compose.yaml" "$cloud/compose.443-only.yaml" "$cloud/compose.small-host.yaml" "$cloud/compose.publication-fence.yaml" "$cloud/compose.loopback-test.yaml" "$cloud/compose.postgres-bind.yaml")
 composejson=$(for f in "${composefiles[@]}"; do jq -cn --arg path "$f" --arg hash "$(sha256sum "$f"|cut -d ' ' -f 1)" '{path:$path,sha256:$hash}'; done | jq -s .)
 jq -n --arg sha 5fdf36e3bbeff01151bbf6e695b808594e4ba919 --arg image "$image" --arg ctrl "$controller_digest" --arg envhash "$(sha256sum "$cloud/.env"|cut -d ' ' -f 1)" --arg root "$pgmount" --arg src "$source_device" --arg uid "$uid" --arg gid "$gid" --argjson compose "$composejson" '{version:1,sourceSHA:$sha,imageDigest:$image,controllerDigest:$ctrl,cloudDirectory:"/opt/selective-remote/cloud",envPath:"/opt/selective-remote/cloud/.env",envDigest:$envhash,network:"cloud_private",fencePath:"/var/lib/selective-remote-controller/publication/journal",backupDirectory:"/var/backups/sr-acceptance",composeFiles:$compose,storage:{POSTGRES_DATA_MOUNT_ROOT:$root,POSTGRES_DATA_HOST_PATH:($root+"/data"),POSTGRES_DATA_EXPECTED_SOURCE:$src,POSTGRES_DATA_EXPECTED_FSTYPE:"ext4",POSTGRES_DATA_UID:$uid,POSTGRES_DATA_GID:$gid}}' > "$root/settings.json"
 chmod 600 "$root/settings.json"
@@ -88,10 +104,35 @@ chmod 600 "$root/settings.json"
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/baseline.json
 jq -e '.compatible == true and .writerFloor == 1' /tmp/sr-controller-acceptance/results/baseline.json >/dev/null
 echo 'INSTALLED_CHECKER_VALID_BASELINE=PASS'
+# Provision an isolated test-only session with the real session-token hash.
+docker run --rm --network cloud_private --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {hashSessionToken} from "./src/security.mjs"; const p=new pg.Pool({connectionString:process.env.DATABASE_URL}); try{await p.query("INSERT INTO sessions(id,user_id,device_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '''1 day''')",["33333333-3333-4333-8333-333333333333","11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222",hashSessionToken("a".repeat(43),process.env.SESSION_TOKEN_PEPPER)]);}finally{await p.end();}'
+docker pull caddy:2.9.1-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0 >/dev/null
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/positive-controller.log 2>&1
+grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/positive-controller.log
+for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
+[[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]]
+[[ $(docker inspect --format '{{.State.Running}}' cloud-caddy-1) == true ]]
+docker exec cloud-cloud-1 node -e 'fetch("http://127.0.0.1:8080/readyz").then(async r=>{if(!r.ok)throw Error("not_ready_"+r.status);console.log("INSTALLED_CONTROLLER_CLOUD_READYZ=PASS")}).catch(e=>{console.error(e.message);process.exit(1)})'
+echo 'INSTALLED_CONTROLLER_NORMAL_START=PASS'
 # Retain a genuine post-fence backup, then commit revision 2 through the real store.
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/post-floor.dump
-docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {PostgresStore} from "./src/postgres-store.mjs"; import {MigrationFence} from "./src/migration-fence.mjs"; const pool=new pg.Pool({connectionString:process.env.DATABASE_URL}), f=new MigrationFence("/publication-fence/journal"); try { const store=new PostgresStore(null,pool,{v1Fence:f}); const result=await store.putVault("11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222",{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"bmV3",nonce:"bm9uY2U",authTag:"dGFn",contentHash:"aGFzaA"}); if(result.revision!==2)throw Error("unexpected_revision"); const snapshot=await f.snapshot(); if(snapshot.v1Committed[0].revision!==2)throw Error("journal_wrong_revision"); console.log("REAL_STORE_REVISION_2_COMMITTED"); } finally {await pool.end();}'
-chmod 644 "$state/publication/journal"
+# Write through the actual Cloud HTTP route using the supported framed protocol.
+docker exec cloud-cloud-1 node --input-type=module -e 'const headers={Authorization:"Bearer "+"a".repeat(43),"Content-Type":"application/json","x-selective-v1-write-fence":"1"}; const envelope={baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"bmV3",nonce:"A".repeat(16),authTag:"A".repeat(22),contentHash:"A".repeat(43)}; const r=await fetch("http://127.0.0.1:8080/v1/vault",{method:"PUT",headers,body:JSON.stringify({protocol:"framed-v1",envelope})}); const body=await r.json(); if(r.status!==200||body.revision!==2)throw Error("framed_write_failed_"+r.status+"_"+JSON.stringify(body)); console.log("REAL_CLOUD_HTTP_V1_REVISION_2=PASS"); const legacy=await fetch("http://127.0.0.1:8080/v1/vault",{method:"PUT",headers:{Authorization:headers.Authorization,"Content-Type":"application/json"},body:JSON.stringify({...envelope,baseRevision:2,ciphertext:"c3RhbGU"})}); if(legacy.status!==426)throw Error("legacy_reject_failed_"+legacy.status); console.log("LEGACY_FLAT_HTTP_REJECTED=PASS");'
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == '2:bmV3' ]]
+cp "$state/publication/journal" /tmp/sr-controller-acceptance/journal-after-http
+journal_after_http=$(sha256sum "$state/publication/journal" | cut -d ' ' -f 1)
+oldpid=$(docker inspect --format '{{.State.Pid}}' cloud-cloud-1)
+docker kill cloud-cloud-1 >/dev/null
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/restart-controller.log 2>&1
+grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/restart-controller.log
+for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
+[[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]]
+[[ $(docker inspect --format '{{.State.Pid}}' cloud-cloud-1) != "$oldpid" ]]
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == '2:bmV3' ]]
+[[ $(sha256sum "$state/publication/journal" | cut -d ' ' -f 1) == "$journal_after_http" ]]
+echo 'CLOUD_CRASH_CONTROLLER_RESTART_DATA_PRESERVED=PASS'
+"${compose[@]}" stop cloud caddy >/dev/null
+# Ensure the independent checker accepts the committed state before any restore.
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/new-baseline.json
 jq -e '.compatible == true and .writerFloor == 1' /tmp/sr-controller-acceptance/results/new-baseline.json >/dev/null
 # Restore the post-fence but old revision; the real controller must reject it.
