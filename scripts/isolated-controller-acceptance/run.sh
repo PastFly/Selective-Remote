@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 cd "$GITHUB_WORKSPACE"
 git merge-base --is-ancestor 5fdf36e3bbeff01151bbf6e695b808594e4ba919 HEAD
 git diff --exit-code 5fdf36e3bbeff01151bbf6e695b808594e4ba919 HEAD -- cloud
@@ -12,6 +13,8 @@ state=/var/lib/selective-remote-controller
 cloud=/opt/selective-remote/cloud
 pgmount=/mnt/sr-acceptance-pg
 mkdir -p "$cloud" "$state/publication" "$root" "$pgmount" /var/backups/sr-acceptance
+chmod 755 /opt /opt/selective-remote
+chmod 700 "$root"
 cp -a "$GITHUB_WORKSPACE/cloud/." "$cloud/"
 chown -R root:root "$cloud"
 rm -rf "$cloud/node_modules"
