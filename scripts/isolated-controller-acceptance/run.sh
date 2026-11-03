@@ -13,6 +13,7 @@ cloud=/opt/selective-remote/cloud
 pgmount=/mnt/sr-acceptance-pg
 mkdir -p "$cloud" "$state/publication" "$root" "$pgmount" /var/backups/sr-acceptance
 cp -a "$GITHUB_WORKSPACE/cloud/." "$cloud/"
+chown -R root:root "$cloud"
 rm -rf "$cloud/node_modules"
 cat > "$cloud/.env" <<'ENV'
 POSTGRES_DB=sraccept
