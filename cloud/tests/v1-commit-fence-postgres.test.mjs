@@ -203,7 +203,7 @@ test('retained writer floor denies an actual pre-barrier PostgreSQL backup resto
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     const guard=pool=>verifyDeploymentCompatibility({query:(sql,values)=>pool.query(sql,values),fence,candidate:currentCapabilities});
     assert.equal((await guard(original.pool)).writerFloor,1);
-    const {v1WriterProtocol:_,...oldCandidate}=currentCapabilities;
+    const {v1WriterProtocol:_,emptyVaultCreationVersion:__,...oldCandidate}=currentCapabilities;
     await assert.rejects(verifyDeploymentCompatibility({query:(sql,values)=>original.pool.query(sql,values),fence,candidate:oldCandidate}),/deployment_writer_floor/);
     restored=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
     await restored.pool.query('DROP SCHEMA public CASCADE');

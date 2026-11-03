@@ -5,6 +5,7 @@ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const hash=/^[a-f0-9]{64}$/u;
 const isUUID=v=>typeof v==='string'&&uuid.test(v);
 const isHash=v=>typeof v==='string'&&hash.test(v);
+const emptyV1CiphertextHash=createHash('sha256').update('selective-remote/v1-ciphertext/v1\0').update(Buffer.from([0])).digest('hex');
 const invalid=()=>{throw Error('invalid_deployment_fence');};
 const conflict=()=>{throw Error('deployment_fence_conflict');};
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -53,8 +54,9 @@ export function validateFenceEvent(value){
  if(value.type==='V1_PENDING_INTENT'){
   if(!keys(value,['version','type','intentID','operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'])
    ||!isUUID(value.intentID)||!isUUID(value.operationID)||!['PERSONAL','TEAM'].includes(value.vaultKind)
-   ||!isUUID(value.ownerID)||!isUUID(value.vaultID)||!Number.isSafeInteger(value.baseRevision)||value.baseRevision<0
-   ||!Number.isSafeInteger(value.revision)||value.revision!==value.baseRevision+1||!isHash(value.ciphertextHash)||!isHash(value.envelopeHash))invalid();
+   ||!isUUID(value.ownerID)||!isUUID(value.vaultID)||!Number.isSafeInteger(value.baseRevision)||value.baseRevision< -1
+   ||!Number.isSafeInteger(value.revision)||value.revision!==value.baseRevision+1||!isHash(value.ciphertextHash)||!isHash(value.envelopeHash)
+   ||(value.baseRevision===-1&&value.ciphertextHash!==emptyV1CiphertextHash))invalid();
   return {version:2,type:value.type,intentID:value.intentID,operationID:value.operationID,vaultKind:value.vaultKind,
    ownerID:value.ownerID,vaultID:value.vaultID,baseRevision:value.baseRevision,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash};
  }
@@ -106,7 +108,7 @@ export function reduceFenceEvents(events){
    if(v1Owners.has(key)&&v1Owners.get(key)!==event.ownerID)conflict();
    if([...v1Pending.values()].some(p=>p.vaultKind===event.vaultKind&&p.vaultID===event.vaultID))conflict();
    const previous=v1Committed.get(key);
-   if(event.baseRevision!==(previous?.revision??0))conflict();
+   if(event.baseRevision === -1 ? Boolean(previous) : event.baseRevision!==(previous?.revision??0))conflict();
    v1Owners.set(key,event.ownerID);v1Operations.set(event.operationID,event.intentID);v1Intents.set(event.intentID,intent);v1Pending.set(event.intentID,intent);continue;
   }
   if(event.type==='V1_CONFIRMED_COMMIT'||event.type==='V1_PROVEN_ABORT'){
@@ -153,6 +155,6 @@ export function reduceFenceEvents(events){
   }
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
- return {...(writerFloor?{writerFloor}:{}),...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
+ return {...(writerFloor?{writerFloor}:{}),...([...v1Intents.values()].some(item=>item.baseRevision===-1)?{emptyVaultCreationVersion:1}:{}),...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }
