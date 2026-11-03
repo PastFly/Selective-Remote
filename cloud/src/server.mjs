@@ -13,13 +13,14 @@ import { DeviceTrustStore } from "./device-trust-store.mjs";
 import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
-import { MigrationFence } from './migration-fence.mjs';
+import { createConfiguredMigrationFence } from './configured-migration-fence.mjs';
 import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 import { browserSessionBinding } from './browser-session-binding.mjs';
 import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write } from './v1-write-fence.mjs';
 
 const config = loadConfig();
-const deploymentFence = config.deployment.fencePath ? new MigrationFence(config.deployment.fencePath) : null;
+const configuredFence = createConfiguredMigrationFence(config.deployment);
+const deploymentFence = configuredFence.fence;
 const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence });
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
@@ -944,6 +945,7 @@ let outboxTimer = null;
 try { await start(); }
 catch {
   console.error(JSON.stringify({ level: "error", message: "Deployment compatibility preflight failed" }));
+  await configuredFence.close();
   await store.close();
   process.exit(1);
 }
@@ -964,6 +966,7 @@ async function shutdown(signal) {
   if (outboxTimer) clearInterval(outboxTimer);
   server.close(async () => {
     await service.waitForBackgroundTasks();
+    await configuredFence.close();
     await store.close();
     process.exit(0);
   });

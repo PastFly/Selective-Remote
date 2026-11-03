@@ -1,5 +1,6 @@
 import { stagingRegistrationEmails } from "./staging-registration.mjs";
 import { isAbsolute } from "node:path";
+import { loadFenceAnchorConfig } from './fence-anchor-config.mjs';
 function integer(env, name, fallback, minimum, maximum) {
   const raw = env[name];
   const value = raw === undefined ? fallback : Number(raw);
@@ -123,9 +124,11 @@ export function loadConfig(env = process.env) {
   if ((publicationEnabled || wholePublicationEnabled) && !fencePath
       || fencePath !== null && (typeof fencePath !== "string" || !isAbsolute(fencePath)))
     throw Error("PUBLICATION_FENCE_PATH must name the independent absolute fence");
+  const anchor = loadFenceAnchorConfig(env,databaseURL);
+  if (anchor && !fencePath) throw Error('invalid_deployment_anchor_configuration');
 
   return Object.freeze({
-    deployment: Object.freeze({ fencePath }),
+    deployment: Object.freeze({ fencePath, anchor }),
     host: env.CLOUD_HOST ?? "0.0.0.0",
     port: integer(env, "CLOUD_PORT", 8080, 1, 65535),
     publicOrigin: origin.origin,

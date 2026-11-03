@@ -206,3 +206,12 @@ test('optional test registration permits exactly two canonical staging emails an
     {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test,two@example.test,three@example.test'}])
     assert.throws(()=>loadConfig({...env,...changes}),/STAGING_REGISTRATION_EMAIL_ALLOWLIST/);
 });
+
+test('anchor configuration must include the journal and is passed to runtime settings', async()=>{
+  const {rootCertificates}=await import('node:tls');
+  const anchor={PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:synthetic@external-anchor.example/fence',
+    PUBLICATION_FENCE_ANCHOR_ID:'11111111-1111-4111-8111-111111111111',
+    PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64')};
+  assert.throws(()=>loadConfig({...baseEnv,...anchor}),/invalid_deployment_anchor_configuration/);
+  assert.equal(loadConfig({...baseEnv,...anchor,PUBLICATION_FENCE_PATH:'/tmp/fence'}).deployment.anchor.deploymentID,anchor.PUBLICATION_FENCE_ANCHOR_ID);
+});
