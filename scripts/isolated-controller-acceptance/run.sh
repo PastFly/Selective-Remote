@@ -220,6 +220,18 @@ grep -q '^deployment_compatibility_failed$' /tmp/sr-controller-acceptance/result
 docker run --rm --network cloud_private --read-only --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" --entrypoint node node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b --input-type=module -e 'try { const {default:pg}=await import("/controller/node_modules/pg/lib/index.js"); const {loadConfig}=await import("/controller/src/config.mjs"); const {MigrationFence}=await import("/controller/src/migration-fence.mjs"); const {currentCapabilities,verifyDeploymentCompatibility}=await import("/controller/src/deployment-compatibility.mjs"); const c=loadConfig(),p=new pg.Pool({connectionString:c.databaseURL,max:1}); try {console.log(await verifyDeploymentCompatibility({query:(q,v)=>p.query(q,v),fence:new MigrationFence(c.deployment.fencePath),candidate:currentCapabilities}));} finally {await p.end();} } catch(e) { console.log("DIAGNOSTIC_NAME="+e.name); console.log("DIAGNOSTIC_CODE="+(e.code??"none")); console.log("DIAGNOSTIC_MESSAGE="+e.message); process.exit(1); }' | tee /tmp/sr-controller-acceptance/results/post-floor-diagnostic.log || true
 grep -q '^DIAGNOSTIC_MESSAGE=deployment_v1_data_mismatch$' /tmp/sr-controller-acceptance/results/post-floor-diagnostic.log
 echo 'INSTALLED_CONTROLLER_POST_FLOOR_ROLLBACK_REJECTED=PASS'
+# Demonstrate the threat-model limit in this disposable environment: if both
+# trusted journal and database are rolled back to the same historical point,
+# no independent high-water anchor exists for the controller to compare.
+cp "$state/publication/journal" /tmp/sr-controller-acceptance/journal-after-rollback-check
+latest_journal_hash=$(sha256sum /tmp/sr-controller-acceptance/journal-after-rollback-check | cut -d ' ' -f 1)
+cat /tmp/sr-controller-acceptance/journal-before-writes > "$state/publication/journal"
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/simultaneous-rollback-controller.log 2>&1
+grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/simultaneous-rollback-controller.log
+"${compose[@]}" stop cloud caddy >/dev/null
+cat /tmp/sr-controller-acceptance/journal-after-rollback-check > "$state/publication/journal"
+[[ $(sha256sum "$state/publication/journal" | cut -d ' ' -f 1) == "$latest_journal_hash" ]]
+echo 'SIMULTANEOUS_DATABASE_AND_JOURNAL_ROLLBACK_ACCEPTED=BLOCKER'
 # A restore from before fence activation must not be served against retained successor journal.
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/old.dump >/tmp/sr-controller-acceptance/restore.log 2>&1
 before=$(sha256sum "$state/publication/journal" | cut -d ' ' -f 1)
