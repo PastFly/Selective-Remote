@@ -912,7 +912,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
                         id: group.id,
                         profileID: Self.globalSnippetLibraryID,
                         name: group.name,
-                        createdAt: group.createdAt
+                        createdAt: group.createdAt,
+                        updatedAt: group.updatedAt
                     )
                 )
             }
