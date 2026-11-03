@@ -111,6 +111,14 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     pressUnique("AXButton", "Save")
     print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
     pressUnique("AXButton", "TEST-ONLY-CODEX-SNIPPET-GROUP, 0 сниппетов")
+    for element in snapshot(app) {
+        let role = attr(element, "AXRole") as? String ?? ""
+        let description = attr(element, "AXDescription") as? String ?? ""
+        let title = attr(element, "AXTitle") as? String ?? ""
+        if ["AXButton", "AXPopUpButton"].contains(role), !description.isEmpty || !title.isEmpty {
+            print("SNIPPET_FOLDER_NODE role=\(role) title=\(title) description=\(description)")
+        }
+    }
     pressUnique("AXButton", "New Snippet")
     Thread.sleep(forTimeInterval: 3)
     let capture = Process()
