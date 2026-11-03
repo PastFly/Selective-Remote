@@ -77,7 +77,7 @@ jobs:
           browser="$(command -v google-chrome || command -v chromium || true)"
           test -n "$browser" || { echo "Chrome or Chromium is required"; exit 1; }
           PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
-            node --test tests/workspace-mobile-sync-status-browser.test.mjs
+            node --test tests/workspace-mobile-sync-status-browser.test.mjs tests/public-mobile-locale-browser.test.mjs
 
       - name: Apply migrations and test Team and device-trust storage
         working-directory: cloud
@@ -94,6 +94,7 @@ jobs:
           node --test tests/legacy-write-preservation-p0.test.mjs
           node --test tests/legacy-write-preservation-prior-server-p0.test.mjs
           node --test tests/v1-cutover-stop-http.test.mjs
+          node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs
           node --test tests/v1-commit-fence-postgres.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/device-revoke-publication-postgres.test.mjs
