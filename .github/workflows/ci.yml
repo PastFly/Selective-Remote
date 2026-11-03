@@ -125,7 +125,7 @@ jobs:
           node --test tests/legacy-write-preservation-p0.test.mjs
           node --test tests/legacy-write-preservation-prior-server-p0.test.mjs
           node --test tests/v1-cutover-stop-http.test.mjs
-          node --test tests/v1-team-revocation-rollback-p0.test.mjs
+          node --test tests/v1-team-revocation-rollback-p0.test.mjs tests/v1-session-rollback-p0.test.mjs
           node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs
           node --test --test-concurrency=1 tests/v1-empty-create-p0.test.mjs tests/v1-empty-create-http.test.mjs tests/v1-registration-fence-http.test.mjs
           node --test --test-concurrency=1 tests/v1-wrapper-journal-p0.test.mjs tests/v1-wrapper-capacity-p0.test.mjs

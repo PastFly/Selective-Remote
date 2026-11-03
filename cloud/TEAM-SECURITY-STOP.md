@@ -35,3 +35,13 @@ ownership, Team archive, group/grant policies, role changes and removal, as
 well as in-flight operations, old-server/controller downgrade and restoration
 of snapshots taken before and after the baseline. Staging proof and security
 review must use synthetic principals and preserve all production data.
+
+## Account and session rollback remains open
+
+On an isolated PostgreSQL and separate TLS anchor, a synthetic bearer session
+received Personal Vault HTTP 200, logged out successfully, and then received
+401. Restoring the database snapshot from before logout while leaving the
+anchor and journal unchanged made that same bearer token receive HTTP 200 for
+the Personal Vault again. Team STOP does not guard account, session or device
+revocation history. The regression remains an explicit failing TODO in
+`v1-session-rollback-p0.test.mjs`; production and release remain blocked.
