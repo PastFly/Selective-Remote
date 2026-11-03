@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 cd "$GITHUB_WORKSPACE"
-[[ $(git rev-parse HEAD^) == 5fdf36e3bbeff01151bbf6e695b808594e4ba919 ]]
+git merge-base --is-ancestor 5fdf36e3bbeff01151bbf6e695b808594e4ba919 HEAD
+git diff --exit-code 5fdf36e3bbeff01151bbf6e695b808594e4ba919 HEAD -- cloud
 mkdir -p /tmp/sr-controller-acceptance/results
 exec > >(tee /tmp/sr-controller-acceptance/results/acceptance.log) 2>&1
 echo 'BASE_HEAD=5fdf36e3bbeff01151bbf6e695b808594e4ba919'
@@ -36,6 +37,7 @@ ENV
 chmod 600 "$cloud/.env"
 # Restrict all possible test ingress even if a future regression reaches up.
 iptables -I DOCKER-USER -i eth0 -j DROP
+iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # The reviewed bind guard requires an actual distinct mounted filesystem.
 truncate -s 768M /tmp/sr-controller-acceptance/test-pg.img
 mkfs.ext4 -q -F /tmp/sr-controller-acceptance/test-pg.img
