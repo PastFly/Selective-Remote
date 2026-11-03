@@ -11,7 +11,7 @@ let env = ProcessInfo.processInfo.environment
 guard env["GITHUB_ACTIONS"] == "true", let expected = env["SR_EXPECTED_EXECUTABLE"],
       let expectedHash = env["SR_EXPECTED_HASH"], let temp = env["RUNNER_TEMP"],
       expected.hasPrefix(temp + "/candidate-mount/"), expectedHash.count == 64,
-      CommandLine.arguments.count == 2, let pid = Int32(CommandLine.arguments[1]), pid > 1,
+      [2, 3].contains(CommandLine.arguments.count), let pid = Int32(CommandLine.arguments[1]), pid > 1,
       let running = NSRunningApplication(processIdentifier: pid), !running.isTerminated else { stop("runner or process identity") }
 guard let lib = dlopen("/usr/lib/libproc.dylib", RTLD_NOW), let symbol = dlsym(lib, "proc_pidpath") else { stop("process path unavailable") }
 let pathFn = unsafeBitCast(symbol, to: PidPath.self)
@@ -26,6 +26,14 @@ guard let sandbox = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW),
       let checkSymbol = dlsym(sandbox, "sandbox_check") else { stop("network policy unavailable") }
 let check = unsafeBitCast(checkSymbol, to: SandboxCheck.self)
 guard "network-outbound".withCString({ check(pid, $0, 0) }) == 1 else { stop("network restriction unverified") }
+if CommandLine.arguments.count == 3 {
+    guard CommandLine.arguments[2] == "--terminate", running.terminate() else { stop("graceful termination request failed") }
+    let deadline = Date(timeIntervalSinceNow: 15)
+    while !running.isTerminated && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
+    guard running.isTerminated else { stop("application did not terminate") }
+    print("APPLICATION_GRACEFUL_TERMINATION=YES")
+    exit(0)
+}
 guard AXIsProcessTrusted() else { stop("Accessibility unavailable") }
 let app = AXUIElementCreateApplication(pid)
 func attr(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

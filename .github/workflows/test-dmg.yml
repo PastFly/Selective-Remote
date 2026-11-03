@@ -73,6 +73,16 @@ jobs:
           swiftc scripts/isolated-gui-smoke/probe.swift -o "$RUNNER_TEMP/gui-app-probe"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
           screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/termination.log"
+          wait "$app_pid" || true
+          app_pid=""
+          if [[ "$SR_BUILD_KIND" == baseline ]]; then
+            bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+            defaults export "$bundle" "$RUNNER_TEMP/first.plist"
+            sleep 1
+            defaults export "$bundle" "$RUNNER_TEMP/second.plist"
+            python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/second.plist" | tee "$RUNNER_TEMP/evidence/baseline-persistence.json"
+          fi
       - name: Upload synthetic evidence
         if: always()
         uses: actions/upload-artifact@v4
