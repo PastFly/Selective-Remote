@@ -24,6 +24,10 @@ itself from the retained previous digest and event bytes; the runtime cannot
 submit an arbitrary successor digest through these functions. A compromised
 runtime can still create malicious new writes or deny service, and this anchor
 does not claim to protect against those authorized operations.
+The reader checks the active role against the table, schema, database and both
+function owners, direct table/DDL privileges, privileged role flags and primary
+status. The trusted operator must also prevent restoring the anchor or promoting
+a replica that has lost a previously acknowledged advance.
 
 The logical history hash is SHA-256 chained over validated events and ordinal,
 not the on-disk active segment layout. A checkpoint must retain the entire

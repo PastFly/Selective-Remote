@@ -88,10 +88,10 @@ jobs:
             -e POSTGRES_USER=sranchor -e POSTGRES_PASSWORD=integration-only-anchor -e POSTGRES_DB=postgres \
             -v "$certdir:/certs:ro" "$image" -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key >/dev/null
           for attempt in {1..30}; do
-            if docker exec sr-test-fence-anchor pg_isready -U sranchor -d postgres >/dev/null; then break; fi
+            if docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null; then break; fi
             sleep 1
           done
-          docker exec sr-test-fence-anchor pg_isready -U sranchor -d postgres >/dev/null
+          docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null
           SR_TEST_ANCHOR_DATABASE_URL='postgresql://sranchor:integration-only-anchor@127.0.0.1:55432/postgres' \
           SR_TEST_ANCHOR_TLS_URL='postgresql://sranchor:integration-only-anchor@127.0.0.1:55432/postgres' \
           SR_TEST_ANCHOR_TLS_CA="$certdir/server.crt" node --test --test-concurrency=1 \

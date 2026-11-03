@@ -107,8 +107,17 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
    await fence.intent(record('22222222-2222-4222-8222-222222222222'));
    await writeFile(path,old);
    await assert.rejects(()=>fence.snapshot(),/deployment_anchor_mismatch/);
+   await pool.query(`GRANT CREATE ON DATABASE ${db} TO ${role}`);
+   await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
+   await pool.query(`REVOKE CREATE ON DATABASE ${db} FROM ${role}`);
+   await pool.query(`GRANT CREATE ON SCHEMA selective_remote_anchor TO ${role}`);
+   await pool.query(`ALTER FUNCTION selective_remote_anchor.advance_head(uuid,bigint,text,text) OWNER TO ${role}`);
+   await pool.query(`REVOKE CREATE ON SCHEMA selective_remote_anchor FROM ${role}`);
+   await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
   } finally {await client.query('RESET ROLE');client.release();}
  } finally {
+  if((await pool.query('SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=$1',[role])).rowCount)
+   await pool.query(`REVOKE CREATE ON DATABASE ${db} FROM ${role}`);
   await pool.query('DROP SCHEMA IF EXISTS selective_remote_anchor CASCADE');
   await pool.query(`DROP ROLE IF EXISTS ${role}`);
   await pool.end();
@@ -119,6 +128,12 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
 
 test('anchor refuses a read served by a standby even when its row looks valid', async()=>{
  const {PostgresFenceAnchor}=await import('../src/postgres-fence-anchor.mjs');
- const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:true}]})},'11111111-1111-4111-8111-111111111111');
+ const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:true,constrained_role:true}]})},'11111111-1111-4111-8111-111111111111');
+ await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
+});
+
+test('anchor refuses a privileged runtime identity even when the head and primary are valid', async()=>{
+ const {PostgresFenceAnchor}=await import('../src/postgres-fence-anchor.mjs');
+ const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:false,constrained_role:false}]})},'11111111-1111-4111-8111-111111111111');
  await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
 });

@@ -17,11 +17,15 @@ test('configured anchor uses certificate-verified TLS and rejects a different CA
  const dbURL=new URL(url);dbURL.pathname='/'+db;const target=dbURL.toString();
  const setup=new pg.Pool({connectionString:target,ssl:{ca:await readFile(certPath,'utf8'),rejectUnauthorized:true}});
  const dir=await mkdtemp(join(tmpdir(),'sr-anchor-tls-')),path=join(dir,'journal');await writeFile(path,'');
- const id=randomUUID();
+ const id=randomUUID(),role='sr_runtime_'+randomUUID().replaceAll('-',''),password=randomUUID().replaceAll('-','');
  try{
   await setup.query(await readFile(new URL('../scripts/independent-fence-anchor.sql',import.meta.url),'utf8'));
   await setup.query('INSERT INTO selective_remote_anchor.heads(deployment_id,position,digest) VALUES ($1,0,$2)',[id,fenceHistoryHead([]).digest]);
-  const values={PUBLICATION_FENCE_ANCHOR_URL:target,PUBLICATION_FENCE_ANCHOR_ID:id,
+  await setup.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`);
+  await setup.query(`GRANT USAGE ON SCHEMA selective_remote_anchor TO ${role}`);
+  await setup.query(`GRANT EXECUTE ON FUNCTION selective_remote_anchor.read_head(uuid),selective_remote_anchor.advance_head(uuid,bigint,text,text) TO ${role}`);
+  const runtimeURL=new URL(target);runtimeURL.username=role;runtimeURL.password=password;
+  const values={PUBLICATION_FENCE_ANCHOR_URL:runtimeURL.toString(),PUBLICATION_FENCE_ANCHOR_ID:id,
    PUBLICATION_FENCE_ANCHOR_CA_BASE64:(await readFile(certPath)).toString('base64')};
   const anchor=loadFenceAnchorConfig(values,'postgresql://runtime:synthetic@separate-primary.invalid/app');
   const configured=createConfiguredMigrationFence({fencePath:path,anchor});
@@ -36,5 +40,5 @@ test('configured anchor uses certificate-verified TLS and rejects a different CA
   const wrong=loadFenceAnchorConfig({...values,PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64')},'postgresql://runtime:synthetic@separate-primary.invalid/app');
   const rejected=createConfiguredMigrationFence({fencePath:path,anchor:wrong});
   try{await assert.rejects(()=>rejected.fence.snapshot());}finally{await rejected.close();}
- }finally{await setup.end();await admin.query(`DROP DATABASE ${db}`);await admin.end();await rm(dir,{recursive:true,force:true});}
+ }finally{await setup.end();await admin.query(`DROP DATABASE ${db}`);await admin.query(`DROP ROLE IF EXISTS ${role}`);await admin.end();await rm(dir,{recursive:true,force:true});}
 });
