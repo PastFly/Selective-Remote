@@ -87,4 +87,28 @@ struct PersonalSnippetFolderSyncTests {
         let restored = try SelectiveRemotePersonalVaultImporter.decode(exported.document)
         #expect(restored.snippets == [value])
     }
+
+    @Test("restarting after a Snippet edit retains the group modification timestamp")
+    func groupModificationTimeSurvivesRestart() throws {
+        try withStore { store, defaults in
+            let created = try #require(store.createSnippetGroup(
+                name: "Work/Deploy", profileID: TerminalCommandHistoryStore.globalSnippetLibraryID,
+                now: Date(timeIntervalSince1970: 1_600_000_000)
+            ))
+            #expect(store.saveTemplate(
+                id: nil, title: "Deploy", command: "printf test", category: created.name,
+                groupID: created.id, profileID: TerminalCommandHistoryStore.globalSnippetLibraryID,
+                targets: [.localTerminal]
+            ))
+            let before = try #require(store.snippetGroup(id: created.id))
+            #expect(before.updatedAt > before.createdAt)
+            let reopened = TerminalCommandHistoryStore(defaults: defaults)
+            let after = try #require(reopened.snippetGroup(id: created.id))
+            #expect(after.id == before.id)
+            #expect(after.createdAt == before.createdAt)
+            #expect(after.updatedAt == before.updatedAt)
+            #expect(reopened.templates().first?.groupID == before.id)
+            #expect(reopened.templates().first?.command == "printf test")
+        }
+    }
 }
