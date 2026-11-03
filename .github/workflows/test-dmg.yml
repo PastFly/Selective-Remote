@@ -95,7 +95,7 @@ jobs:
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
           swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
           screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/termination.log"
           wait "$app_pid" || true
