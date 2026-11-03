@@ -63,6 +63,42 @@ func pressUnique(_ role: String, _ label: String) {
     guard AXUIElementPerformAction(matches[0], kAXPressAction as CFString) == .success else { stop("action failed: \(label)") }
     Thread.sleep(forTimeInterval: 1)
 }
+func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: Bool = true) {
+    let matches = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+    }
+    guard matches.count == 1 else { stop("unique field unavailable: \(placeholder)") }
+    guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("input permission or activation") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          AXUIElementSetAttributeValue(matches[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { stop("input focus") }
+    func key(_ code: CGKeyCode, down: Bool, flags: CGEventFlags = []) {
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { stop("keyboard event") }
+        event.flags = flags
+        event.post(tap: .cghidEventTap)
+    }
+    key(0, down: true, flags: .maskCommand); key(0, down: false, flags: .maskCommand)
+    for character in value {
+        guard let stroke = syntheticKeyStroke(character),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("unsupported input or focus") }
+        let flags: CGEventFlags = stroke.shift ? .maskShift : []
+        key(stroke.code, down: true, flags: flags)
+        key(stroke.code, down: false, flags: flags)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.12))
+    }
+    let deadline = Date(timeIntervalSinceNow: 5)
+    var confirmed = false
+    while Date() < deadline {
+        let current = snapshot(app).filter {
+            (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+        }
+        if current.count == 1 && (attr(current[0], "AXValue") as? String) == value { confirmed = true; break }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    }
+    if verifyVisibleValue && !confirmed { stop("typed field not confirmed: \(placeholder)") }
+    key(48, down: true); key(48, down: false)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
     guard env["SR_BUILD_KIND"] == "snippets" else { stop("snippet inspection requires isolated baseline") }
     let welcome = snapshot(app).filter {
@@ -71,6 +107,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Snippets")
     pressUnique("AXButton", "New Group")
+    setUniqueField("Название группы", "TEST-ONLY-CODEX-SNIPPET-GROUP")
+    pressUnique("AXButton", "Save")
+    print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
+    pressUnique("AXButton", "New Snippet")
     for element in snapshot(app).prefix(500) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
@@ -81,6 +121,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
         }
     }
     print("SNIPPET_INSPECTION_ONLY=YES")
+    pressUnique("AXButton", "Cancel")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-upgrade" {
@@ -139,42 +180,7 @@ print("CONNECTIONS_OPEN_REQUESTED=YES")
 pressUnique("AXPopUpButton", "Add")
 pressUnique("AXMenuItem", "New SSH")
 print("SYNTHETIC_PROFILE_CREATION_REQUESTED=YES")
-func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: Bool = true) {
-    let matches = snapshot(app).filter {
-        (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
-    }
-    guard matches.count == 1 else { stop("unique field unavailable: \(placeholder)") }
-    guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("input permission or activation") }
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
-          AXUIElementSetAttributeValue(matches[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { stop("input focus") }
-    func key(_ code: CGKeyCode, down: Bool, flags: CGEventFlags = []) {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { stop("keyboard event") }
-        event.flags = flags
-        event.post(tap: .cghidEventTap)
-    }
-    key(0, down: true, flags: .maskCommand); key(0, down: false, flags: .maskCommand)
-    for character in value {
-        guard let stroke = syntheticKeyStroke(character),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("unsupported input or focus") }
-        let flags: CGEventFlags = stroke.shift ? .maskShift : []
-        key(stroke.code, down: true, flags: flags)
-        key(stroke.code, down: false, flags: flags)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.12))
-    }
-    let deadline = Date(timeIntervalSinceNow: 5)
-    var confirmed = false
-    while Date() < deadline {
-        let current = snapshot(app).filter {
-            (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
-        }
-        if current.count == 1 && (attr(current[0], "AXValue") as? String) == value { confirmed = true; break }
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-    }
-    if verifyVisibleValue && !confirmed { stop("typed field not confirmed: \(placeholder)") }
-    key(48, down: true); key(48, down: false)
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-}
+
 setUniqueField("SSH Server", "TEST-ONLY-CODEX-UPGRADE-HOST")
 setUniqueField("For example: Work", "TEST-ONLY-CODEX-UPGRADE-FOLDER")
 setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.10")
