@@ -1,3 +1,4 @@
+import {syntheticAnchoredFence} from './synthetic-v1-anchor-fixture.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp,writeFile,rm } from 'node:fs/promises';
@@ -39,11 +40,11 @@ test('V1 journal retains exact monotonic Vault revision and ciphertext commitmen
 test('unresolved V1 intent remains durable and blocks writer readiness',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'sr-v1-intent-'));const path=join(dir,'journal');
   try {
-    await writeFile(path,'',{mode:0o600});const fence=new MigrationFence(path),first=intent();
+    await writeFile(path,'',{mode:0o600});const fence=(await syntheticAnchoredFence(path)),first=intent();
     await fence.append(baseline);
     await fence.append(floor);
     await fence.append(first);
-    assert.equal((await new MigrationFence(path).snapshot()).v1Pending.length,1);
+    assert.equal((await (await syntheticAnchoredFence(path)).snapshot()).v1Pending.length,1);
     await assert.rejects(fence.assertWritable(),/deployment_fence_pending/);
     await fence.append(terminal(first,'V1_PROVEN_ABORT'));
     assert.equal((await fence.snapshot()).v1Pending.length,0);

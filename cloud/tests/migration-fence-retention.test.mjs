@@ -141,12 +141,12 @@ for(const phase of ['before-rename','after-rename'])test(`SIGKILL ${phase} leave
 });
 
 test('V1 revisions and operation replay protection survive a checkpoint',async t=>{
- const {path,fence}=await fixture(t),id=()=>randomUUID();
+ const {path}=await fixture(t),id=()=>randomUUID();const {syntheticAnchoredFence}=await import('./synthetic-v1-anchor-fixture.mjs');const fence=await syntheticAnchoredFence(path);
  const baseline={version:2,type:'V1_BASELINE',baselineID:id(),vaults:[]},floor={version:2,type:'V1_WRITER_FLOOR',writerProtocol:1};
  const p={version:2,type:'V1_PENDING_INTENT',intentID:id(),operationID:id(),vaultKind:'PERSONAL',ownerID:id(),vaultID:id(),baseRevision:0,revision:1,ciphertextHash:'a'.repeat(64),envelopeHash:'b'.repeat(64)};
  const done={version:2,type:'V1_CONFIRMED_COMMIT',intentID:p.intentID,intentDigest:fenceIntentDigest(p)};
  for(const e of [baseline,floor,p,done])await fence.append(e);await compact(fence);
- const reopened=new MigrationFence(path),after=await reopened.snapshot();assert.equal(after.writerFloor,1);assert.equal(after.v1Committed[0].revision,1);
+ const reopened=new MigrationFence(path,{anchor:fence.anchor}),after=await reopened.snapshot();assert.equal(after.writerFloor,1);assert.equal(after.v1Committed[0].revision,1);
  const repeated={...p,intentID:id(),baseRevision:1,revision:2};await assert.rejects(reopened.append(repeated),/deployment_fence_conflict/);
  const next={...repeated,operationID:id()},nextDone={version:2,type:'V1_CONFIRMED_COMMIT',intentID:next.intentID,intentDigest:fenceIntentDigest(next)};
  await reopened.append(next);await reopened.append(nextDone);assert.equal((await reopened.snapshot()).v1Committed[0].revision,2);

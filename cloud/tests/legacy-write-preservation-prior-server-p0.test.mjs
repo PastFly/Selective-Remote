@@ -1,3 +1,4 @@
+import {syntheticAnchoredFence} from './synthetic-v1-anchor-fixture.mjs';
 import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -95,9 +96,9 @@ test("exact prior server rejects an accepted in-flight V1 write when its barrier
     const { MigrationFence } = await import('../src/migration-fence.mjs');
     const { readV1VaultState } = await import('../src/v1-data-fence.mjs');
     await installV1CommitFence(isolated.pool);
-    await new MigrationFence(fence.path).append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),
+    await (await syntheticAnchoredFence(fence.path)).append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),
       vaults:await readV1VaultState((sql,values)=>isolated.pool.query(sql,values))});
-    await new MigrationFence(fence.path).append({ version:2,type:'V1_WRITER_FLOOR',writerProtocol:1 });
+    await (await syntheticAnchoredFence(fence.path)).append({ version:2,type:'V1_WRITER_FLOOR',writerProtocol:1 });
     assert.equal((await fetch(`${origin}/v1/meta`)).headers.get('x-selective-v1-write-fence'),'1');
     const malformed = await fetch(`${origin}/v1/vault`, {
       method: "PUT", headers: markedHeaders, body: JSON.stringify({ ...envelope, baseRevision: 1 }),

@@ -163,6 +163,7 @@ test('a retained writer floor denies an old candidate before database access', a
 
 test('a writer-capable candidate cannot pass an armed floor without the database barrier', async () => {
   const s = scenario();
+  s.fence.anchor = { read: async () => ({}), advance: async () => {} }; // synthetic guard fixture
   s.fence.snapshot = async () => ({ schemaFloor:19, writerFloor:1, committed:[], pending:[], outcomes:[] });
   await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: { ...candidate, v1WriterProtocol:1 } }), /v1_writer_fence_missing/);
 });

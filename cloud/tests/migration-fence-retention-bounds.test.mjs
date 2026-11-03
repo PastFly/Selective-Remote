@@ -42,7 +42,8 @@ test('admission reserves event slots for pending terminal outcomes before append
  const {MigrationFence,FENCE_MAX_REPLAY_RECORDS}=await import('../src/migration-fence.mjs');
  const floor={version:2,type:'V1_WRITER_FLOOR',writerProtocol:1},before=Buffer.from((JSON.stringify(floor)+'\n').repeat(FENCE_MAX_REPLAY_RECORDS-1));await writeFile(path,before);
  const id=()=>randomUUID(),p={version:2,type:'PENDING_INTENT',intentID:id(),operationID:id(),kind:'PUBLICATION',schemaFloor:22,vaults:[{teamID:id(),vaultID:id(),generationID:id(),sequence:1,headerHash:'a'.repeat(64),manifestHash:'b'.repeat(64)}]};
- await assert.rejects(new MigrationFence(path).append(p),/deployment_fence_history_limit/);
+ const anchor={read:async()=>head(Array(FENCE_MAX_REPLAY_RECORDS-1).fill(floor)),advance:async()=>{throw Error('unexpected_advance');}};
+ await assert.rejects(new MigrationFence(path,{anchor}).append(p),/deployment_fence_history_limit/);
  assert.deepEqual(await (await import('node:fs/promises')).readFile(path),before);
 });
 
@@ -67,13 +68,13 @@ test('terminal byte reservation covers archived and active history before dispat
  const archived=Buffer.from(fill(4*1024*1024-512)),digest=createHash('sha256').update(archived).digest('hex');await writeFile(join(archiveDir,digest),archived);
  const marker=JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n';
  const active=Buffer.from(marker+fill(4*1024*1024-512-Buffer.byteLength(marker)));await writeFile(path,active);
- const unanchored=new MigrationFence(path),events=await unanchored.readRecords(),expected=head(events),anchor={read:async()=>expected,advance:async()=>{throw Error('unexpected_advance');}};
+ const events=(archived.toString('utf8')+active.toString('utf8').slice(marker.length)).trimEnd().split('\n').map(line=>JSON.parse(line)),expected=head(events),anchor={read:async()=>expected,advance:async()=>{throw Error('unexpected_advance');}};
  const checkpoint=await new MigrationFence(path,{anchor}).compact();assert.ok(checkpoint.archiveDigest);
  const before=await (await import('node:fs/promises')).readFile(path);
  assert.ok(FENCE_MAX_REPLAY_BYTES-archived.length-active.length-before.length<Buffer.byteLength(pair));
  const next={...pending,intentID:id(),operationID:id(),vaults:pending.vaults.map(v=>({...v,teamID:id(),vaultID:id(),generationID:id()}))};
  const sameTeam=id();next.vaults=next.vaults.map(v=>({...v,teamID:sameTeam})).sort((a,b)=>a.vaultID.localeCompare(b.vaultID));
- await assert.rejects(new MigrationFence(path).append(next),/deployment_fence_history_limit/);
+ await assert.rejects(new MigrationFence(path,{anchor}).append(next),/deployment_fence_history_limit/);
  assert.deepEqual(await (await import('node:fs/promises')).readFile(path),before);
 });
 

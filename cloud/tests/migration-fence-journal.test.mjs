@@ -210,11 +210,12 @@ test('a retained V1 writer floor is monotonic, idempotent and fails closed on ma
 });
 
 test('writer floor survives journal reopen and duplicate append', async t => {
-  const { path, fence } = await fixture(t);
+  const { path } = await fixture(t);
+  const {syntheticAnchoredFence}=await import('./synthetic-v1-anchor-fixture.mjs');const fence=await syntheticAnchoredFence(path);
   const floor = { version: 2, type: 'V1_WRITER_FLOOR', writerProtocol: 1 };
   await fence.append(floor);
   const first = await readFile(path);
   await fence.append(floor);
   assert.deepEqual(await readFile(path), first);
-  assert.equal((await new MigrationFence(path).snapshot()).writerFloor, 1);
+  assert.equal((await new MigrationFence(path,{anchor:fence.anchor}).snapshot()).writerFloor, 1);
 });

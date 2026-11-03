@@ -1,3 +1,4 @@
+import {syntheticAnchoredFence,syntheticV1Anchor} from './synthetic-v1-anchor-fixture.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import test from 'node:test';
@@ -100,7 +101,7 @@ test('current Team writer can initialize through the database barrier', {
     const {readV1VaultState,assertV1DataFloor}=await import('../src/v1-data-fence.mjs');
     const {publicationRuntimeFixture}=await import('./publication-runtime-fixture.mjs');
     fixture=await publicationRuntimeFixture(db.databaseURL);
-    const fence=new MigrationFence(fixture.path);
+    const fence=(await syntheticAnchoredFence(fixture.path));
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
@@ -146,7 +147,7 @@ test('an unavailable or corrupted V1 journal cannot authorize a direct writer', 
     const journal=join(directory,'journal');await writeFile(journal,'invalid journal\n',{mode:0o600});
     const payload={baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'};
     for(const [path,expected] of [[journal,/corrupt_deployment_fence/],[join(directory,'missing'),{code:'ENOENT'}]]) {
-      const store=new PostgresStore(null,db.pool,{v1Fence:new MigrationFence(path)});
+      const store=new PostgresStore(null,db.pool,{v1Fence:new MigrationFence(path,{anchor:syntheticV1Anchor()})});
       await assert.rejects(store.putVault(user,device,payload),expected);
       assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,before);
     }
@@ -197,14 +198,14 @@ test('retained writer floor denies an actual pre-barrier PostgreSQL backup resto
     catch { throw Error('synthetic_pg_dump_failed'); }
     fixture=await publicationRuntimeFixture(original.databaseURL);
     await installV1CommitFence(original.pool);
-    const fence=new MigrationFence(fixture.path);
+    const fence=(await syntheticAnchoredFence(fixture.path));
     const {readV1VaultState}=await import('../src/v1-data-fence.mjs');
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>original.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     const guard=pool=>verifyDeploymentCompatibility({query:(sql,values)=>pool.query(sql,values),fence,candidate:currentCapabilities});
     assert.equal((await guard(original.pool)).writerFloor,1);
-    const {v1WriterProtocol:_,emptyVaultCreationVersion:__,wrapperEnvelopeVersion:___,...oldCandidate}=currentCapabilities;
-    await assert.rejects(verifyDeploymentCompatibility({query:(sql,values)=>original.pool.query(sql,values),fence,candidate:oldCandidate}),/deployment_writer_floor/);
+    const {v1WriterProtocol:_,emptyVaultCreationVersion:__,wrapperEnvelopeVersion:___,v1AnchorProtocol:____,...oldCandidate}=currentCapabilities;
+    await assert.rejects(verifyDeploymentCompatibility({query:(sql,values)=>original.pool.query(sql,values),fence,candidate:oldCandidate}),/deployment_code_floor/);
     restored=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
     await restored.pool.query('DROP SCHEMA public CASCADE');
     await restored.pool.query('CREATE SCHEMA public');
@@ -279,7 +280,7 @@ test('current writer holds barrier integrity until its transaction commits', {
     const {MigrationFence}=await import('../src/migration-fence.mjs');
     const {readV1VaultState}=await import('../src/v1-data-fence.mjs');
     const {publicationRuntimeFixture}=await import('./publication-runtime-fixture.mjs');
-    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=new MigrationFence(fixture.path);
+    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     let reached;
@@ -311,7 +312,7 @@ test('arming fails closed with an undrained writer and retains the floor only af
   const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let fixture,blocker;
   try {
     fixture=await publicationRuntimeFixture(db.databaseURL);
-    const fence=new MigrationFence(fixture.path);
+    const fence=(await syntheticAnchoredFence(fixture.path));
     blocker=await db.pool.connect();
     await blocker.query('BEGIN');
     await assert.rejects(armV1CommitFence({pool:db.pool,fence}),/v1_writer_not_drained/);
@@ -339,8 +340,8 @@ test('arming interruption never exposes an unprotected current writer', {
     const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let fixture;
     try {
       fixture=await publicationRuntimeFixture(db.databaseURL);
-      const fence=new MigrationFence(fixture.path);
-      const failing={assertWritable:()=>fence.assertWritable(),snapshot:()=>fence.snapshot(),
+      const fence=(await syntheticAnchoredFence(fixture.path));
+      const failing={anchor:fence.anchor,assertWritable:()=>fence.assertWritable(),snapshot:()=>fence.snapshot(),
         async append(event){if(event.type==='V1_BASELINE')return fence.append(event);if(afterAppend)await fence.append(event);throw Error('synthetic_interruption');}};
       await assert.rejects(armV1CommitFence({pool:db.pool,fence:failing}),/synthetic_interruption/);
       await assertV1CommitFence((sql,values)=>db.pool.query(sql,values));
@@ -366,7 +367,7 @@ test('an older post-floor backup must not serve after newer V1 data was committe
   await original.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-postfloor@example.test','p0_postfloor',now())",[user]);
   await original.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
   await original.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
-  fixture=await publicationRuntimeFixture(original.databaseURL);const fence=new MigrationFence(fixture.path);
+  fixture=await publicationRuntimeFixture(original.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
   await installV1CommitFence(original.pool);
   const {readV1VaultState}=await import('../src/v1-data-fence.mjs');
   await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>original.pool.query(sql,values))});
@@ -401,7 +402,7 @@ test('lost Personal COMMIT reply stays pending until exact durable readback afte
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-commit-loss@example.test','p0_commit_loss',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
-    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=new MigrationFence(fixture.path);
+    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
@@ -416,7 +417,7 @@ test('lost Personal COMMIT reply stays pending until exact durable readback afte
     const pending=(await fence.snapshot()).v1Pending;assert.equal(pending.length,1);
     const guard=()=>verifyDeploymentCompatibility({query:(sql,values)=>db.pool.query(sql,values),fence,candidate:currentCapabilities});
     await assert.rejects(guard,/deployment_fence_pending/);
-    const restarted=new PublicationFenceCoordinator({fence:new MigrationFence(fixture.path)});
+    const restarted=new PublicationFenceCoordinator({fence:(await syntheticAnchoredFence(fixture.path))});
     const result=await restarted.reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query:(sql,values)=>db.pool.query(sql,values),intent})});
     assert.equal(result.status,'confirmed');assert.equal((await guard()).writerFloor,1);
     assert.equal((await db.pool.query('SELECT ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows[0].ciphertext,'bmV3');
@@ -438,18 +439,18 @@ test('crash after durable V1 intent but before COMMIT stays pending and preserve
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     const before=(await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
-    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=new MigrationFence(fixture.path);
+    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
-    const crashing={snapshot:()=>fence.snapshot(),async append(event){await fence.append(event);if(event.type==='V1_PENDING_INTENT')throw Error('synthetic_crash_after_intent');}};
+    const crashing={anchor:fence.anchor,snapshot:()=>fence.snapshot(),async append(event){await fence.append(event);if(event.type==='V1_PENDING_INTENT')throw Error('synthetic_crash_after_intent');}};
     const store=new PostgresStore(null,db.pool,{v1Fence:crashing});
     await assert.rejects(store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/synthetic_crash_after_intent/);
     assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,before);
     const pending=(await fence.snapshot()).v1Pending;assert.equal(pending.length,1);
     const guard=()=>verifyDeploymentCompatibility({query:(sql,values)=>db.pool.query(sql,values),fence,candidate:currentCapabilities});
     await assert.rejects(guard,/deployment_fence_pending/);
-    const restarted=new PublicationFenceCoordinator({fence:new MigrationFence(fixture.path)});
+    const restarted=new PublicationFenceCoordinator({fence:(await syntheticAnchoredFence(fixture.path))});
     const result=await restarted.reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query:(sql,values)=>db.pool.query(sql,values),intent})});
     assert.equal(result.status,'pending','absence after restart is not proof of abort');
     await assert.rejects(guard,/deployment_fence_pending/);
@@ -468,7 +469,7 @@ test('concurrent current Personal writers cannot both commit the same base revis
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-race@example.test','p0_race_test',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
-    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=new MigrationFence(fixture.path);
+    fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});

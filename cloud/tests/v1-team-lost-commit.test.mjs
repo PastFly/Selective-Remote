@@ -1,3 +1,4 @@
+import {syntheticAnchoredFence,syntheticV1Anchor} from './synthetic-v1-anchor-fixture.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -19,7 +20,7 @@ try{
  const created=await seed.createSharedVault({actorUserID:user,teamID:team.team.id,name:'TEST-ONLY-CODEX-LOST-VAULT',idempotencyKey:'p0-lost-vault-0001'});
  const vaultID=created.vault.id,teamID=team.team.id,member=team.membership;
  const wrapper={membershipID:member.id,membershipEpoch:Number(member.epoch),deviceID:device,wrapperVersion:1,ephemeralPublicKey:{kty:'EC',crv:'P-256',x:'E'.repeat(43),y:'Z'.repeat(43)},ciphertext:'E'.repeat(43),nonce:'E'.repeat(16),authTag:'E'.repeat(22),contextHash:teamVaultWrapperContextHash({teamID,vaultID,keyGeneration:1,membershipID:member.id,membershipEpoch:Number(member.epoch),deviceID:device})};
- fixture=await publicationRuntimeFixture(db.databaseURL);const fence=new MigrationFence(fixture.path),query=(sql,values)=>db.pool.query(sql,values);
+ fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path)),query=(sql,values)=>db.pool.query(sql,values);
  await installV1CommitFence(db.pool);await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState(query)});await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
  let injected=false;
  const pool={async connect(){const c=await db.pool.connect();return {async query(sql,values){if(sql==='COMMIT'&&!injected){injected=true;await c.query(sql,values);throw Error('synthetic_lost_commit_reply');}return c.query(sql,values);},release(){c.release();}};}};
@@ -27,7 +28,7 @@ try{
  const store=new PostgresStore(null,pool,{v1Fence:fence});await assert.rejects(store.putSharedVault(request),/synthetic_lost_commit_reply/);
  const row=(await query('SELECT revision,ciphertext FROM shared_vaults WHERE id=$1',[vaultID])).rows[0];assert.equal(Number(row.revision),1);assert.equal(row.ciphertext,'AA');assert.equal((await query('SELECT 1 FROM shared_vault_key_wrappers WHERE vault_id=$1',[vaultID])).rowCount,1);
  const pending=(await fence.snapshot()).v1Pending;assert.equal(pending.length,1);await assert.rejects(fence.assertWritable(),/deployment_fence_pending/);
- const restarted=new PublicationFenceCoordinator({fence:new MigrationFence(fixture.path)});assert.equal((await restarted.reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query,intent})})).status,'confirmed');
+ const restarted=new PublicationFenceCoordinator({fence:(await syntheticAnchoredFence(fixture.path))});assert.equal((await restarted.reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query,intent})})).status,'confirmed');
  assert.equal(await assertV1DataFloor(query,await fence.snapshot()),true);
  const replay=await new PostgresStore(null,db.pool,{v1Fence:fence}).putSharedVault(request);assert.equal(replay.revision,1);assert.equal(replay.conflict,false);
  assert.equal((await query('SELECT count(*)::int AS n FROM shared_vault_revisions WHERE vault_id=$1',[vaultID])).rows[0].n,1);

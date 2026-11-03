@@ -1,3 +1,4 @@
+import {syntheticAnchoredFence} from './synthetic-v1-anchor-fixture.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp,writeFile,rm } from 'node:fs/promises';
@@ -9,7 +10,7 @@ import { PublicationFenceCoordinator, createPublicationFenceTransaction } from '
 
 async function fixture(){
  const dir=await mkdtemp(join(tmpdir(),'sr-v1-coordinator-')),path=join(dir,'journal');await writeFile(path,'',{mode:0o600});
- const fence=new MigrationFence(path);await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:[]});
+ const fence=(await syntheticAnchoredFence(path));await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:[]});
  await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
  return {fence,cleanup:()=>rm(dir,{recursive:true,force:true})};
 }

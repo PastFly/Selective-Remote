@@ -1,3 +1,4 @@
+import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http-anchor-fixture.mjs';
 // Synthetic TLS SMTP endpoint: bind only loopback, accept only the test mailbox,
 // trust only the ephemeral self-signed certificate and never log its messages.
 import test from 'node:test';
@@ -42,10 +43,10 @@ async function testMailServer(){
   return {port:server.address().port,cert,messages,async close(){for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}};
 }
 
-test('real registration, synthetic email verification and login preserve fenced Personal Vault', {skip:!process.env.TEST_DATABASE_URL,timeout:60000}, async()=>{
-  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let runtime,smtp;
+test('real registration, synthetic email verification and login preserve fenced Personal Vault', {skip:!process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable,timeout:60000}, async()=>{
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let runtime,smtp,anchorFixture;
   try{
-    const fixture=await publicationRuntimeFixture(db.databaseURL),fence=new MigrationFence(fixture.path);
+    const fixture=await publicationRuntimeFixture(db.databaseURL);anchorFixture=await syntheticHttpAnchor(fixture.path);const fence=anchorFixture.fence;
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
@@ -55,7 +56,7 @@ test('real registration, synthetic email verification and login preserve fenced 
       PATH:process.env.PATH,USER:process.env.USER,DATABASE_URL:db.databaseURL,CLOUD_HOST:'127.0.0.1',CLOUD_PORT:String(port),CLOUD_PUBLIC_ORIGIN:origin,
       SESSION_TOKEN_PEPPER:'s'.repeat(32),EMAIL_VERIFICATION_TOKEN_PEPPER:'e'.repeat(32),PASSWORD_RESET_TOKEN_PEPPER:'p'.repeat(32),
       TEAM_INVITATION_TOKEN_PEPPER:'i'.repeat(32),TEAM_OUTBOX_ENCRYPTION_KEY:'o'.repeat(32),ABUSE_TOKEN_PEPPER:'a'.repeat(32),PROXY_SHARED_SECRET:'b'.repeat(64),
-      PUBLICATION_FENCE_PATH:fixture.path,ALLOW_REGISTRATION:'true',SMTP_HOST:'localhost',SMTP_PORT:String(smtp.port),SMTP_SECURE:'true',
+      PUBLICATION_FENCE_PATH:fixture.path,...anchorFixture.env,ALLOW_REGISTRATION:'true',SMTP_HOST:'localhost',SMTP_PORT:String(smtp.port),SMTP_SECURE:'true',
       SMTP_USER:'synthetic',SMTP_PASSWORD:'test-only-password',SMTP_FROM:'sender@example.test',NODE_EXTRA_CA_CERTS:smtp.cert,NODE_OPTIONS:'--dns-result-order=ipv4first',
     }});runtime={child,cleanup:fixture.cleanup};
     let ready=false;for(let i=0;i<200;i++){if(child.exitCode!==null)throw Error('test_cloud_start_failed');try{if((await fetch(`${origin}/readyz`)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(ready,true);
@@ -69,5 +70,5 @@ test('real registration, synthetic email verification and login preserve fenced 
     const login=await post('/v1/auth/login',{email:registration.email,password:registration.password,device});assert.equal(login.status,200,await login.clone().text());assert.ok((await login.json()).token);
     const snapshot=await fence.snapshot();assert.equal(snapshot.v1Pending.length,0);assert.equal(snapshot.v1Committed.length,1);assert.equal(snapshot.v1Committed[0].vaultKind,'PERSONAL');
     await assertV1DataFloor((sql,values)=>db.pool.query(sql,values),snapshot);
-  }finally{await stopPublicationRuntime(runtime);await smtp?.close();await db.cleanup();}
+  }finally{await stopPublicationRuntime(runtime);await anchorFixture?.cleanup();await smtp?.close();await db.cleanup();}
 });

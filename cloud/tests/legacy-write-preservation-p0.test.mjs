@@ -1,3 +1,4 @@
+import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http-anchor-fixture.mjs';
 import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -11,10 +12,10 @@ import { isolatedPublicationDatabase, publicationRuntimeFixture, stopPublication
 // The unfenced 0.31 wire format must not overwrite a newer
 // server snapshot after obtaining its revision. Synthetic loopback database only.
 test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshots", {
-  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+  skip: !process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable, timeout: 60000,
 }, async () => {
   const isolated = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
-  let runtime;
+  let runtime, anchorFixture;
   try {
     const user = randomUUID(), device = randomUUID(), session = randomUUID(), token = "a".repeat(43), pepper = "s".repeat(32);
     await isolated.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0@example.test','p0_test',now())", [user]);
@@ -22,6 +23,7 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     await isolated.pool.query("INSERT INTO personal_vaults(user_id) VALUES($1)", [user]);
     await isolated.pool.query("INSERT INTO sessions(id,user_id,device_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 day')", [session, user, device, hashSessionToken(token, pepper)]);
     const fence = await publicationRuntimeFixture(isolated.databaseURL), socket = createServer();
+    anchorFixture=await syntheticHttpAnchor(fence.path);
     await new Promise(resolve => socket.listen(0, "127.0.0.1", resolve));
     const port = socket.address().port;
     await new Promise(resolve => socket.close(resolve));
@@ -34,7 +36,7 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
         CLOUD_PUBLIC_ORIGIN: origin, SESSION_TOKEN_PEPPER: pepper, EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32),
         PASSWORD_RESET_TOKEN_PEPPER: "p".repeat(32), TEAM_INVITATION_TOKEN_PEPPER: "t".repeat(32),
         TEAM_OUTBOX_ENCRYPTION_KEY: "o".repeat(32), ABUSE_TOKEN_PEPPER: "a".repeat(32),
-        PROXY_SHARED_SECRET: "b".repeat(64), PUBLICATION_FENCE_PATH: fence.path }, stdio: "ignore",
+        PROXY_SHARED_SECRET: "b".repeat(64), PUBLICATION_FENCE_PATH: fence.path, ...anchorFixture.env }, stdio: "ignore",
     });
     runtime = { child, cleanup: fence.cleanup };
     let ready = false;
@@ -77,9 +79,9 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     const { MigrationFence } = await import('../src/migration-fence.mjs');
     const { readV1VaultState } = await import('../src/v1-data-fence.mjs');
     await installV1CommitFence(isolated.pool);
-    await new MigrationFence(fence.path).append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),
+    await anchorFixture.fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),
       vaults:await readV1VaultState((sql,values)=>isolated.pool.query(sql,values))});
-    await new MigrationFence(fence.path).append({ version:2,type:'V1_WRITER_FLOOR',writerProtocol:1 });
+    await anchorFixture.fence.append({ version:2,type:'V1_WRITER_FLOOR',writerProtocol:1 });
     assert.equal((await fetch(`${origin}/v1/meta`)).headers.get('x-selective-v1-write-fence'),'1');
     // The unproven mixed-version cutover deliberately stops framed writes
     // before parsing their payload.  The DB barrier's in-flight transaction
@@ -120,6 +122,7 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM shared_vaults WHERE id=$1", [teamVault])).rows, beforeTeam.rows);
   } finally {
     await stopPublicationRuntime(runtime);
+    await anchorFixture?.cleanup();
     await isolated.cleanup();
   }
 });

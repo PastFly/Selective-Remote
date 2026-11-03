@@ -1,3 +1,4 @@
+import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http-anchor-fixture.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -15,9 +16,9 @@ import { isolatedPublicationDatabase, publicationRuntimeFixture, stopPublication
 // until a safe 0.31/0.32 cutover exists. The test starts the actual HTTP server
 // against disposable PostgreSQL; no fake route or test-only policy is used.
 test('Personal and Team V1 writes fail closed while current data remains readable', {
-  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+  skip: !process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable, timeout: 60000,
 }, async () => {
-  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL); let runtime;
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL); let runtime,anchorFixture;
   try {
     const user=randomUUID(),device=randomUUID(),session=randomUUID(),team=randomUUID(),vault=randomUUID();
     const token='t'.repeat(43),pepper='s'.repeat(32);
@@ -27,7 +28,7 @@ test('Personal and Team V1 writes fail closed while current data remains readabl
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','cGVyc29uYWw','nonce','auth','hash')",[user]);
     await db.pool.query("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,'TEST-ONLY-CODEX',$2)",[team,user]);
     await db.pool.query("INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,envelope_version,ciphertext,nonce,auth_tag,content_hash) VALUES($1,$2,'TEST-ONLY-CODEX',$3,1,1,'dGVhbQ','nonce','auth','hash')",[vault,team,user]);
-    const fixture=await publicationRuntimeFixture(db.databaseURL),fence=new MigrationFence(fixture.path);
+    const fixture=await publicationRuntimeFixture(db.databaseURL);anchorFixture=await syntheticHttpAnchor(fixture.path);const fence=anchorFixture.fence;
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
@@ -40,7 +41,7 @@ test('Personal and Team V1 writes fail closed while current data remains readabl
       PATH:process.env.PATH,DATABASE_URL:db.databaseURL,CLOUD_HOST:'127.0.0.1',CLOUD_PORT:String(port),CLOUD_PUBLIC_ORIGIN:origin,
       SESSION_TOKEN_PEPPER:pepper,EMAIL_VERIFICATION_TOKEN_PEPPER:'e'.repeat(32),PASSWORD_RESET_TOKEN_PEPPER:'p'.repeat(32),
       TEAM_INVITATION_TOKEN_PEPPER:'i'.repeat(32),TEAM_OUTBOX_ENCRYPTION_KEY:'o'.repeat(32),ABUSE_TOKEN_PEPPER:'a'.repeat(32),
-      PROXY_SHARED_SECRET:'b'.repeat(64),PUBLICATION_FENCE_PATH:fixture.path,
+      PROXY_SHARED_SECRET:'b'.repeat(64),PUBLICATION_FENCE_PATH:fixture.path,...anchorFixture.env,
     }});
     runtime={child,cleanup:fixture.cleanup};
     let ready=false;
@@ -57,5 +58,5 @@ test('Personal and Team V1 writes fail closed while current data remains readabl
     }
     assert.deepEqual(await readV1VaultState((sql,values)=>db.pool.query(sql,values)),before);
     assert.equal(createHash('sha256').update(await readFile(fixture.path)).digest('hex'),journalBefore);
-  } finally { await stopPublicationRuntime(runtime); await db.cleanup(); }
+  } finally { await stopPublicationRuntime(runtime); await anchorFixture?.cleanup(); await db.cleanup(); }
 });

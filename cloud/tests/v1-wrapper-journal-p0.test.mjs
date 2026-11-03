@@ -1,3 +1,4 @@
+import {syntheticAnchoredFence,syntheticV1Anchor} from './synthetic-v1-anchor-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -29,7 +30,7 @@ test('granting a new device wrapper retains the changed Team envelope at the sam
   const vault=await setup.createSharedVault({actorUserID:owner,teamID:team.team.id,name:'TEST-ONLY-CODEX',idempotencyKey:'test-wrapper-vault'});
   await setup.putSharedVault({actorUserID:owner,actorDeviceID:ownerDevice,teamID:team.team.id,vaultID:vault.vault.id,envelope:{baseRevision:0,keyGeneration:1,envelopeVersion:1,ciphertext:'AA',nonce:'B'.repeat(16),authTag:'C'.repeat(22),contentHash:'D'.repeat(43),wrappers:[wrapper(team.membership,ownerDevice,team.team.id,vault.vault.id,'E')]},idempotencyKey:'test-wrapper-init'});
   await db.pool.query("INSERT INTO devices(id,user_id,name,platform,public_key,public_key_algorithm,key_registered_at,key_approved_at) VALUES($1,$2,'Synthetic new','web',$3,'p256-ecdh-v1',now(),now())",[newDevice,owner,publicKey]);
-  const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=new MigrationFence(file);await installV1CommitFence(db.pool);
+  const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=(await syntheticAnchoredFence(file));await installV1CommitFence(db.pool);
   await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
   await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
   const before=await fence.snapshot();const old=before.v1Committed.find(item=>item.vaultID===vault.vault.id);
@@ -67,7 +68,7 @@ test('old image cannot start after retained wrapper batch has been recorded',asy
  const {currentCapabilities,verifyDeploymentCompatibility}=await import('../src/deployment-compatibility.mjs');
  const dir=await mkdtemp(join(tmpdir(),'sr-v1-wrapper-floor-'));
  try{
-  const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=new MigrationFence(file),owner=randomUUID(),vault=randomUUID();
+  const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=(await syntheticAnchoredFence(file)),owner=randomUUID(),vault=randomUUID();
   const original={vaultKind:'TEAM',ownerID:owner,vaultID:vault,revision:3,ciphertextHash:'a'.repeat(64),envelopeHash:'b'.repeat(64)};
   await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:[original]});await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
   const intent={version:2,type:'V1_WRAPPER_BATCH_PENDING_INTENT',intentID:randomUUID(),operationID:randomUUID(),changes:[{...original,beforeEnvelopeHash:original.envelopeHash,envelopeHash:'c'.repeat(64)}]};
@@ -95,7 +96,7 @@ async function setupBatchInvitation(db,dir){
  const membership={id:invitation.preprovisioning.membershipID,epoch:invitation.preprovisioning.membershipEpoch};
  const wrappers=vaults.map(vaultID=>({vaultID,keyGeneration:1,wrapper:wrapper(membership,memberDevice,team.team.id,vaultID,'F')}));
  await store.preprovisionTeamInvitationWrappers({actorUserID:owner,actorDeviceID:ownerDevice,teamID:team.team.id,invitationID:invitation.invitation.id,wrappers,idempotencyKey:'test-only-batch-preprovision'});
- const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=new MigrationFence(file);await installV1CommitFence(db.pool);
+ const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=(await syntheticAnchoredFence(file));await installV1CommitFence(db.pool);
  await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
  await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
  const request={actorUserID:member,actorDeviceID:memberDevice,actorEmail:'batch-member@example.test',invitationID:invitation.invitation.id,tokenHash:null,idempotencyKey:'test-only-batch-accept'};
@@ -134,7 +135,7 @@ test('crash after durable multi-Vault intent and before COMMIT stays pending wit
  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL),dir=await mkdtemp(join(tmpdir(),'sr-v1-wrapper-crash-'));
  try{
   const {fence,request}=await setupBatchInvitation(db,dir),before=await readV1VaultState((sql,values)=>db.pool.query(sql,values));
-  const crashing={snapshot:()=>fence.snapshot(),async append(event){await fence.append(event);if(event.type==='V1_WRAPPER_BATCH_PENDING_INTENT')throw Error('synthetic_after_batch_intent');}};
+  const crashing={anchor:fence.anchor,snapshot:()=>fence.snapshot(),async append(event){await fence.append(event);if(event.type==='V1_WRAPPER_BATCH_PENDING_INTENT')throw Error('synthetic_after_batch_intent');}};
   await assert.rejects(new PostgresStore(null,db.pool,{v1Fence:crashing}).acceptTeamInvitation(request),/synthetic_after_batch_intent/);
   const pending=(await fence.snapshot()).v1Pending;assert.equal(pending.length,1);assert.equal(pending[0].changes.length,2);
   assert.deepEqual(await readV1VaultState((sql,values)=>db.pool.query(sql,values)),before);
