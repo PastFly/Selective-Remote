@@ -52,7 +52,7 @@ func syntheticPromptWindow(_ helperPID: pid_t) -> CGRect? {
         return "index:\(item.offset),layer:\(layer),rect:\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
     }.joined(separator: ";")
     report("SYNTHETIC_WINDOW helper=\(descriptions) appCount=\(appWindows.count)")
-    guard let helperIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == helperPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
+    guard helperWindows.count == 1, let helperIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == helperPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 8 }),
           let appIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == appPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
           helperIndex < appIndex, let raw = windows[helperIndex][kCGWindowBounds as String] as? [String: Any],
           let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), (300...600).contains(rect.width), (150...400).contains(rect.height),
