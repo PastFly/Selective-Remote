@@ -169,14 +169,16 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     typeSynthetic("TEST-ONLY-CODEX-COMMAND", in: hitFields[1])
     guard AXUIElementPerformAction(hitFields[2], kAXPressAction as CFString) == .success else { stop("snippet target selection") }
     var ancestor: AXUIElement? = hitFields[0]
+    var sheet: AXUIElement?
     for _ in 0..<12 {
         guard let element = ancestor else { break }
-        print("SNIPPET_ANCESTOR role=\(attr(element, "AXRole") as? String ?? "") title=\(attr(element, "AXTitle") as? String ?? "")")
+        let role = attr(element, "AXRole") as? String ?? ""
+        print("SNIPPET_ANCESTOR role=\(role) title=\(attr(element, "AXTitle") as? String ?? "")")
+        if role == "AXSheet" { sheet = element }
         ancestor = attr(element, "AXParent").map { unsafeBitCast($0, to: AXUIElement.self) }
     }
-    let modalRoots = windows.flatMap { (attr($0, "AXSheets") as? [AXUIElement]) ?? [] }
-    print("SNIPPET_MODAL_COUNT=\(modalRoots.count)")
-    for element in modalRoots.flatMap({ snapshot($0) }) {
+    guard let sheet else { stop("snippet sheet unavailable") }
+    for element in snapshot(sheet) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
         let description = attr(element, "AXDescription") as? String ?? ""
@@ -185,8 +187,14 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
             print("SNIPPET_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
         }
     }
-    print("SNIPPET_INSPECTION_ONLY=YES")
-    pressUnique("AXButton", "Cancel")
+    let saveButtons = snapshot(sheet).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        (["Save", "Сохранить"].contains((attr($0, "AXTitle") as? String) ?? "") ||
+         ["Save", "Сохранить"].contains((attr($0, "AXDescription") as? String) ?? ""))
+    }
+    guard saveButtons.count == 1, AXUIElementPerformAction(saveButtons[0], kAXPressAction as CFString) == .success else { stop("snippet save control") }
+    Thread.sleep(forTimeInterval: 1)
+    print("SYNTHETIC_SNIPPET_SAVE_REQUESTED=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-upgrade" {
@@ -210,6 +218,29 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-up
             print("AX_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
         }
     }
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-snippets" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("snippet verification requires candidate") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXButton", "Snippets")
+    let groups = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        ((attr($0, "AXDescription") as? String) ?? "").hasPrefix("TEST-ONLY-CODEX-SNIPPET-GROUP,")
+    }
+    guard groups.count == 1, AXUIElementPerformAction(groups[0], kAXPressAction as CFString) == .success else { stop("migrated snippet group unavailable") }
+    Thread.sleep(forTimeInterval: 1)
+    let items = snapshot(app).filter {
+        ((attr($0, "AXTitle") as? String) ?? "").contains("TEST-ONLY-CODEX-SNIPPET") ||
+        ((attr($0, "AXDescription") as? String) ?? "").contains("TEST-ONLY-CODEX-SNIPPET")
+    }.filter {
+        !((attr($0, "AXDescription") as? String) ?? "").contains("TEST-ONLY-CODEX-SNIPPET-GROUP")
+    }
+    guard !items.isEmpty else { stop("migrated snippet not visible") }
+    print("SYNTHETIC_SNIPPET_VISIBLE_IN_CANDIDATE=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 {

@@ -44,7 +44,7 @@ jobs:
           test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
           shasum -a 256 -c "${hashes[0]}"
           shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
-          if [[ "$BUILD_KIND" == upgrade ]]; then
+          if [[ "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets ]]; then
             expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
             actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41628243576 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
             test "$actual" = "$expected"
@@ -119,11 +119,32 @@ jobs:
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           if [[ "$SR_BUILD_KIND" == snippets ]]; then
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 40 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-snippets | tee "$RUNNER_TEMP/evidence/snippets-ui.log"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 70 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-snippets | tee "$RUNNER_TEMP/evidence/snippets-ui.log"
             screencapture -x "$RUNNER_TEMP/evidence/snippets-screen.png"
             SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
             wait "$app_pid" || true
             app_pid=""
+            bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+            defaults export "$bundle" "$RUNNER_TEMP/snippets-before.plist"
+            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
+            upgraded_images=("$RUNNER_TEMP"/upgrade-image/*.dmg)
+            test "${#upgraded_images[@]}" -eq 1
+            hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${upgraded_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
+            codesign --verify --deep --strict "$app"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "$bundle"
+            executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+            binary="$app/Contents/MacOS/$executable"
+            export SR_BUILD_KIND=candidate
+            sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/snippets-upgrade-app.log" 2>&1 &
+            app_pid=$!
+            sleep 12
+            kill -0 "$app_pid"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-snippets | tee "$RUNNER_TEMP/evidence/snippets-upgrade-ui.log"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+            wait "$app_pid" || true
+            app_pid=""
+            defaults export "$bundle" "$RUNNER_TEMP/snippets-after.plist"
+            python3 scripts/isolated-gui-smoke/verify-snippets.py "$RUNNER_TEMP/snippets-before.plist" "$RUNNER_TEMP/snippets-after.plist" | tee "$RUNNER_TEMP/evidence/snippets-upgrade.json"
             exit 0
           fi
           inspect_synthetic_keychain() {
