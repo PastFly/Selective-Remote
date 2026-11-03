@@ -685,6 +685,27 @@ test("a delayed 401 from an older request does not emit retirement for a newer s
   assert.deepEqual(causes, []);
 });
 
+test("temporary write stop keeps Personal changes dirty and never confirms upload", async () => {
+  const repository = memoryRepository();
+  const vault = localVault(repository, [deviceA, recordA]);
+  await vault.create(passphrase);
+  await vault.bindAccountOwnership(userID);
+  await vault.upsert({ id: recordA, type: "host", data: { title: "TEST-ONLY-CODEX-HOST", address: "192.0.2.10" } });
+  const before = structuredClone(repository.snapshot());
+  const beforeDocument = structuredClone(vault.document());
+  const beforeState = await vault.syncState();
+  const client = {
+    session: () => ({ id: userID }),
+    getVault: async () => remoteValue(0),
+    putVault: async () => { throw new Error("vault_write_temporarily_unavailable"); },
+  };
+  await assert.rejects(synchronizeVault({ client, vault }), /vault_write_temporarily_unavailable/u);
+  assert.deepEqual(repository.snapshot(), before);
+  assert.deepEqual(vault.document(), beforeDocument);
+  assert.deepEqual(await vault.syncState(), beforeState);
+  assert.equal((await vault.syncState()).dirty, true);
+});
+
 test("local encrypted changes upload against the last observed server revision", async () => {
   const repository = memoryRepository();
   const vault = localVault(repository, [deviceA, recordA]);

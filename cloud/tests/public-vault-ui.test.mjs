@@ -16,6 +16,16 @@ test("writer compatibility errors tell Personal and Team users to update without
   const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
   assert.match(i18n, /Update the app or Cloud server before synchronizing/u);
 });
+
+test("temporarily stopped writes tell Personal and Team users to keep local copies", async () => {
+  const message = application.vaultStorageCompatibilityMessage("vault_write_temporarily_unavailable");
+  assert.match(message, /временно недоступна/u);
+  assert.match(message, /Сохраните локальные копии/u);
+  assert.equal(application.teamVaultSynchronizationErrorMessage("vault_write_temporarily_unavailable"), message);
+  assert.equal(application.vaultStorageCompatibilityMessage("unrelated_server_failure"), null);
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.match(i18n, /Writing to Cloud is temporarily unavailable.*Keep your local copies/u);
+});
 import {
   accountVaultPassphrase,
   appearancePreference,

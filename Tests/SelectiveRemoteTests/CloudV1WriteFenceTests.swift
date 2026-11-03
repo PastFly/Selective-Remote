@@ -4,6 +4,59 @@ import Testing
 
 @Suite("V1 writer compatibility fence")
 struct CloudV1WriteFenceTests {
+    @Test("Personal upload reports the temporary write stop without exposing other errors")
+    func reportsTemporaryWriteStop() async throws {
+        let endpoint = URL(string: "https://fence-\(UUID()).example.invalid")!
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        tokens.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            if request.url?.path == "/v1/meta" {
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
+            return (Data("{\"error\":\"vault_write_temporarily_unavailable\"}".utf8), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!)
+        })
+        let session = try await client.sessionBinding(endpoint: endpoint)
+        let wrapped = try SelectiveRemotePersonalVaultWrappedKey(salt: Data(repeating: 1, count: 16), value: Data(repeating: 2, count: 40))
+        let envelope = try SelectiveRemotePersonalVaultEnvelope(baseRevision: 1, wrappedKey: wrapped, ciphertext: Data([1]), nonce: Data(repeating: 3, count: 12), authTag: Data(repeating: 4, count: 16))
+        do {
+            _ = try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session)
+            Issue.record("The server's write stop must be surfaced")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .serviceError(503, "vault_write_temporarily_unavailable"))
+            let copy = error.localizedDescription
+            #expect(copy.contains("локальн") || copy.contains("local cop"))
+            #expect(SelectiveRemoteCloudError.serviceError(400, "vault_write_temporarily_unavailable").localizedDescription != copy)
+            #expect(SelectiveRemoteCloudError.serviceError(503, "unrelated_internal_error").localizedDescription != copy)
+        }
+    }
+
+    @Test("Team upload reports the temporary write stop")
+    func reportsTemporaryTeamWriteStop() async throws {
+        let endpoint = URL(string: "https://fence-\(UUID()).example.invalid")!
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        tokens.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            if request.url?.path == "/v1/meta" {
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
+            return (Data("{\"error\":\"vault_write_temporarily_unavailable\"}".utf8), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!)
+        })
+        let teamID = UUID(), vaultID = UUID()
+        let envelope = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            Data("synthetic".utf8), vaultKey: Data(repeating: 4, count: 32),
+            teamID: teamID, vaultID: vaultID, keyGeneration: 1, baseRevision: 1
+        )
+        do {
+            _ = try await client.putSharedVault(endpoint: endpoint, teamID: teamID, vaultID: vaultID,
+                upload: .init(envelope: envelope, wrappers: nil), idempotencyKey: "synthetic-stop-test")
+            Issue.record("The server's Team write stop must be surfaced")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .serviceError(503, "vault_write_temporarily_unavailable"))
+            let copy = error.localizedDescription
+            #expect(copy.contains("локальн") || copy.contains("local cop"))
+        }
+    }
+
     @Test("Personal upload does not reach a Cloud without the writer capability")
     func rejectsLegacyServer() async throws {
         let endpoint = URL(string: "https://fence-\(UUID()).example.invalid")!

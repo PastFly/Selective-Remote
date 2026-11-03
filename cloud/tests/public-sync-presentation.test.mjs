@@ -119,3 +119,17 @@ test("a Team sync target becomes stale when the selected Vault changes during an
   assert.equal(teamSyncTargetMatches(captured, { ...captured, teamID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }), false);
   assert.equal(teamSyncTargetMatches(captured, captured), true);
 });
+
+ test("write stop remains typed and localized for both scopes", () => {
+  for (const scope of ["personal", "team"]) {
+    const events = [];
+    class FakeEvent { constructor(type, options) { this.detail = options.detail; } }
+    const doc = { defaultView: { CustomEvent: FakeEvent }, dispatchEvent: event => events.push(event) };
+    publishSyncObservation(doc, { scope, type: "error", code: "vault_write_temporarily_unavailable" });
+    const state = reduceSyncPresentationState(createSyncPresentationState(), events[0].detail);
+    assert.equal(state[scope].issue, "vault_write_temporarily_unavailable");
+    assert.equal(state[scope].status, "error");
+    assert.match(syncPresentationLabels(summarizeSyncPresentationState(state), "en")[scope], /temporarily unavailable/u);
+    assert.match(syncPresentationLabels(summarizeSyncPresentationState(state), "ru")[scope], /временно недоступна/u);
+  }
+});

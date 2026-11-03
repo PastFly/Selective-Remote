@@ -54,6 +54,28 @@ struct SyncPresentationTests {
         #expect(SyncIssue.classifyPersonal(SelectiveRemotePersonalVaultError.uploadConflict(2)) == .conflict)
     }
 
+    @Test("Write stop remains typed for Personal and Team without misclassifying other errors")
+    func writeStopPresentation() {
+        let stop = SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+        #expect(SyncIssue.classifyPersonal(stop) == .writeTemporarilyUnavailable)
+        #expect(SyncIssue.classifyPersonal(SelectiveRemoteCloudError.serviceError(400, "vault_write_temporarily_unavailable")) == .unknownFailure)
+        #expect(SyncIssue.classifyPersonal(SelectiveRemoteCloudError.serviceError(503, "other")) == .unknownFailure)
+        let store = SyncPresentationStore()
+        store.recordPersonalFailure(.classifyPersonal(stop))
+        #expect(store.personal.issue == .writeTemporarilyUnavailable)
+        #expect(store.personal.lifecycle == .error)
+        var report = SelectiveRemoteTeamVaultAutoSyncReport(scannedVaults: 1, failures: 1)
+        report.recordWriteStop(SelectiveRemoteCloudError.serviceError(400, "vault_write_temporarily_unavailable"))
+        report.recordWriteStop(SelectiveRemoteCloudError.serviceError(503, "other"))
+        #expect(!report.writeTemporarilyUnavailable)
+        report.recordWriteStop(stop)
+        store.recordTeamReport(report)
+        #expect(store.team.issue == .writeTemporarilyUnavailable)
+        #expect(store.team.lifecycle == .error)
+        #expect(SyncIssue.writeTemporarilyUnavailable.message(english: true)?.contains("temporarily unavailable") == true)
+        #expect(SyncIssue.writeTemporarilyUnavailable.message(english: false)?.contains("временно недоступна") == true)
+    }
+
     @Test("Devices recovery route drops inherited query and fragment")
     func devicesRoute() {
         let endpoint = URL(string: "https://cloud.example.test/base?token=secret#fragment")!

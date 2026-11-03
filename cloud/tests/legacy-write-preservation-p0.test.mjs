@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { request as httpRequest } from "node:http";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { hashSessionToken } from "../src/security.mjs";
@@ -82,17 +81,18 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
       vaults:await readV1VaultState((sql,values)=>isolated.pool.query(sql,values))});
     await new MigrationFence(fence.path).append({ version:2,type:'V1_WRITER_FLOOR',writerProtocol:1 });
     assert.equal((await fetch(`${origin}/v1/meta`)).headers.get('x-selective-v1-write-fence'),'1');
-    const malformed = await fetch(`${origin}/v1/vault`, {
-      method: "PUT", headers: markedHeaders, body: JSON.stringify({ ...envelope, baseRevision: 1 }),
-    });
-    assert.equal(malformed.status, 400, "the marker alone must not enable an old flat write");
+    // The unproven mixed-version cutover deliberately stops framed writes
+    // before parsing their payload.  The DB barrier's in-flight transaction
+    // behavior remains covered separately by v1-commit-fence-postgres tests.
+    for (const body of [
+      { ...envelope, baseRevision: 1 },
+      { protocol: "framed-v1", envelope: { ...envelope, baseRevision: 1, ciphertext: "Y3VycmVudA" } },
+    ]) {
+      const response = await fetch(`${origin}/v1/vault`, { method: "PUT", headers: markedHeaders, body: JSON.stringify(body) });
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "vault_write_temporarily_unavailable" });
+    }
     assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1", [user])).rows, previous.rows);
-    const current = await fetch(`${origin}/v1/vault`, {
-      method: "PUT", headers: markedHeaders,
-      body: JSON.stringify({ protocol: "framed-v1", envelope: { ...envelope, baseRevision: 1, ciphertext: "Y3VycmVudA" } }),
-    });
-    assert.equal(current.status, 200, "a framed current client can still save");
-    assert.equal((await current.json()).revision, 2);
     const browser = createAuthenticatedVaultClient({
       sessionStorageValue: { getItem: () => session, setItem() {}, removeItem() {} },
       fetchValue: (path, options = {}) => fetch(origin + path, {
@@ -100,36 +100,9 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
       }),
     });
     await browser.restoreSession();
-    assert.deepEqual(await browser.putVault(personalVaultScope, { ...envelope, baseRevision: 2, ciphertext: "YnJvd3Nlcg" }), {
-      conflict: false, revision: 3,
-    });
-    const beforeTamper = (await isolated.pool.query("SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1", [user])).rows;
-    const marker = (await isolated.pool.query('SELECT clock_timestamp() AS at')).rows[0].at;
-    const body = JSON.stringify({protocol:'framed-v1',envelope:{...envelope,baseRevision:3,ciphertext:'c3RhbGU'}});
-    const pending = httpRequest(`${origin}/v1/vault`,{method:'PUT',headers:markedHeaders});
-    const pendingResult = new Promise((resolve,reject) => {
-      pending.on('response',res=>{let text='';res.setEncoding('utf8');res.on('data',chunk=>{text+=chunk;});res.on('end',()=>resolve({status:res.statusCode,body:JSON.parse(text)}));}); pending.on('error',reject);
-    });
-    pendingResult.catch(()=>{});
-    pending.write(body.slice(0,1));
-    let accepted = false;
-    for(let n=0;n<200;n++) {
-      accepted=(await isolated.pool.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND state='idle' AND state_change>$2 AND query LIKE 'UPDATE sessions SET last_used_at%'",[appName,marker])).rowCount>0;
-      if(accepted)break;
-      await new Promise(resolve=>setTimeout(resolve,50));
-    }
-    assert.equal(accepted,true,'request must pass its initial deployment and session checks');
-    await isolated.pool.query('ALTER TABLE public.personal_vaults DISABLE TRIGGER selective_remote_framed_v1_writer');
-    pending.end(body.slice(1));
-    const pendingResponse = await pendingResult;
-    assert.deepEqual(pendingResponse,{status:503,body:{error:'vault_write_fence_unavailable'}},'a changed barrier must return a retryable service error');
-    assert.equal((await fetch(`${origin}/v1/meta`)).status,503,'a missing or disabled barrier must close traffic');
-    assert.equal((await fetch(`${origin}/v1/vault`,{method:'PUT',headers:markedHeaders,
-      body:JSON.stringify({protocol:'framed-v1',envelope:{...envelope,baseRevision:3}})})).status,503);
-    assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1", [user])).rows,beforeTamper);
-    await isolated.pool.query('ALTER TABLE public.personal_vaults ENABLE TRIGGER selective_remote_framed_v1_writer');
-    assert.equal((await fetch(`${origin}/v1/meta`)).status,200);
-
+    await assert.rejects(browser.putVault(personalVaultScope, { ...envelope, baseRevision: 1, ciphertext: "YnJvd3Nlcg" }),
+      /vault_write_temporarily_unavailable/u);
+    assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1", [user])).rows, previous.rows);
 
     const beforeTeam = await isolated.pool.query("SELECT id,revision,ciphertext FROM shared_vaults WHERE id=$1", [teamVault]);
     const { wrappedKey: _, ...teamEnvelope } = envelope;
@@ -138,6 +111,12 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
       body: JSON.stringify({ ...teamEnvelope, baseRevision: 1, keyGeneration: 1, ciphertext: "c3RhbGU" }),
     });
     assert.equal(oldTeamWrite.status, 426);
+    const currentTeamWrite = await fetch(`${origin}/v1/teams/${team}/vaults/${teamVault}`, {
+      method: "PUT", headers: markedHeaders,
+      body: JSON.stringify({ protocol:"framed-v1", envelope:{ ...teamEnvelope, baseRevision:1, keyGeneration:1 } }),
+    });
+    assert.equal(currentTeamWrite.status, 503);
+    assert.deepEqual(await currentTeamWrite.json(), { error:"vault_write_temporarily_unavailable" });
     assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM shared_vaults WHERE id=$1", [teamVault])).rows, beforeTeam.rows);
   } finally {
     await stopPublicationRuntime(runtime);

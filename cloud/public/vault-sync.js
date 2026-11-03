@@ -1416,6 +1416,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
         body: JSON.stringify({ protocol: "framed-v1", envelope: normalized }),
       });
       const result = await responseJSON(response, "vault_upload_failed");
+      if (response.status === 503 && result?.error === "vault_write_temporarily_unavailable") {
+        throw new Error("vault_write_temporarily_unavailable");
+      }
       if (response.status === 426 || (response.status === 400 && result?.error === "invalid_vault_envelope")) {
         throw new Error("vault_client_upgrade_required");
       }
@@ -1502,6 +1505,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
         },
       );
       const result = await responseJSON(response, "team_vault_upload_failed");
+      if (response.status === 503 && result?.error === "vault_write_temporarily_unavailable") {
+        throw new Error("vault_write_temporarily_unavailable");
+      }
       if (response.status === 426 || (response.status === 400 && result?.error === "invalid_vault_envelope")) {
         throw new Error("vault_client_upgrade_required");
       }

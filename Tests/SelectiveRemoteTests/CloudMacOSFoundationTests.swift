@@ -1611,6 +1611,55 @@ struct CloudMacOSFoundationTests {
         ) == payload)
     }
 
+    @Test("A temporary Team write stop preserves the dirty local snapshot")
+    func temporaryTeamWriteStopPreservesSnapshot() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = URL(string: "https://cutover-\(UUID()).example.invalid")!
+        let teamID = try fixture.wrapper.teamID.uuid, vaultID = try fixture.wrapper.vaultID.uuid
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID, privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let team = SelectiveRemoteCloudTeam(id: teamID, name: "Test", membershipID: try fixture.wrapper.membershipID.uuid,
+            role: .owner, membershipEpoch: fixture.wrapper.membershipEpoch,
+            createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z")
+        let vault = SelectiveRemoteCloudSharedVault(id: vaultID, teamID: teamID, name: "Test",
+            revision: fixture.payload.baseRevision + 1, keyGeneration: fixture.wrapper.keyGeneration,
+            rotationRequired: false, createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z")
+        let remote = TeamVaultRemoteStub(envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: false, revision: 6, keyGeneration: 7, rotationCompleted: false),
+            teams: [team], vaults: [vault], keyDevices: [.init(
+                membershipID: try fixture.wrapper.membershipID.uuid, membershipEpoch: fixture.wrapper.membershipEpoch,
+                deviceID: deviceID, publicKeyAlgorithm: "p256-ecdh-v1", publicKey: identity.publicKey, hasWrapper: true)])
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: storage)
+        _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+        let staged = try await coordinator.stage(Data("TEST-ONLY-CODEX-LOCAL".utf8),
+            expected: try #require(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)),
+            teamID: teamID, vaultID: vaultID, identity: identity)
+        await remote.setWriteFailure(.temporaryWriteStop)
+        do {
+            _ = try await coordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+            Issue.record("A stopped Team write must not be acknowledged")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .serviceError(503, "vault_write_temporarily_unavailable"))
+        }
+        #expect(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == staged.snapshot)
+        #expect(staged.snapshot.localRevision > staged.snapshot.syncedLocalRevision)
+        let keyStore = SelectiveRemoteTeamDeviceMemoryKeyStore()
+        _ = try keyStore.savePrivateKeyIfAbsent(try fixture.keyWrap.recipientPrivateScalar.base64URLData,
+            for: endpoint, deviceID: deviceID)
+        let autoSync = SelectiveRemoteTeamVaultAutoSync(remote: remote,
+            identityManager: SelectiveRemoteTeamDeviceIdentityManager(store: keyStore),
+            snapshotStore: { storage }, snapshotConsumer: { _ in })
+        let report = try await autoSync.synchronizeOnce(endpoint: endpoint, deviceID: deviceID)
+        #expect(report.failures == 1)
+        #expect(report.writeTemporarilyUnavailable)
+        #expect(report.uploadedVaults == 0)
+        #expect(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == staged.snapshot)
+    }
+
     @Test("Team Vault coordinator preserves the dirty snapshot and both conflict versions")
     func teamVaultSyncConflict() async throws {
         let fixture = try Self.fixture()
@@ -2343,6 +2392,7 @@ private final class CloudHTTPStub: @unchecked Sendable {
 
 private enum TeamVaultRemoteStubFailure: Error, Equatable, Sendable {
     case unknownOutcome
+    case temporaryWriteStop
 }
 
 private actor TeamVaultReadBarrier {
@@ -2481,6 +2531,9 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultAutoSyncRemote {
         #expect(envelope.id == vaultID)
         writes.append(.init(upload: upload, idempotencyKey: idempotencyKey))
         if let writeFailure {
+            if writeFailure == .temporaryWriteStop {
+                throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+            }
             throw writeFailure
         }
         try afterWrite()

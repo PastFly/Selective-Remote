@@ -189,6 +189,7 @@
     "Подтвердить пароль и создать Vault": "Confirm password and create Vault",
     "Подтвердите пароль аккаунта, чтобы открыть личные подключения.": "Confirm your account password to open personal connections.",
     "Обновите приложение или сервер Cloud перед синхронизацией. Синхронизация остановлена. Не очищайте данные браузера.": "Update the app or Cloud server before synchronizing. Synchronization has stopped. Do not clear browser data.",
+    "Запись в Cloud временно недоступна для защиты данных. Сохраните локальные копии и не очищайте данные браузера.": "Writing to Cloud is temporarily unavailable to protect your data. Keep your local copies and do not clear browser data.",
     "Подтвердить пароль и открыть Vault": "Confirm password and open Vault",
     "Требуется восстановление доступа к Personal Vault": "Restore access to Personal Vault",
     "Сессия аккаунта активна, но ключ Personal Vault недоступен. Попробуйте подтвердить пароль или открыть другую вкладку, где Vault уже открыт. После сброса пароля доступ к данным может не восстановиться.": "Your account session is active, but the Personal Vault key is unavailable. Try confirming your password or open another tab where the Vault is already unlocked. After a password reset, access to your data may not be restored.",

@@ -46,6 +46,11 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
             )
         case let .serviceError(status, code):
             switch code {
+            case "vault_write_temporarily_unavailable" where status == 503:
+                UpdateLocalization.text(
+                    ru: "Запись в Cloud временно недоступна для защиты данных. Сохраните локальные копии.",
+                    en: "Writing to Cloud is temporarily unavailable to protect your data. Keep your local copies."
+                )
             case "vault_client_upgrade_required":
                 UpdateLocalization.text(
                     ru: "Обновите приложение или сервер Cloud перед синхронизацией. Синхронизация остановлена.",

@@ -55,6 +55,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # The in-flight transition regression runs the exact prior server
+          # from git, without fetching executable code during the test.
+          fetch-depth: 0
 
       - name: Select Node 22
         uses: actions/setup-node@v6
@@ -88,6 +92,8 @@ jobs:
           node --test tests/account-switch-login-postgres.test.mjs
           node --test tests/browser-session-binding-postgres.test.mjs
           node --test tests/legacy-write-preservation-p0.test.mjs
+          node --test tests/legacy-write-preservation-prior-server-p0.test.mjs
+          node --test tests/v1-cutover-stop-http.test.mjs
           node --test tests/v1-commit-fence-postgres.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/device-revoke-publication-postgres.test.mjs

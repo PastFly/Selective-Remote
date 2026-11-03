@@ -633,6 +633,24 @@ test("an unlocked member provisions missing wrappers without manager presence", 
   assert.deepEqual(controllerB.document(), { schemaVersion: 1, records: [], tombstones: [] });
 });
 
+test("temporary write stop keeps Team changes pending and never confirms upload", async () => {
+  const a = await device(deviceA, membershipA);
+  const server = sharedServer([a.keyDevice]);
+  const repository = memoryRepository();
+  const controller = createTeamVaultController({ repository, identity: a.identity, scope, cryptoValue: webcrypto });
+  const stableClient = server.clientFor(deviceA);
+  await synchronizeTeamVault({ client: stableClient, controller, role: "owner" });
+  await controller.upsert({ id: recordID, type: "host", data: { title: "TEST-ONLY-CODEX-HOST", address: "192.0.2.10" } });
+  const beforeDocument = structuredClone(controller.document());
+  const beforeState = structuredClone(repository.inspect());
+  const stoppedClient = { ...stableClient, async putTeamVault() { throw new Error("vault_write_temporarily_unavailable"); } };
+  await assert.rejects(synchronizeTeamVault({ client: stoppedClient, controller, role: "owner" }), /vault_write_temporarily_unavailable/u);
+  assert.deepEqual(controller.document(), beforeDocument);
+  assert.deepEqual(repository.inspect(), beforeState);
+  assert.ok(repository.inspect().localRevision > repository.inspect().syncedLocalRevision);
+  assert.equal(repository.inspect().serverRevision, 1);
+});
+
 test("an interrupted first upload retries initialization with wrappers for every current device", async () => {
   const a = await device(deviceA, membershipA);
   const b = await device(deviceB, membershipB);

@@ -31,6 +31,11 @@ struct SelectiveRemoteTeamVaultAutoSyncReport: Equatable, Sendable {
     var rotations = 0
     var failures = 0
     var lastFailure: String?
+    var writeTemporarilyUnavailable = false
+
+    mutating func recordWriteStop(_ error: Error) {
+        if SyncIssue.isWriteTemporarilyUnavailable(error) { writeTemporarilyUnavailable = true }
+    }
 }
 
 typealias SelectiveRemoteTeamVaultSnapshotStoreFactory =
@@ -208,6 +213,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
                 }
                 report.failures += 1
                 report.lastFailure = error.localizedDescription
+                report.recordWriteStop(error)
                 continue
             }
 
@@ -336,6 +342,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
                     }
                     report.failures += 1
                     report.lastFailure = error.localizedDescription
+                    report.recordWriteStop(error)
                 }
             }
         }

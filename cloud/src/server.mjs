@@ -143,6 +143,12 @@ async function route(request, response) {
     if (v1WriteRequiresFence(method, url.pathname) && deploymentEvidence?.writerFloor !== 1) {
       return sendError(response, 503, "vault_write_fence_unavailable");
     }
+    // Until mixed-version storage cutover is proven safe, a newly framed
+    // writer can still publish a snapshot missing late legacy local edits.
+    // Keep both V1 whole-Vault routes read-only, including for current clients.
+    if (v1WriteRequiresFence(method, url.pathname)) {
+      return sendError(response, 503, "vault_write_temporarily_unavailable");
+    }
     if (method === "GET" && url.pathname === "/v1/me") {
       response.setHeader("X-Selective-Session-Binding", browserBinding.binding);
     }

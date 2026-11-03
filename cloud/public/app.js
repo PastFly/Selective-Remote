@@ -48,6 +48,7 @@ import { deviceTrustFailureCopy } from "./device-trust-copy.js";
 const syncObservationEvent = "selective-remote:sync-observation";
 const notificationSourceEvent = "selective-remote:notification-source";
 const syncIssueCodes = new Set([
+  "vault_write_temporarily_unavailable",
   "authentication_required", "local_vault_locked", "team_vault_locked", "recovery_passphrase_required",
   "team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required",
   "network_unavailable", "remote_revision_regressed", "team_vault_generation_changed",
@@ -200,6 +201,9 @@ export function syncPresentationLabels(summary, locale = "ru") {
         : "Другие Team Vaults: не проверены в этой вкладке.");
   const detail = (scope) => {
     const item = summary[scope];
+    if (item.issue === "vault_write_temporarily_unavailable") return english
+      ? "Writing to Cloud is temporarily unavailable to protect your data. Keep your local copies and do not clear browser data."
+      : "Запись в Cloud временно недоступна для защиты данных. Сохраните локальные копии и не очищайте данные браузера.";
     if (item.status !== "current" || !Number.isSafeInteger(item.revision)) return labels[item.status];
     const at = item.confirmedAt ? ` · ${formatVaultTimestamp(item.confirmedAt, { locale })}` : "";
     return `${labels.current} · r${item.revision}${at}`;
@@ -707,6 +711,9 @@ export function teamVaultRecoveryMode({
 }
 
 export function vaultStorageCompatibilityMessage(code) {
+  if (code === "vault_write_temporarily_unavailable") {
+    return "Запись в Cloud временно недоступна для защиты данных. Сохраните локальные копии и не очищайте данные браузера.";
+  }
   if (code === "vault_client_upgrade_required") {
     return "Обновите приложение или сервер Cloud перед синхронизацией. Синхронизация остановлена. Не очищайте данные браузера.";
   }

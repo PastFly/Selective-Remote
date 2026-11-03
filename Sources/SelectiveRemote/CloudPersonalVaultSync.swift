@@ -668,6 +668,10 @@ extension SelectiveRemoteCloudAPIClient {
             (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String == "invalid_vault_envelope") {
             throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required")
         }
+        if response.statusCode == 503 &&
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String == "vault_write_temporarily_unavailable" {
+            throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+        }
         guard response.statusCode == 200 || response.statusCode == 409,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["conflict", "revision"],
