@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
           shopt -s nullglob
-          keychain="$RUNNER_TEMP/synthetic.keychain-db"
+          keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
           original_default=$(security default-keychain -d user | python3 -c 'import shlex,sys; a=shlex.split(sys.stdin.read()); print(a[0] if a else "")')
           original_keychains=()
           while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
@@ -41,10 +41,10 @@ jobs:
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
             security delete-keychain "$keychain" || true
-            rm -f "$RUNNER_TEMP/keychain-password"
+            rm -f "$RUNNER_TEMP/synthetic-keychain-password"
           }
           trap cleanup EXIT
-          password=$(openssl rand -hex 24); umask 077; printf '%s' "$password" > "$RUNNER_TEMP/keychain-password"
+          password=$(openssl rand -hex 24); umask 077; printf '%s' "$password" > "$RUNNER_TEMP/synthetic-keychain-password"
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 1800 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
@@ -53,9 +53,9 @@ jobs:
           mkdir "$RUNNER_TEMP/candidate-mount" "$RUNNER_TEMP/candidate-mount2"
           old=("$RUNNER_TEMP"/old/*.dmg); new=("$RUNNER_TEMP"/new/*.dmg)
           test "${#old[@]}" -eq 1 && test "${#new[@]}" -eq 1
-          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${old[0]}" >/dev/null
-          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount2" "${new[0]}" >/dev/null
-          app="$RUNNER_TEMP/candidate-mount/Selective Remote.app"; app2="$RUNNER_TEMP/candidate-mount2/Selective Remote.app"
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount2" "${old[0]}" >/dev/null
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${new[0]}" >/dev/null
+          app="$RUNNER_TEMP/candidate-mount2/Selective Remote.app"; app2="$RUNNER_TEMP/candidate-mount/Selective Remote.app"
           codesign --verify --deep --strict "$app" && codesign --verify --deep --strict "$app2"
           bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
           test "$bundle" = "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app2/Contents/Info.plist")"
@@ -74,7 +74,7 @@ jobs:
           wait "$app_pid" || true; app_pid=""
           defaults export "$bundle" "$RUNNER_TEMP/before-migration.plist"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new.log" 2>&1 & app_pid2=$!
-          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/keychain-password" "$app_pid2" 031 candidate > "$RUNNER_TEMP/evidence/migration-prompt.log"
+          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$app_pid2" 031 candidate > "$RUNNER_TEMP/evidence/migration-prompt.log"
           sleep 12; kill -0 "$app_pid2"
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
           defaults export "$bundle" "$RUNNER_TEMP/migrated.plist"
