@@ -74,6 +74,9 @@ docker cp "$id:/app/." "$root/"
 docker rm "$id" >/dev/null
 mkdir -p "$root/runtime/node-v22.18.0-linux-x64/bin"
 install -m 0755 "$(readlink -f "$(command -v node)")" "$root/runtime/node-v22.18.0-linux-x64/bin/node"
+chmod 755 "$root/scripts" "$root/runtime" "$root/runtime/node-v22.18.0-linux-x64" "$root/runtime/node-v22.18.0-linux-x64/bin"
+chmod 755 "$root/scripts/staging-controller.sh"
+chmod 644 "$root/scripts/verify-staging-controller.mjs"
 (cd "$root"; sha256sum runtime/node-v22.18.0-linux-x64/bin/node > runtime-node.sha256; find . -type f ! -name bundle.sha256 ! -name settings.json -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > bundle.sha256)
 chmod 600 "$root/runtime-node.sha256" "$root/bundle.sha256"
 controller_digest=$(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1)
@@ -84,7 +87,7 @@ chmod 600 "$root/settings.json"
 # A restore from before fence activation must not be served against retained successor journal.
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/old.dump >/tmp/sr-controller-acceptance/restore.log 2>&1
 before=$(sha256sum "$state/publication/journal" | cut -d ' ' -f 1)
-for probe in / /opt "$root" "$root/settings.json" "$root/bundle.sha256" /var /var/lib "$state" "$state/publication" /var/backups /var/backups/sr-acceptance /opt/selective-remote "$cloud" "$cloud/.env" "${composefiles[@]}"; do
+for probe in / /opt "$root" "$root/settings.json" "$root/bundle.sha256" "$root/runtime-node.sha256" "$root/scripts" "$root/scripts/staging-controller.sh" "$root/scripts/verify-staging-controller.mjs" "$root/runtime" "$root/runtime/node-v22.18.0-linux-x64" "$root/runtime/node-v22.18.0-linux-x64/bin" "$root/runtime/node-v22.18.0-linux-x64/bin/node" /var /var/lib "$state" "$state/publication" /var/backups /var/backups/sr-acceptance /opt/selective-remote "$cloud" "$cloud/.env" "${composefiles[@]}"; do
   stat -c 'PATH=%n UID=%u MODE=%a' "$probe"
   printf 'REALPATH=%s\n' "$(realpath "$probe")"
 done
