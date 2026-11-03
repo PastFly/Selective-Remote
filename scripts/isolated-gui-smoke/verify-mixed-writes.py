@@ -55,6 +55,6 @@ else:
         raise SystemExit('current write modified the legacy collection')
     if current_id in new_before or {k: v for k, v in new_after.items() if k != current_id} != new_before:
         raise SystemExit('current mutation was not one synthetic addition')
-    print(json.dumps({'lateLegacyProfileStillRetained': True, 'currentWritePersisted': True,
+    print(json.dumps({'baselineHost': {'id': current_id, **NEW}, 'lateLegacyProfileStillRetained': True, 'currentWritePersisted': True,
                       'lateLegacyProfilePresentInCurrent': late_id in new_after,
                       'legacyCollectionUnchangedByCurrent': True, 'mixedVersionSafetyVerified': False}))

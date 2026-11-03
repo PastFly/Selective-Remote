@@ -122,11 +122,11 @@ if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
-    pressUnique("AXButton", "Connections")
+    if late { pressUnique("AXButton", "Connections") }
     pressUnique("AXPopUpButton", "Add")
     pressUnique("AXMenuItem", "New SSH")
     setUniqueField("SSH Server", late ? "TEST-ONLY-CODEX-LATE-HOST" : "TEST-ONLY-CODEX-CURRENT-HOST")
-    setUniqueField("For example: Work", "TEST-ONLY-CODEX-MIXED-FOLDER")
+    setUniqueField(late ? "For example: Work" : "For example: Work/Servers/Linux", "TEST-ONLY-CODEX-MIXED-FOLDER")
     setUniqueField("server.example.com or a Host from ~/.ssh/config", late ? "192.0.2.11" : "192.0.2.12")
     setUniqueField("username", "test")
     pressUnique("AXButton", "Authentication")
@@ -147,6 +147,19 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-la
         (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LATE-HOST"
     }
     print("LATE_LEGACY_HOST_VISIBLE_IN_CURRENT_UI=\(visible)")
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-current-host" {
+    guard env["SR_BUILD_KIND"] == "baseline" else { stop("downgrade inspection version") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    let visible = snapshot(app).contains {
+        (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-CURRENT-HOST" ||
+        (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-CURRENT-HOST"
+    }
+    print("CURRENT_HOST_VISIBLE_IN_DOWNGRADE_UI=\(visible)")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
@@ -310,6 +323,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     pressUnique("AXMenuItem", "New RDP")
     setUniqueField("Work Computer", "TEST-ONLY-CODEX-RDP")
     setUniqueField("server.example.local", "127.0.0.1")
+    setUniqueField("DOMAIN\\username", "test")
+    setUniqueField("Enter RDP Password", "TEST-ONLY-CODEX-RDP-SECRET", verifyVisibleValue: false)
+    pressUnique("AXButton", "Save")
     let hosts = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-RDP"
     }
