@@ -28,7 +28,7 @@ const environment={DATABASE_URL:'postgres://example.invalid/test',SESSION_TOKEN_
 test('whole publication configuration defaults OFF; distinct secret and explicit staging reader/allowlist required',()=>{
   assert.equal(loadConfig(environment).wholePublication.enabled,false);
   assert.throws(()=>loadConfig({...environment,WHOLE_PUBLICATION_ENABLED:'true',WHOLE_PUBLICATION_PREVIEW_SECRET:'w'.repeat(32)}),/staging reader/);
-  const enabled={...environment,WHOLE_PUBLICATION_ENABLED:'true',WHOLE_PUBLICATION_PREVIEW_SECRET:'w'.repeat(32),PUBLICATION_READER_ENABLED:'true',PUBLICATION_ENVIRONMENT:'staging',PUBLICATION_CURSOR_SECRET:'c'.repeat(32),PUBLICATION_ALLOWED_VAULT_IDS:'12345678-1234-4234-a234-123456789012'};
+  const enabled={...environment,PUBLICATION_FENCE_PATH:'/tmp/config-test-fence',WHOLE_PUBLICATION_ENABLED:'true',WHOLE_PUBLICATION_PREVIEW_SECRET:'w'.repeat(32),PUBLICATION_READER_ENABLED:'true',PUBLICATION_ENVIRONMENT:'staging',PUBLICATION_CURSOR_SECRET:'c'.repeat(32),PUBLICATION_ALLOWED_VAULT_IDS:'12345678-1234-4234-a234-123456789012'};
   assert.equal(loadConfig(enabled).wholePublication.enabled,true);
   assert.throws(()=>loadConfig({...enabled,WHOLE_PUBLICATION_PREVIEW_SECRET:enabled.PUBLICATION_CURSOR_SECRET}),/independent/);
   assert.throws(()=>loadConfig({...enabled,PUBLICATION_ENVIRONMENT:'production'}),/staging/);

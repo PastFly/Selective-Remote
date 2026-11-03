@@ -150,8 +150,10 @@ test("ECDH possession proof binds account, request, device, key and short expiry
   await assert.rejects(answerPossessionChallenge({ challenge,
     devicePrivateKey: attacker.privateKey, devicePublicKey: attacker.publicKey,
     cryptoValue: webcrypto }), /device_trust/u);
+  const alteredProof = Buffer.from(answer.proof, "base64url");
+  alteredProof[0] ^= 1;
   await assert.rejects(verifyPossessionAnswer({ challenge,
-    answer: { ...answer, proof: `A${answer.proof.slice(1)}` },
+    answer: { ...answer, proof: alteredProof.toString("base64url") },
     approverPrivateKey: privateKey, now: 1_800_000_001, cryptoValue: webcrypto }),
   /device_trust/u);
 });

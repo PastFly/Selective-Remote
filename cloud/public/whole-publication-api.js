@@ -7,7 +7,7 @@ const headers = Object.freeze({ 'X-Vault-Schema-Version': '2', 'X-Vault-Capabili
 const fail = code => { throw Error(code); };
 const same = (a, b) => canonicalMigrationJSON(a) === canonicalMigrationJSON(b);
 
-export function createWholePublicationTransport({ request, teamID, getIdentity, cryptoValue = globalThis.crypto }) {
+export function createWholePublicationTransport({ request, teamID, getIdentity, inspectionTransport, cryptoValue = globalThis.crypto }) {
   const team = accessID(teamID), base = `/v1/teams/${team}/publication`;
   const op = operationID => `${base}/operations/${accessID(operationID)}`;
   if (typeof request !== 'function' || typeof getIdentity !== 'function') fail('invalid_publication_transport');
@@ -36,6 +36,7 @@ export function createWholePublicationTransport({ request, teamID, getIdentity, 
     accessID(value.operationID); return value;
   };
   return {
+    async inspection(scope,query){const guard=capture();if(!inspectionTransport)fail('publication_unavailable');guard();const result=await inspectionTransport.inspection(scope,query);guard();return result;},
     async context({operationID}={}) {
       const value = await json(operationID===undefined ? base+'/context' : op(operationID)+'/context');
       if (value?.teamID !== team) fail('publication_scope_mismatch');

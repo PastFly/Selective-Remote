@@ -231,11 +231,11 @@ final class TerminalCommandHistoryStore: ObservableObject {
     @Published private(set) var historyRevision = 0
 
     private enum Key {
-        static let entries = "SelectiveRemote.terminal.commandHistory.v1"
-        static let enabled = "SelectiveRemote.terminal.commandHistory.enabled.v1"
-        static let favorites = "SelectiveRemote.terminal.commandFavorites.v1"
-        static let templates = "SelectiveRemote.terminal.commandTemplates.v1"
-        static let snippetGroups = "SelectiveRemote.terminal.snippetGroups.v1"
+        static let entries = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandHistory.v1")!
+        static let enabled = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandHistory.enabled.v1")!
+        static let favorites = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandFavorites.v1")!
+        static let templates = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandTemplates.v1")!
+        static let snippetGroups = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.snippetGroups.v1")!
     }
 
     private let defaults: UserDefaults

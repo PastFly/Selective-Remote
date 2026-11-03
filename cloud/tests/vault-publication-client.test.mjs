@@ -524,20 +524,34 @@ test("authenticated publication adapter uses no-store routes and opaque epoch ch
   const client = createAuthenticatedVaultClient({
     fetchValue: async (path, options) => {
       calls.push({ path, options });
+      if (path === "/v1/auth/logout") return new Response(null, { status: 204 });
       return new Response(
         JSON.stringify(
           path === "/v1/auth/login"
             ? { user: { id: accountID }, deviceID, token: "t".repeat(43) }
             : { headerHash: "a".repeat(64) },
         ),
-        { status: 200 },
+        { status: 200, headers: path === "/v1/auth/login" ? { "X-Selective-Session-Binding": deviceID } : {} },
       );
     },
   });
   assert.equal(typeof client.publicationTransport, "function");
   await client.login({ deviceID });
   const first = client.publicationIdentity("https://staging.example.test");
-  await client.publicationTransport().header(scope);
+  const transport = client.publicationTransport();
+  const pin = { generationID: uuid(), headerHash: "a".repeat(64) };
+  for (const read of [
+    () => transport.header(scope),
+    () => transport.publisher(scope, pin),
+    () => transport.directory(scope, { ...pin, cursor: "next" }),
+    () => transport.part(scope, { ...pin, resourceID: uuid(), part: "SECRET" }),
+  ]) {
+    await read();
+    assert.equal(calls.at(-1).options.headers["x-vault-schema-version"], "2");
+    assert.equal(calls.at(-1).options.headers["x-vault-capability"], "resource_acl_v2");
+    assert.equal(calls.at(-1).options.headers["x-publication-version"], "1");
+    assert.equal(calls.at(-1).options.cache, "no-store");
+  }
   assert.equal(calls.at(-1).options.cache, "no-store");
   assert.equal(
     calls.at(-1).options.headers.Authorization,
@@ -848,12 +862,12 @@ test("logout synchronously removes identity before subscribers and keeps only th
             deviceID,
             token: "t".repeat(43),
           }),
-          { status: 200 },
+          { status: 200, headers: { "X-Selective-Session-Binding": deviceID } },
         );
       if (path === "/v1/auth/logout") {
         logoutHeaders = options.headers;
         return new Promise((resolve) => {
-          finishLogout = () => resolve(new Response("{}", { status: 200 }));
+          finishLogout = () => resolve(new Response(null, { status: 204 }));
         });
       }
       protectedReads++;
@@ -895,7 +909,7 @@ test("real authenticated 401 clears identity before subscribers and invalidates 
             deviceID: f.reader.deviceID,
             token: "t".repeat(43),
           }),
-          { status: 200 },
+          { status: 200, headers: { "X-Selective-Session-Binding": f.reader.deviceID } },
         );
       return new Response(
         JSON.stringify(
@@ -939,7 +953,7 @@ test("a delayed old-session 401 cannot erase a newly authenticated identity", as
             deviceID,
             token: "t".repeat(43),
           }),
-          { status: 200 },
+          { status: 200, headers: { "X-Selective-Session-Binding": deviceID } },
         );
       return new Promise((resolve) => {
         finishRequest = () =>
@@ -1056,6 +1070,27 @@ test("main browser logout clears views synchronously and cannot finish over a ne
   assert.equal(restored, 0);
 });
 
+test("browser logout locks local data and reports an unconfirmed server session", async () => {
+  const { completeBrowserSessionLogout } = await import("../public/app.js");
+  const token = "t".repeat(43), calls = [], deviceID = uuid();
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path) => {
+    if (path === "/v1/auth/login") return Response.json({ user: { id: uuid() }, deviceID, token },
+      { headers: { "X-Selective-Session-Binding": deviceID } });
+    if (path === "/v1/auth/logout") return Response.json({ error: "publication_guard_unavailable" }, { status: 503 });
+    throw new Error("unexpected_request");
+  } });
+  await client.login({ deviceID });
+  const vault = { lock() { calls.push("locked"); }, async forgetRememberedSession() { calls.push("forgotten"); } };
+  let revocation;
+  await assert.rejects(completeBrowserSessionLogout({ client, vault,
+    clearView() { calls.push("cleared"); },
+    restoreView({ remoteRevoked }) { revocation = remoteRevoked; },
+  }), /logout_unconfirmed/);
+  assert.deepEqual(calls, ["locked", "cleared", "forgotten"]);
+  assert.equal(client.session(), null);
+  assert.equal(revocation, false);
+});
+
 // Keep authentication and all reader crypto real; only remote HTTP is synthetic.
 async function authenticatedPublicationFixture() {
   const f = await browserFixture();
@@ -1064,8 +1099,8 @@ async function authenticatedPublicationFixture() {
     fetchValue: async (path) => {
       if (path === "/v1/auth/login") return Response.json({
         user: { id: f.reader.accountID }, deviceID: f.reader.deviceID, token: "t".repeat(43),
-      });
-      if (path === "/v1/auth/logout") return Response.json({});
+      }, { headers: { "X-Selective-Session-Binding": f.reader.deviceID } });
+      if (path === "/v1/auth/logout") return new Response(null, { status: 204 });
       const url = new URL(path, f.reader.endpoint), q = Object.fromEntries(url.searchParams);
       if (intercept) {
         const result = intercept(url);

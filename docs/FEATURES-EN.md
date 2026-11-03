@@ -163,6 +163,8 @@ Regular profile export still excludes passwords and private keys. Use an encrypt
 - DMG download with SHA-256 verification;
 - update installation only after explicit user confirmation.
 
+The 0.32 candidate is being prepared for manual installation without Developer ID signing or Apple notarization. The in-app update installer does not accept this build; an ad-hoc signature and SHA-256 do not establish publisher identity.
+
 ## Security
 
 Selective Remote prefers native macOS and OpenSSH mechanisms:

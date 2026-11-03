@@ -1,9 +1,12 @@
 import { VaultMigrationStore } from './vault-migration-store.mjs';
 import { VaultPublicationStore } from './vault-publication-store.mjs';
 import { WholePublicationStore } from './whole-publication-store.mjs';
+import { holdV1CommitFence } from './v1-commit-fence.mjs';
+import { createPublicationFenceTransaction } from './publication-fence-coordinator.mjs';
+import { assertV1DataFloor, readV1VaultState, v1CiphertextHash } from './v1-data-fence.mjs';
 import pg from "pg";
 import { AccessSurfaceStore } from "./access-surface-store.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   requireInvitationPermission,
   requireMembershipChange,
@@ -101,9 +104,11 @@ async function finishResourceMutation(client, receipt, { teamID, vaultID }, resu
 }
 
 export class PostgresStore {
-  constructor(databaseURL, pool = null) {
+  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null } = {}) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
     this.access = new AccessSurfaceStore(this.pool);
+    this.writerFence = writerFence;
+    this.v1Fence = v1Fence;
   }
 
   migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
@@ -923,7 +928,7 @@ export class PostgresStore {
          VALUES ($1, $2, $3, $4, $5, $6,
            CASE WHEN $6::text IS NULL THEN NULL ELSE 'p256-ecdh-v1' END,
            CASE WHEN $6::text IS NULL THEN NULL ELSE now() END)
-         ON CONFLICT (user_id, id) DO UPDATE SET
+         ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name, platform = EXCLUDED.platform,
            app_version = EXCLUDED.app_version,
            public_key = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
@@ -933,13 +938,20 @@ export class PostgresStore {
            key_registered_at = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
              THEN EXCLUDED.key_registered_at ELSE devices.key_registered_at END,
            last_seen_at = now()
-         WHERE devices.revoked_at IS NULL
+         WHERE devices.user_id = EXCLUDED.user_id
+           AND devices.revoked_at IS NULL
            AND (devices.public_key_algorithm IS NULL OR EXCLUDED.public_key IS NULL
              OR devices.public_key = EXCLUDED.public_key)
          RETURNING id`,
         [device.id, userID, device.name, device.platform, device.appVersion, device.publicKey],
       );
-      if (!deviceResult.rows[0]) throw new Error("invalid_device");
+      if (!deviceResult.rows[0]) {
+        const owner = await client.query("SELECT user_id FROM devices WHERE id = $1", [device.id]);
+        // Only a confirmed cross-account ID collision permits the browser's bounded retry.
+        // Revocation and key mismatches within this account remain invalid_device.
+        if (owner.rows[0] && owner.rows[0].user_id !== userID) throw new Error("device_conflict");
+        throw new Error("invalid_device");
+      }
       await client.query(
         `WITH admitted AS (
            INSERT INTO team_membership_device_admissions
@@ -1156,8 +1168,15 @@ export class PostgresStore {
 
   async putVault(userID, deviceID, envelope) {
     const client = await this.pool.connect();
+    const fenced=this.v1Fence?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");
+      await this.writerFence(client, this.v1Fence);
+      if(fenced){
+        const snapshot=await this.v1Fence.snapshot();
+        if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
+        await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
+      }
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);
       const vault = locked.rows[0];
       if (!vault) throw new Error("vault_missing");
@@ -1179,10 +1198,17 @@ export class PostgresStore {
         [vault.id, revision, envelope.envelopeVersion, envelope.wrappedKey ?? null, envelope.ciphertext,
           envelope.nonce, envelope.authTag, envelope.contentHash, deviceID],
       );
-      await client.query("COMMIT");
+      if(fenced){
+        const committed=(await readV1VaultState((sql,values)=>client.query(sql,values))).find(row=>row.vaultKind==='PERSONAL'&&row.vaultID===vault.id);
+        if(!committed)throw Error('deployment_v1_data_mismatch');
+        await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind:'PERSONAL',ownerID:userID,vaultID:vault.id,
+          baseRevision:envelope.baseRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash});
+        await fenced.commit();
+        await fenced.confirm();
+      }else await client.query("COMMIT");
       return { conflict: false, revision };
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
       throw error;
     } finally {
       client.release();
@@ -1203,7 +1229,7 @@ export class PostgresStore {
     return result.rows;
   }
 
-  async createTeam({ actorUserID, name, idempotencyKey }) {
+  async createTeam({ actorUserID, actorDeviceID = null, name, idempotencyKey }) {
     return this.withTeamMutation(actorUserID, "team.create", idempotencyKey, async (client) => {
       const teamResult = await client.query(
         `INSERT INTO teams (name, created_by_user_id)
@@ -1219,6 +1245,37 @@ export class PostgresStore {
         [team.id, actorUserID],
       );
       const membership = membershipResult.rows[0];
+      // Login can only admit devices to memberships that already exist. The
+      // creator's new membership needs the same policy-scoped admission here.
+      await client.query(
+        `WITH admitted AS (
+           INSERT INTO team_membership_device_admissions
+             (membership_id, membership_epoch, device_id)
+           SELECT membership.id, membership.epoch, device.id
+           FROM team_memberships AS membership
+           JOIN teams AS team
+             ON team.id = membership.team_id AND team.archived_at IS NULL
+            AND team.automatic_device_admission = true
+           JOIN devices AS device
+             ON device.id = $4 AND device.user_id = membership.user_id
+            AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
+            AND device.public_key_algorithm = 'p256-ecdh-v1'
+           WHERE membership.team_id = $1 AND membership.id = $2
+             AND membership.user_id = $3 AND membership.revoked_at IS NULL
+           ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING
+           RETURNING membership_id, membership_epoch, device_id
+         )
+         INSERT INTO team_audit_events
+           (team_id, actor_user_id, action, target_user_id, target_membership_id, metadata)
+         SELECT $1, $3, 'team.member_device_auto_admitted', $3, admitted.membership_id,
+           jsonb_build_object(
+             'membershipEpoch', admitted.membership_epoch,
+             'deviceID', admitted.device_id,
+             'source', 'team.create'
+           )
+         FROM admitted`,
+        [team.id, membership.id, actorUserID, actorDeviceID],
+      );
       await writeTeamAudit(client, {
         teamID: team.id,
         actorUserID,
@@ -2391,7 +2448,8 @@ export class PostgresStore {
     envelope,
     idempotencyKey,
   }) {
-    return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client) => {
+    return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client, fenced) => {
+      if(!fenced)await this.writerFence(client, this.v1Fence);
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) { await this.requireLegacyPublication(teamID, vaultID, actorUserID, client); throw new Error("team_not_found"); }
       if (!context.device_key_authorized) throw new Error("device_approval_required");
@@ -2469,6 +2527,12 @@ export class PostgresStore {
         targetVaultID: vaultID,
         metadata: { revision, keyGeneration: nextGeneration },
       });
+      if(fenced){
+        const committed=(await readV1VaultState((sql,values)=>client.query(sql,values))).find(row=>row.vaultKind==='TEAM'&&row.vaultID===vaultID);
+        if(!committed)throw Error('deployment_v1_data_mismatch');
+        await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind:'TEAM',ownerID:teamID,vaultID,
+          baseRevision:currentRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash});
+      }
       return { conflict: false, revision, keyGeneration: nextGeneration, rotationCompleted: rotating };
     });
   }
@@ -2566,8 +2630,16 @@ export class PostgresStore {
 
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
     const client = await this.pool.connect();
+    const fenced=operation==='team.vault.put'&&this.v1Fence
+      ?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");
+      if(fenced){
+        await this.writerFence(client, this.v1Fence);
+        const snapshot=await this.v1Fence.snapshot();
+        if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
+        await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
+      }
       const reservation = await client.query(
         `INSERT INTO team_mutation_receipts (actor_user_id, operation, idempotency_key, response)
          VALUES ($1, $2, $3, '{}'::jsonb)
@@ -2584,16 +2656,16 @@ export class PostgresStore {
         await client.query("COMMIT");
         return replay.rows[0]?.response ?? {};
       }
-      const response = await mutation(client);
+      const response = await mutation(client,fenced);
       await client.query(
         `UPDATE team_mutation_receipts SET response = $4::jsonb
          WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
         [actorUserID, operation, idempotencyKey, JSON.stringify(response)],
       );
-      await client.query("COMMIT");
+      if(fenced){await fenced.commit();await fenced.confirm();}else await client.query("COMMIT");
       return response;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
       throw error;
     } finally {
       client.release();

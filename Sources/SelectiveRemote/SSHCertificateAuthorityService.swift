@@ -33,14 +33,18 @@ enum SSHCertificateAuthorityError: LocalizedError {
 }
 
 enum SSHCertificateAuthorityService {
-    private static let defaultsKey = "SelectiveRemote.sshCertificateAuthorities.v1"
+    private static let defaultsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshCertificateAuthorities.v1")!
     private static let sshKeygenPath = "/usr/bin/ssh-keygen"
 
     static func registered() -> [SSHCertificateAuthorityRecord] {
+        allRecords().filter { FileManager.default.isReadableFile(atPath: $0.publicKeyPath) }
+    }
+
+    private static func allRecords() -> [SSHCertificateAuthorityRecord] {
         guard let data = UserDefaults.standard.data(forKey: defaultsKey),
               let records = try? JSONDecoder().decode([SSHCertificateAuthorityRecord].self, from: data)
         else { return [] }
-        return records.filter { FileManager.default.isReadableFile(atPath: $0.publicKeyPath) }
+        return records
     }
 
     static func register(publicKeyURL: URL) throws -> SSHCertificateAuthorityRecord {
@@ -49,7 +53,7 @@ enum SSHCertificateAuthorityService {
             throw SSHCertificateAuthorityError.invalidPublicKey
         }
         let info = try fingerprint(path: path)
-        var values = registered()
+        var values = allRecords()
         if let existing = values.first(where: { $0.publicKeyPath == path }) { return existing }
         let base = publicKeyURL.deletingPathExtension().lastPathComponent
         let record = SSHCertificateAuthorityRecord(
@@ -65,7 +69,7 @@ enum SSHCertificateAuthorityService {
     }
 
     static func remove(_ id: UUID) {
-        save(registered().filter { $0.id != id })
+        save(allRecords().filter { $0.id != id })
     }
 
     static func sign(

@@ -13,11 +13,24 @@ import { DeviceTrustStore } from "./device-trust-store.mjs";
 import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
+import { MigrationFence } from './migration-fence.mjs';
+import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
+import { browserSessionBinding } from './browser-session-binding.mjs';
+import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write } from './v1-write-fence.mjs';
 
 const config = loadConfig();
-const store = new PostgresStore(config.databaseURL);
+const deploymentFence = config.deployment.fencePath ? new MigrationFence(config.deployment.fencePath) : null;
+const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence });
 const mailer = config.smtp ? createVerificationMailer(config) : null;
-const service = new CloudService(store, config, mailer);
+const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
+  publication: Object.freeze({ ...config.publication, fence: deploymentFence }),
+  wholePublication: Object.freeze({ ...config.wholePublication, fence: deploymentFence }),
+}) : config;
+const service = new CloudService(store, runtimeConfig, mailer);
+const checkDeployment = deploymentFence
+  ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
+    fence: deploymentFence, candidate: currentCapabilities }))
+  : async () => { throw Error('deployment_fence_required'); };
 const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
@@ -46,11 +59,15 @@ async function route(request, response) {
   const url = new URL(request.url, config.publicOrigin);
   const method = request.method ?? "GET";
   if (method === "GET" && url.pathname === "/healthz") return sendJSON(response, 200, { status: "ok" });
+  let deploymentEvidence;
+  try { deploymentEvidence = await checkDeployment(); }
+  catch { return sendError(response, 503, "publication_guard_unavailable"); }
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
     return sendJSON(response, 200, { status: "ready" });
   }
   if (method === "GET" && url.pathname === "/v1/meta") {
+    if (deploymentEvidence?.writerFloor === 1) response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "GET" && url.pathname === "/v1/auth/username-availability") {
@@ -68,7 +85,14 @@ async function route(request, response) {
   if (method === "POST" && url.pathname === "/v1/auth/login") {
     return handleAuthOperation(
       request, response, "login_ip", "login_email", service.login.bind(service), 200,
-      (result) => setBrowserSessionCookie(response, result.token),
+      async (result) => {
+        const authenticated = await service.authenticate(result.token);
+        if (!authenticated || authenticated.user_id !== result.user?.id || authenticated.device_id !== result.deviceID) {
+          throw Error("login_session_invalid");
+        }
+        response.setHeader("X-Selective-Session-Binding", authenticated.session_id);
+        setBrowserSessionCookie(response, result.token);
+      },
     );
   }
   if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
@@ -106,15 +130,35 @@ async function route(request, response) {
     }
     const session = await service.authenticate(bearer ?? cookie);
     if (!session) {
-      if (cookie) clearBrowserSessionCookie(response);
+      // A delayed response must not clear a cookie installed by another tab.
+      // Invalid and revoked sessions are rejected server-side.
       return sendError(response, 401, "unauthorized");
+    }
+    const browserBinding = browserSessionBinding({ sessionID: session.session_id, bearer, cookie, method,
+      path: url.pathname, supplied: request.headers["x-selective-session-binding"] });
+    if (!browserBinding.allowed) return sendError(response, 409, "browser_session_changed");
+    if (v1WriteRequiresFence(method, url.pathname) && !v1WriteFenceAccepted(request.headers)) {
+      return sendError(response, 426, "vault_client_upgrade_required");
+    }
+    if (v1WriteRequiresFence(method, url.pathname) && deploymentEvidence?.writerFloor !== 1) {
+      return sendError(response, 503, "vault_write_fence_unavailable");
+    }
+    // Until mixed-version storage cutover is proven safe, a newly framed
+    // writer can still publish a snapshot missing late legacy local edits.
+    // Keep both V1 whole-Vault routes read-only, including for current clients.
+    if (v1WriteRequiresFence(method, url.pathname)) {
+      return sendError(response, 503, "vault_write_temporarily_unavailable");
+    }
+    if (method === "GET" && url.pathname === "/v1/me") {
+      response.setHeader("X-Selective-Session-Binding", browserBinding.binding);
     }
     const wholeRoute=wholePublicationRoute(url.pathname,method);
     if(wholeRoute)return handleOperation(response,()=>runWholePublicationRoute(request,url,session,service,wholeRoute));
-    const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|resources\/([^/]+)\/parts\/([^/]+))$/u);
+    const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|inspection|resources\/([^/]+)\/parts\/([^/]+))$/u);
     if(publicationRoute&&method==="GET")return handleOperation(response,async()=>{
+      if(request.headers['x-vault-schema-version']!=='2'||request.headers['x-vault-capability']!=='resource_acl_v2'||request.headers['x-publication-version']!=='1')throw Error('vault_upgrade_required');
       const operation=publicationRoute[3].startsWith("resources/")?"part":publicationRoute[3];
-      const permitted=new Set(operation==="header"?[]:["generationID","headerHash",...(operation==="directory"?["cursor","limit"]:[])]);
+      const permitted=new Set(operation==="header"?[]:["generationID","headerHash",...(operation==="directory"?["cursor","limit"]:operation==="inspection"?["inspection","resourceID","subjectUserID","subjectDeviceID","principalKind","principalID","cursor","limit"]:[])]);
       const input={};
       for(const [key,value]of url.searchParams){if(!permitted.has(key)||Object.hasOwn(input,key))throw Error("invalid_access_request");input[key]=value;}
       if(input.limit!==undefined){if(!/^[1-9][0-9]{0,2}$/.test(input.limit))throw Error("invalid_access_page");input.limit=Number(input.limit);}
@@ -123,7 +167,6 @@ async function route(request, response) {
     });
     if (method === "POST" && url.pathname === "/v1/auth/logout") {
       await store.revokeSession(session.session_id);
-      clearBrowserSessionCookie(response);
       return empty(response, 204);
     }
     if (method === "GET" && url.pathname === "/v1/me") {
@@ -149,7 +192,6 @@ async function route(request, response) {
         response,
         async () => {
           const result = await service.deleteAccount(session, await readJSON(request, maxTeamBodyBytes));
-          clearBrowserSessionCookie(response);
           return result;
         },
       );
@@ -248,7 +290,7 @@ async function route(request, response) {
     }
     if (method === "PUT" && url.pathname === "/v1/vault") {
       try {
-        const result = await service.putVault(session, await readJSON(request));
+        const result = await service.putVault(session, unwrapV1Write(await readJSON(request)));
         return result.conflict ? sendJSON(response, 409, result) : sendJSON(response, 200, result);
       } catch (error) {
         return handleOperationError(response, error);
@@ -736,7 +778,7 @@ async function route(request, response) {
             session,
             teamVaultMatch[1],
             teamVaultMatch[2],
-            await readJSON(request),
+            unwrapV1Write(await readJSON(request)),
             idempotencyKey(request),
           );
           return sendJSON(response, result.conflict ? 409 : 200, result);
@@ -772,7 +814,7 @@ async function handleAuthOperation(request, response, ipScope, emailScope, opera
       if (email) await authRateLimiter.require(emailScope, email);
     }
     const result = await operation(input);
-    beforeSend?.(result);
+    if (beforeSend) await beforeSend(result);
     return result;
   }, successStatus);
 }
@@ -824,10 +866,6 @@ function sessionCookie(value, maximumAge) {
 
 function setBrowserSessionCookie(response, token) {
   response.setHeader("Set-Cookie", sessionCookie(token, config.sessionTTLDays * 86_400));
-}
-
-function clearBrowserSessionCookie(response) {
-  response.setHeader("Set-Cookie", sessionCookie("", 0));
 }
 
 function hasTrustedOrigin(request) {
@@ -883,6 +921,7 @@ function sendError(response, status, code) { sendJSON(response, status, { error:
 function empty(response, status) { response.writeHead(status); response.end(); }
 
 async function start() {
+  await checkDeployment();
   if (config.allowRegistration) {
     try {
       await mailer.verifyConnection();
@@ -892,6 +931,7 @@ async function start() {
       process.exit(1);
     }
   }
+  await checkDeployment();
   server.listen(config.port, config.host, () => {
     console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
   });
@@ -901,7 +941,12 @@ async function start() {
 let outboxPumpRunning = false;
 let outboxTimer = null;
 
-await start();
+try { await start(); }
+catch {
+  console.error(JSON.stringify({ level: "error", message: "Deployment compatibility preflight failed" }));
+  await store.close();
+  process.exit(1);
+}
 
 outboxTimer = mailer ? setInterval(scheduleOutboxPump, 5_000) : null;
 outboxTimer?.unref();
@@ -909,7 +954,7 @@ outboxTimer?.unref();
 function scheduleOutboxPump() {
   if (!mailer || outboxPumpRunning) return;
   outboxPumpRunning = true;
-  service.queueTeamInvitationOutboxDispatch()
+  checkDeployment().then(() => service.queueTeamInvitationOutboxDispatch())
     .catch(() => console.error(JSON.stringify({ level: "error", message: "Team outbox dispatch failed" })))
     .finally(() => { outboxPumpRunning = false; });
 }

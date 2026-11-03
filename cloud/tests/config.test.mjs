@@ -184,3 +184,25 @@ test("mail configuration rejects placeholders and insecurely short credentials",
     /SMTP_PASSWORD must contain at least 16 characters/,
   );
 });
+
+test("enabled publication requires an independent absolute compatibility fence", () => {
+  const enabled = { ...baseEnv, PUBLICATION_READER_ENABLED: "true", PUBLICATION_ENVIRONMENT: "staging",
+    PUBLICATION_CURSOR_SECRET: "c".repeat(32), PUBLICATION_ALLOWED_VAULT_IDS: "12345678-1234-4234-a234-123456789012" };
+  assert.throws(() => loadConfig(enabled), /PUBLICATION_FENCE_PATH/);
+  assert.throws(() => loadConfig({ ...enabled, PUBLICATION_FENCE_PATH: "relative/fence" }), /PUBLICATION_FENCE_PATH/);
+  assert.equal(loadConfig({ ...enabled, PUBLICATION_FENCE_PATH: "/var/lib/independent/fence.jsonl" }).deployment.fencePath,
+    "/var/lib/independent/fence.jsonl");
+  assert.equal(loadConfig(baseEnv).deployment.fencePath, null);
+});
+
+test('optional test registration permits exactly two canonical staging emails and stays absent by default',()=>{
+  assert.equal(loadConfig(baseEnv).registrationEmailAllowlist,null);
+  const env={...baseEnv,PUBLICATION_ENVIRONMENT:'staging',STAGING_REGISTRATION_EMAIL_ALLOWLIST:'first@example.test,second@example.test'};
+  assert.deepEqual(loadConfig(env).registrationEmailAllowlist,['first@example.test','second@example.test']);
+  for(const changes of [{PUBLICATION_ENVIRONMENT:'production'},{PUBLICATION_ENVIRONMENT:undefined},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:''},{STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test'},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test,one@example.test'},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'One@example.test,two@example.test'},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test,two@example.test,three@example.test'}])
+    assert.throws(()=>loadConfig({...env,...changes}),/STAGING_REGISTRATION_EMAIL_ALLOWLIST/);
+});

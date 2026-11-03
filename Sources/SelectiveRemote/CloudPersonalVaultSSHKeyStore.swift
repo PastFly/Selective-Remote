@@ -24,7 +24,7 @@ enum SelectiveRemotePersonalVaultSSHKeyStore {
                 attributes: [.posixPermissions: 0o700]
             )
             let originalName = URL(fileURLWithPath: value.record.privateKeyPath).lastPathComponent
-            let filename = safeFilename(originalName.isEmpty ? "id_ssh" : originalName)
+            let filename = try safeFilename(originalName.isEmpty ? "id_ssh" : originalName)
             let privateURL = directory.appendingPathComponent(filename)
             try write(value.privateKey, to: privateURL, permissions: 0o600, fileManager: fileManager)
 
@@ -62,9 +62,13 @@ enum SelectiveRemotePersonalVaultSSHKeyStore {
         try fileManager.moveItem(at: temporary, to: url)
     }
 
-    private static func safeFilename(_ value: String) -> String {
+    private static func safeFilename(_ value: String) throws -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let filtered = String(value.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "-" })
-        return filtered.isEmpty ? "id_ssh" : String(filtered.prefix(120))
+        let filename = filtered.isEmpty ? "id_ssh" : String(filtered.prefix(120))
+        guard filename != ".", filename != ".." else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        return filename
     }
 }

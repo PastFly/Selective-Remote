@@ -3,6 +3,7 @@ import Security
 
 struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     var sessionToken: String?
+    var legacySessionRetired: Bool
     var teamDevicePrivateKeys: [String: Data]
     var personalVaultKeyMaterials: [String: Data]
     var deviceTrustRootKeys: [String: Data]
@@ -12,6 +13,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
 
     init(
         sessionToken: String? = nil,
+        legacySessionRetired: Bool = false,
         teamDevicePrivateKeys: [String: Data] = [:],
         personalVaultKeyMaterials: [String: Data] = [:],
         deviceTrustRootKeys: [String: Data] = [:],
@@ -20,6 +22,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
         deviceTrustPendingRekeys: [String: Data] = [:]
     ) {
         self.sessionToken = sessionToken
+        self.legacySessionRetired = legacySessionRetired
         self.teamDevicePrivateKeys = teamDevicePrivateKeys
         self.personalVaultKeyMaterials = personalVaultKeyMaterials
         self.deviceTrustRootKeys = deviceTrustRootKeys
@@ -30,6 +33,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
 
     var isEmpty: Bool {
         sessionToken == nil
+            && !legacySessionRetired
             && teamDevicePrivateKeys.isEmpty
             && personalVaultKeyMaterials.isEmpty
             && deviceTrustRootKeys.isEmpty
@@ -39,7 +43,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case sessionToken, teamDevicePrivateKeys, personalVaultKeyMaterials
+        case sessionToken, legacySessionRetired, teamDevicePrivateKeys, personalVaultKeyMaterials
         case deviceTrustRootKeys, deviceTrustPins, deviceTrustBootstrapBundles
         case deviceTrustPendingRekeys
     }
@@ -47,6 +51,7 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         sessionToken = try values.decodeIfPresent(String.self, forKey: .sessionToken)
+        legacySessionRetired = try values.decodeIfPresent(Bool.self, forKey: .legacySessionRetired) ?? false
         teamDevicePrivateKeys = try values.decodeIfPresent(
             [String: Data].self,
             forKey: .teamDevicePrivateKeys
@@ -67,14 +72,27 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     }
 }
 
-struct SelectiveRemoteCloudSecureEnvelopeStore {
+struct SelectiveRemoteCloudSecureEnvelopeStore: Sendable {
     static let legacyService = "local.selectiveremote.cloud.secure-envelope.v1"
     static let namespace = "cloud-secure-envelope.v1"
     private static let lock = NSLock()
 
+    // Internal persistence seam; the default production initializer is unchanged.
+    struct Storage: Sendable {
+        let read: @Sendable (URL) throws -> SelectiveRemoteCloudSecureEnvelope?
+        let write: @Sendable (SelectiveRemoteCloudSecureEnvelope, URL) throws -> Void
+        let delete: @Sendable (URL) throws -> Void
+    }
+    private let storage: Storage?
+    init() { storage = nil }
+    init(storage: Storage) { self.storage = storage }
+
     func envelope(for endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
         try Self.synchronized {
-            try readUnlocked(endpoint: endpoint)
+            if storage != nil { return try readUnlocked(endpoint: endpoint) }
+            return try UnifiedCredentialVault.shared.withExclusiveAccess {
+                try readUnlocked(endpoint: endpoint)
+            }
         }
     }
 
@@ -83,17 +101,24 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
         _ mutation: (inout SelectiveRemoteCloudSecureEnvelope) throws -> Void
     ) throws {
         try Self.synchronized {
-            var envelope = try readUnlocked(endpoint: endpoint) ?? .init()
-            try mutation(&envelope)
-            if envelope.isEmpty {
-                try deleteUnlocked(endpoint: endpoint)
-            } else {
-                try writeUnlocked(envelope, endpoint: endpoint)
+            func applyMutation() throws {
+                var envelope = try readUnlocked(endpoint: endpoint) ?? .init()
+                let original = envelope
+                try mutation(&envelope)
+                guard envelope != original else { return }
+                if envelope.isEmpty {
+                    try deleteUnlocked(endpoint: endpoint)
+                } else {
+                    try writeUnlocked(envelope, endpoint: endpoint)
+                }
             }
+            if storage != nil { try applyMutation() }
+            else { try UnifiedCredentialVault.shared.withExclusiveAccess { try applyMutation() } }
         }
     }
 
     private func readUnlocked(endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
+        if let storage { return try storage.read(endpoint) }
         if let data = try UnifiedCredentialVault.shared.readProtectedData(
             namespace: Self.namespace,
             key: endpoint.absoluteString
@@ -136,6 +161,7 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
         _ envelope: SelectiveRemoteCloudSecureEnvelope,
         endpoint: URL
     ) throws {
+        if let storage { return try storage.write(envelope, endpoint) }
         let data = try JSONEncoder().encode(envelope)
         try UnifiedCredentialVault.shared.saveProtectedData(
             data,
@@ -146,6 +172,7 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     }
 
     private func deleteUnlocked(endpoint: URL) throws {
+        if let storage { return try storage.delete(endpoint) }
         try UnifiedCredentialVault.shared.deleteProtectedData(
             namespace: Self.namespace,
             key: endpoint.absoluteString

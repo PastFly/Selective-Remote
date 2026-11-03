@@ -65,3 +65,10 @@ test('real Browser multi-Vault publication stores its shared protected checkpoin
   assert.equal(Object.keys(row.checkpoint)[0],[...receipt.vaults].sort((a,b)=>a.vaultID.localeCompare(b.vaultID))[0].vaultID);
  }finally{await b.close();}
 }));
+
+test('actual Edge lifecycle runs two-Vault PostgreSQL mutations, lost response, refresh recovery and persisted cache reopen',
+ {skip:!database||!process.env.PLAYWRIGHT_MODULE||!process.env.CHROMIUM_PATH,timeout:180000},async()=>{
+ const {isolatedPublicationDatabase}=await import('./publication-runtime-fixture.mjs'),{runLocalBrowserLifecycle}=await import('./browser/staging-lifecycle-postgres.mjs');
+ const isolated=await isolatedPublicationDatabase(database);
+ try{assert.deepEqual(await runLocalBrowserLifecycle(isolated),{operations:11,allVaults:2,secretVerified:true,offlineVerified:true,pendingResumeVerified:true,rejectedTransforms:4});}finally{await isolated.cleanup();}
+});

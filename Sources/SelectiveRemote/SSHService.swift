@@ -1057,6 +1057,7 @@ enum SSHKeyServiceError: LocalizedError, Sendable {
     case publicKeyUnavailable
     case invalidGenerationPath
     case generationTargetExists(String)
+    case sharedKeychainRemovalUnsafe
 
     var errorDescription: String? {
         switch self {
@@ -1074,6 +1075,11 @@ enum SSHKeyServiceError: LocalizedError, Sendable {
             UpdateLocalization.key("ssh.error.invalid_key_path")
         case let .generationTargetExists(path):
             UpdateLocalization.text(ru: "Файл уже существует: \(path). Выберите другое имя, чтобы ничего не перезаписать.", en: "File already exists: \(path). Choose another name to avoid overwriting it.")
+        case .sharedKeychainRemovalUnsafe:
+            UpdateLocalization.text(
+                ru: "Удаление пароля из общей связки отключено: он может использоваться старой версией приложения.",
+                en: "Removing this password from the shared Keychain is disabled because the older app may still use it."
+            )
         }
     }
 }
@@ -1220,7 +1226,7 @@ enum SSHKeyService {
 
         if let passwordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
-            let hasCurrentSecret = KeychainService.passwordExists(reference: passwordCredential)
+            let hasCurrentSecret = try KeychainService.passwordExistsVerified(reference: passwordCredential)
             if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
                     reason: UpdateLocalization.key("ssh.touch_id.password")
@@ -1236,7 +1242,7 @@ enum SSHKeyService {
         }
         if let jumpHostPasswordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: jumpHostPasswordCredential)
-            let hasCurrentSecret = KeychainService.passwordExists(reference: jumpHostPasswordCredential)
+            let hasCurrentSecret = try KeychainService.passwordExistsVerified(reference: jumpHostPasswordCredential)
             if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
                     reason: UpdateLocalization.key("ssh.touch_id.jump_password")
@@ -1506,19 +1512,7 @@ enum SSHKeyService {
     }
 
     static func removeFromAgentAndKeychain(_ key: SSHKeyRecord) throws {
-        let environment = try agentEnvironment()
-        let result = try run(
-            executable: sshAddPath,
-            arguments: ["--apple-use-keychain", "-d", key.privateKeyPath],
-            environment: environment
-        )
-        let normalizedOutput = result.output.lowercased()
-        guard result.status == 0
-                || normalizedOutput.contains("not found")
-                || normalizedOutput.contains("no identities")
-        else {
-            throw SSHKeyServiceError.agentFailed(cleanOutput(result.output))
-        }
+        throw SSHKeyServiceError.sharedKeychainRemovalUnsafe
     }
 
     static func isLoadedInAgent(_ key: SSHKeyRecord) throws -> Bool {

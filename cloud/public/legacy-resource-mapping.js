@@ -28,6 +28,33 @@ function embeddedSecret(value) {
     (/password|secret|private.?key|passphrase|token/iu.test(key)&&item!==null&&item!==''&&item!==false)
     ||embeddedSecret(item));
 }
+function configurationObject(value,{nativeForwarding=false,recordID}={}) {
+  if(typeof value!=='string')throw Error();
+  try{return JSON.parse(value);}catch(error){if(!nativeForwarding)throw error;}
+  // Native CloudPersonalVaultExporter encodes sorted JSON bytes as unpadded
+  // base64url. Decode for inspection only; preserve the original record bytes.
+  if(!/^[A-Za-z0-9_-]+$/u.test(value)||value.length%4===1)throw Error();
+  const raw=atob(value.replaceAll('-','+').replaceAll('_','/')+'='.repeat((4-value.length%4)%4));
+  if(btoa(raw).replaceAll('+','-').replaceAll('/','_').replace(/=+$/u,'')!==value)throw Error();
+  const decoded=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Uint8Array.from(raw,c=>c.charCodeAt(0))));
+  if(embeddedSecret(decoded))return decoded;
+  const object=v=>v&&typeof v==='object'&&!Array.isArray(v),keys=(v,allowed)=>object(v)&&Object.keys(v).every(k=>allowed.includes(k));
+  const sameID=v=>typeof v==='string'&&uuid.test(v.toLowerCase())&&v.toLowerCase()===recordID.toLowerCase();
+  const connectionKeys=['kind','profileID','host','username','port','authenticationMode','identityID','jumpHostProfileID','workingDirectory','serialDevicePath','serialBaudRate','serialDataBits','serialParity','serialStopBits','serialFlowControl'];
+  if(!keys(decoded,['id','connection','rule'])||!sameID(decoded.id)||!keys(decoded.connection,connectionKeys)
+    ||!['savedProfile','custom','telnet','serial','local'].includes(decoded.connection.kind)
+    ||!['host','username'].every(k=>typeof decoded.connection[k]==='string')||!Number.isSafeInteger(decoded.connection.port)
+    ||!keys(decoded.rule,['id','name','kind','bindAddress','sourcePort','destinationHost','destinationPort'])||!sameID(decoded.rule.id)
+    ||!['local','remote','dynamic'].includes(decoded.rule.kind)||!['name','bindAddress','destinationHost'].every(k=>typeof decoded.rule[k]==='string')
+    ||!['sourcePort','destinationPort'].every(k=>Number.isSafeInteger(decoded.rule[k])&&decoded.rule[k]>=0&&decoded.rule[k]<=65535))throw Error();
+  for(const [key,item] of Object.entries(decoded.connection)){
+    if(item===null||['kind','host','username','port'].includes(key))continue;
+    if(['profileID','identityID','jumpHostProfileID'].includes(key)){if(typeof item!=='string'||!uuid.test(item.toLowerCase()))throw Error();}
+    else if(['serialBaudRate','serialDataBits','serialStopBits'].includes(key)){if(!Number.isSafeInteger(item))throw Error();}
+    else if(typeof item!=='string')throw Error();
+  }
+  return decoded;
+}
 export function inspectLegacyResources(document,existingIDs=[]) {
   if(document?.schemaVersion!==1||!Array.isArray(document.records)||!Array.isArray(document.tombstones)
     ||document.records.length>1000||encoder.encode(JSON.stringify(document)).length>24*1024*1024)throw Error('invalid_legacy_document');
@@ -43,7 +70,7 @@ export function inspectLegacyResources(document,existingIDs=[]) {
     if(['host','forwarding'].includes(r.type)){
       if(embeddedSecret(r.data))blockers.push('embedded_secret_requires_conversion');
       for(const key of ['profile','configuration'])if(r.data[key]!==undefined){
-        try{if(typeof r.data[key]!=='string')throw Error();const decoded=JSON.parse(r.data[key]);
+        try{const decoded=configurationObject(r.data[key],{nativeForwarding:r.type==='forwarding'&&key==='configuration',recordID:original});
           if(!decoded||typeof decoded!=='object'||Array.isArray(decoded))throw Error();
           if(embeddedSecret(decoded))blockers.push('embedded_secret_requires_conversion');
         }catch{blockers.push('opaque_profile_requires_conversion');}
