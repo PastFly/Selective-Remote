@@ -141,3 +141,20 @@ test('V1 revisions and operation replay protection survive a checkpoint',async t
  const next={...repeated,operationID:id()},nextDone={version:2,type:'V1_CONFIRMED_COMMIT',intentID:next.intentID,intentDigest:fenceIntentDigest(next)};
  await reopened.append(next);await reopened.append(nextDone);assert.equal((await reopened.snapshot()).v1Committed[0].revision,2);
 });
+
+test('logical external high-water digest is unchanged by repeated archive checkpoints',async t=>{
+ const {fence}=await fixture(t);for(const e of pair())await fence.append(e);
+ const head=events=>{let digest=createHash('sha256').update('selective-remote/fence-history/v1\0').digest();let i=0;
+  for(const event of events){const n=Buffer.alloc(8);n.writeBigUInt64BE(BigInt(++i));digest=createHash('sha256').update('selective-remote/fence-history/v1\0').update(digest).update(n).update(JSON.stringify(validateFenceEvent(event))+'\n').digest();}
+  return {position:i,digest:digest.toString('hex')};};
+ const before=head(await fence.readRecords());await fence.compact();assert.deepEqual(head(await fence.readRecords()),before);
+ for(const e of pair())await fence.append(e);const advanced=head(await fence.readRecords());assert.ok(advanced.position>before.position);
+ await fence.compact();assert.deepEqual(head(await fence.readRecords()),advanced);
+});
+
+test('31 archived segments retain exact order and reject a missing middle segment',async t=>{
+ const {path,fence}=await fixture(t),all=[],digests=[];
+ for(let n=0;n<31;n++){const events=pair();all.push(...events);for(const e of events)await fence.append(e);digests.push((await fence.compact()).archiveDigest);}
+ assert.deepEqual(await fence.readRecords(),all);
+ await rm(join(path+'.archives',digests[15]));await assert.rejects(fence.snapshot(),/corrupt_deployment_fence/);
+});
