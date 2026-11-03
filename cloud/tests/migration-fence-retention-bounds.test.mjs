@@ -55,3 +55,24 @@ test('checkpoint refuses before adding a marker which would exceed event replay 
  await assert.rejects(new MigrationFence(path,{anchor}).compact(),/deployment_fence_history_limit/);
  assert.deepEqual(await (await import('node:fs/promises')).readFile(path),before);
 });
+
+test('terminal byte reservation covers archived and active history before dispatch',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'sr-byte-bound-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const {MigrationFence,FENCE_MAX_REPLAY_BYTES}=await import('../src/migration-fence.mjs'),path=join(dir,'journal'),archiveDir=path+'.archives';await mkdir(archiveDir);
+ const id=()=>randomUUID(),teamID=id(),pending={version:2,type:'PENDING_INTENT',intentID:id(),operationID:id(),kind:'PUBLICATION',schemaFloor:22,
+  vaults:Array.from({length:10},()=>({teamID,vaultID:id(),generationID:id(),sequence:1,headerHash:'a'.repeat(64),manifestHash:'b'.repeat(64)})).sort((a,b)=>a.vaultID.localeCompare(b.vaultID))};
+ const done={version:2,type:'CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:fenceIntentDigest(pending)},pair=JSON.stringify(pending)+'\n'+JSON.stringify(done)+'\n';
+ const floor=JSON.stringify({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1})+'\n';
+ const fill=target=>{const count=Math.floor(target/Buffer.byteLength(pair));const rest=target-count*Buffer.byteLength(pair);return pair.repeat(count)+floor.repeat(Math.floor(rest/Buffer.byteLength(floor)));};
+ const archived=Buffer.from(fill(4*1024*1024-512)),digest=createHash('sha256').update(archived).digest('hex');await writeFile(join(archiveDir,digest),archived);
+ const marker=JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n';
+ const active=Buffer.from(marker+fill(4*1024*1024-512-Buffer.byteLength(marker)));await writeFile(path,active);
+ const unanchored=new MigrationFence(path),events=await unanchored.readRecords(),expected=head(events),anchor={read:async()=>expected,advance:async()=>{throw Error('unexpected_advance');}};
+ const checkpoint=await new MigrationFence(path,{anchor}).compact();assert.ok(checkpoint.archiveDigest);
+ const before=await (await import('node:fs/promises')).readFile(path);
+ assert.ok(FENCE_MAX_REPLAY_BYTES-archived.length-active.length-before.length<Buffer.byteLength(pair));
+ const next={...pending,intentID:id(),operationID:id(),vaults:pending.vaults.map(v=>({...v,teamID:id(),vaultID:id(),generationID:id()}))};
+ const sameTeam=id();next.vaults=next.vaults.map(v=>({...v,teamID:sameTeam})).sort((a,b)=>a.vaultID.localeCompare(b.vaultID));
+ await assert.rejects(new MigrationFence(path).append(next),/deployment_fence_history_limit/);
+ assert.deepEqual(await (await import('node:fs/promises')).readFile(path),before);
+});
