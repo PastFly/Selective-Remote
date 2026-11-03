@@ -6,7 +6,7 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, credentials, forwarding, network, network-current, snippet-fix-tests, ci-gaps]
+        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, credentials, forwarding, passphrase, network, network-current, snippet-fix-tests, ci-gaps]
         default: candidate
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding ]]; then
+          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding || "$BUILD_KIND" == passphrase ]]; then
             gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/candidate"
             cd "$RUNNER_TEMP/candidate"
             printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
@@ -102,6 +102,7 @@ jobs:
               screencapture -x "$RUNNER_TEMP/evidence/cleanup-screen.png" || true
               kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true
             fi
+            if test -n "${agent_pid:-}"; then kill "$agent_pid" 2>/dev/null || true; wait "$agent_pid" 2>/dev/null || true; fi
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
@@ -117,7 +118,24 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain"
           security default-keychain -d user -s "$keychain"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
+          sandbox_policy='(version 1)(allow default)(deny network*)'
+          if [[ "$SR_BUILD_KIND" == passphrase ]]; then
+            fixture="$RUNNER_TEMP/ssh-key-fixture"
+            mkdir -m 700 "$fixture"
+            /usr/bin/ssh-keygen -q -t ed25519 -N TESTONLYCODEXPASSPHRASE -f "$fixture/key"
+            /usr/bin/ssh-agent -D -a "$fixture/agent.sock" > "$RUNNER_TEMP/evidence/synthetic-agent.log" 2>&1 &
+            agent_pid=$!
+            export SSH_AUTH_SOCK="$fixture/agent.sock"
+            for attempt in {1..30}; do [[ -S "$SSH_AUTH_SOCK" ]] && break; sleep 1; done
+            test -S "$SSH_AUTH_SOCK" && kill -0 "$agent_pid"
+            fingerprint=$(/usr/bin/ssh-keygen -lf "$fixture/key.pub" -E sha256 | awk '{print $2}')
+            python3 scripts/isolated-gui-smoke/seed-ssh-key.py "$fingerprint" "$fixture/seed.plist"
+            bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+            if defaults read "$bundle" >/dev/null 2>&1; then echo 'Synthetic baseline domain not empty'; exit 1; fi
+            defaults import "$bundle" "$fixture/seed.plist"
+            sandbox_policy="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote unix-socket (subpath \"$fixture\")))"
+          fi
+          sandbox-exec -p "$sandbox_policy" "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
           app_pid=$!
           sleep 12
           kill -0 "$app_pid"
@@ -129,6 +147,14 @@ jobs:
           swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
+          if [[ "$SR_BUILD_KIND" == passphrase ]]; then
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 40 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-passphrase | tee "$RUNNER_TEMP/evidence/passphrase-ui.log"
+            screencapture -x "$RUNNER_TEMP/evidence/passphrase-screen.png"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+            wait "$app_pid" || true
+            app_pid=""
+            exit 0
+          fi
           inspect_synthetic_keychain() {
             local version="$1" output="$2" baseline="${3:-$RUNNER_TEMP/evidence/baseline-persistence.json}"
             python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$baseline" > "$output" 2>&1 &
