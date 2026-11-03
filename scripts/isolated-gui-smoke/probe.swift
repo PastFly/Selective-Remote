@@ -89,14 +89,10 @@ func setUniqueField(_ placeholder: String, _ value: String) {
         event.post(tap: .cghidEventTap)
     }
     key(0, down: true, flags: .maskCommand); key(0, down: false, flags: .maskCommand)
-    let units = Array(value.utf16)
-    guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-          let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { stop("text event") }
-    units.withUnsafeBufferPointer { buffer in
-        down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
-        up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
-    }
-    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    guard pasteboard.setString(value, forType: .string), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("synthetic clipboard or focus") }
+    key(9, down: true, flags: .maskCommand); key(9, down: false, flags: .maskCommand)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     guard (attr(matches[0], "AXValue") as? String) == value else { stop("typed field not confirmed: \(placeholder)") }
     key(48, down: true); key(48, down: false)
