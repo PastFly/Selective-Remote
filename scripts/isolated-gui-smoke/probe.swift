@@ -160,6 +160,17 @@ setUniqueField("For example: Work", "TEST-ONLY-CODEX-UPGRADE-FOLDER")
 setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.10")
 setUniqueField("username", "test")
 print("SYNTHETIC_PROFILE_FIELDS_ENTERED=YES")
+pressUnique("AXButton", "Authentication")
+for element in snapshot(app).prefix(500) {
+    let role = attr(element, "AXRole") as? String ?? ""
+    let title = attr(element, "AXTitle") as? String ?? ""
+    let description = attr(element, "AXDescription") as? String ?? ""
+    let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
+    if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty {
+        print("AUTH_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
+    }
+}
+pressUnique("AXButton", "General")
 } else if env["SR_BUILD_KIND"] == "candidate" {
     print("CANDIDATE_WINDOW_INSPECTION=YES")
 } else { stop("unknown build kind") }
