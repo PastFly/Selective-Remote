@@ -2,13 +2,13 @@
 set -Eeuo pipefail
 umask 022
 cd "$GITHUB_WORKSPACE"
-git merge-base --is-ancestor 020a4b46c6da11070a4cb6f9a75ae51909dad699 HEAD
+git merge-base --is-ancestor d613cbc778a39b7c0c7c0b4bb0e7fb5753a62f6b HEAD
 source_head=$(git rev-parse HEAD)
 [[ "$source_head" == "$GITHUB_SHA" ]]
-git diff --exit-code 020a4b46c6da11070a4cb6f9a75ae51909dad699 HEAD -- cloud
+git diff --exit-code d613cbc778a39b7c0c7c0b4bb0e7fb5753a62f6b HEAD -- cloud
 mkdir -p /tmp/sr-controller-acceptance/results
 exec > >(tee /tmp/sr-controller-acceptance/results/acceptance.log) 2>&1
-echo "TEST_HEAD=$source_head EXACT_CLOUD_SOURCE=020a4b46c6da11070a4cb6f9a75ae51909dad699"
+echo "TEST_HEAD=$source_head EXACT_CLOUD_SOURCE=d613cbc778a39b7c0c7c0b4bb0e7fb5753a62f6b"
 echo 'ENVIRONMENT=EPHEMERAL_GITHUB_HOSTED_RUNNER'
 root=/opt/selective-remote-controller
 state=/var/lib/selective-remote-controller
@@ -165,7 +165,39 @@ cloud_uid=$(docker run --rm --entrypoint id "$image" -u)
 docker run --rm --network cloud_private --user "$cloud_uid:$cloudgid" --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const f=createConfiguredMigrationFence(loadConfig().deployment);try{const x=await f.fence.compact();if(!x.archiveDigest)throw Error("checkpoint_failed");console.log("ANCHORED_JOURNAL_CHECKPOINT=PASS")}finally{await f.close()}'
 [[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
 stat -c 'CHECKPOINT_PATH=%n UID=%u GID=%g MODE=%a' "$state/publication" "$state/publication/journal" "$state/publication/journal.archives" "$state/publication/journal.archives/"*
-docker run --rm --network cloud_private --user root --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const f=createConfiguredMigrationFence(loadConfig().deployment);try{await f.fence.snapshot();console.log("CHECKER_CAP_DROPPED_CHECKPOINT_READ=PASS")}catch(e){console.error("CHECKER_CAP_DROPPED_CHECKPOINT_READ="+(e.code??"none")+":"+e.message);process.exitCode=1}finally{await f.close()}'
+read_checkpoint_as_checker() {
+  docker run --rm --network cloud_private --user root --read-only --cap-drop ALL "$@" --security-opt no-new-privileges --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const f=createConfiguredMigrationFence(loadConfig().deployment);try{await f.fence.snapshot();console.log("CHECKPOINT_READ=PASS")}catch(e){console.error("CHECKPOINT_READ_FAILURE="+(e.code??"none")+":"+e.message);process.exitCode=1}finally{await f.close()}'
+}
+set +e
+read_checkpoint_as_checker > /tmp/sr-controller-acceptance/results/checker-current-permissions.log 2>&1
+checker_original_status=$?
+set -e
+if [[ "$checker_original_status" -ne 0 ]]; then
+  cat /tmp/sr-controller-acceptance/results/checker-current-permissions.log
+  echo 'CURRENT_CHECKER_ARCHIVE_READ=FAIL'
+  set +e
+  read_checkpoint_as_checker --cap-add DAC_READ_SEARCH > /tmp/sr-controller-acceptance/results/checker-dac-read-search.log 2>&1
+  checker_cap_status=$?
+  set -e
+  cat /tmp/sr-controller-acceptance/results/checker-dac-read-search.log
+  echo "CAP_DAC_READ_SEARCH_STATUS=$checker_cap_status"
+  # This is an isolated permissions experiment, not a product change. Parent
+  # publication dir remains mode 0770 and group ownership is unchanged.
+  chmod 0750 "$state/publication/journal.archives"
+  chmod 0640 "$state/publication/journal.archives/"*
+  set +e
+  read_checkpoint_as_checker --group-add "$cloudgid" > /tmp/sr-controller-acceptance/results/checker-group-permissions.log 2>&1
+  checker_group_status=$?
+  set -e
+  cat /tmp/sr-controller-acceptance/results/checker-group-permissions.log
+  echo "GROUP_ADDED_RESTRICTED_ARCHIVE_STATUS=$checker_group_status"
+  chmod 0700 "$state/publication/journal.archives"
+  chmod 0600 "$state/publication/journal.archives/"*
+  echo 'CHECKPOINT_CHECKER_PERMISSION_BROKEN=YES'
+  exit 42
+fi
+cat /tmp/sr-controller-acceptance/results/checker-current-permissions.log
+
 bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/post-write-controller.log 2>&1
 grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/post-write-controller.log
 for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
