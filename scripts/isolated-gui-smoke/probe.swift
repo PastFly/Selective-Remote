@@ -110,6 +110,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     setUniqueField("Название группы", "TEST-ONLY-CODEX-SNIPPET-GROUP")
     pressUnique("AXButton", "Save")
     print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
+    pressUnique("AXButton", "TEST-ONLY-CODEX-SNIPPET-GROUP, 0 сниппетов")
     pressUnique("AXButton", "New Snippet")
     Thread.sleep(forTimeInterval: 3)
     let capture = Process()
@@ -118,6 +119,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     try? capture.run()
     capture.waitUntilExit()
     let system = AXUIElementCreateSystemWide()
+    var hitFields = [AXUIElement]()
     for (x, y) in [(450.0, 153.0), (450.0, 300.0), (250.0, 508.0)] {
         var hit: AXUIElement?
         let status = AXUIElementCopyElementAtPosition(system, Float(x), Float(y), &hit)
@@ -125,7 +127,40 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
             var hitPID: pid_t = 0
             _ = AXUIElementGetPid(hit, &hitPID)
             print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) pidMatch=\(hitPID == pid) role=\(attr(hit, "AXRole") as? String ?? "") description=\(attr(hit, "AXDescription") as? String ?? "") placeholder=\(attr(hit, "AXPlaceholderValue") as? String ?? "")")
+            guard hitPID == pid else { stop("snippet hit outside app") }
+            hitFields.append(hit)
         } else { print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) missing=YES") }
+    }
+    guard hitFields.count == 3,
+          (attr(hitFields[0], "AXRole") as? String) == "AXTextField",
+          (attr(hitFields[1], "AXRole") as? String) == "AXTextArea",
+          (attr(hitFields[2], "AXRole") as? String) == "AXCheckBox",
+          (attr(hitFields[2], "AXDescription") as? String) == "Локальный терминал",
+          CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { stop("unexpected snippet dialog geometry") }
+    func typeSynthetic(_ value: String, in element: AXUIElement) {
+        guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("snippet input access") }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { stop("snippet input focus") }
+        for character in value {
+            guard let stroke = syntheticKeyStroke(character), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                  let down = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: false) else { stop("snippet input event") }
+            let flags: CGEventFlags = stroke.shift ? .maskShift : []
+            down.flags = flags; up.flags = flags; down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.12))
+        }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        guard (attr(element, "AXValue") as? String) == value else { stop("snippet input value mismatch") }
+    }
+    typeSynthetic("TEST-ONLY-CODEX-SNIPPET", in: hitFields[0])
+    typeSynthetic("TEST-ONLY-CODEX-COMMAND", in: hitFields[1])
+    guard AXUIElementPerformAction(hitFields[2], kAXPressAction as CFString) == .success else { stop("snippet target selection") }
+    var ancestor: AXUIElement? = hitFields[0]
+    for _ in 0..<12 {
+        guard let element = ancestor else { break }
+        print("SNIPPET_ANCESTOR role=\(attr(element, "AXRole") as? String ?? "") title=\(attr(element, "AXTitle") as? String ?? "")")
+        ancestor = attr(element, "AXParent").map { unsafeBitCast($0, to: AXUIElement.self) }
     }
     let modalRoots = windows.flatMap { (attr($0, "AXSheets") as? [AXUIElement]) ?? [] }
     print("SNIPPET_MODAL_COUNT=\(modalRoots.count)")
