@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ddf78d436e135a75eb758bab3505e16e70c4133d
+          ref: 4d3153d41bde955dcfe13b8f0ac8a5b28e15a692
       - uses: actions/setup-node@v6
         with:
           node-version: 22.18.0
