@@ -352,7 +352,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
     }
     for element in snapshot(app) {
-        let labels = ["AXTitle", "AXDescription", "AXHelp"].compactMap { attr(element, $0) as? String }
+        let role = attr(element, "AXRole") as? String ?? ""
+        let fields = ["AXTitle", "AXDescription", "AXHelp"] + (role == "AXStaticText" ? ["AXValue"] : [])
+        let labels = fields.compactMap { attr(element, $0) as? String }
         for label in labels where ["error", "failed", "denied", "ошиб", "не удалось"].contains(where: { label.lowercased().contains($0) }) {
             print("SYNTHETIC_SFTP_ERROR_UI=\(label.replacingOccurrences(of: temp, with: "$RUNNER_TEMP"))")
         }
