@@ -524,14 +524,14 @@ jobs:
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
           }
           trap cleanup EXIT
-          "$RUNNER_TEMP/rdp-server/mac-rdp-server" --no-config --bind-addr 127.0.0.1 --port 53389 --test-pattern 800x600 > "$RUNNER_TEMP/evidence/rdp-server.log" 2>&1 &
+          "$RUNNER_TEMP/rdp-server/mac-rdp-server" --no-config --bind-addr 127.0.0.1 --port 3389 --test-pattern 800x600 > "$RUNNER_TEMP/evidence/rdp-server.log" 2>&1 &
           server_pid=$!
           for attempt in {1..30}; do
             kill -0 "$server_pid" || { cat "$RUNNER_TEMP/evidence/rdp-server.log"; exit 1; }
-            if lsof -nP -a -p "$server_pid" -iTCP:53389 -sTCP:LISTEN | grep -q '127.0.0.1:53389'; then break; fi
+            if lsof -nP -a -p "$server_pid" -iTCP:3389 -sTCP:LISTEN | grep -q '127.0.0.1:3389'; then break; fi
             sleep 1
           done
-          lsof -nP -a -p "$server_pid" -iTCP:53389 -sTCP:LISTEN | grep -F '127.0.0.1:53389'
+          lsof -nP -a -p "$server_pid" -iTCP:3389 -sTCP:LISTEN | grep -F '127.0.0.1:3389'
           images=("$RUNNER_TEMP"/candidate/*.dmg)
           test "${#images[@]}" -eq 1
           hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${images[0]}" > "$RUNNER_TEMP/evidence/mount.log"
@@ -540,7 +540,7 @@ jobs:
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           binary="$app/Contents/MacOS/$executable"
           shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/executable-sha256.txt"
-          policy='(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:53389"))'
+          policy='(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:3389"))'
           sandbox-exec -p "$policy" "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
           app_pid=$!
           sleep 12
@@ -553,7 +553,7 @@ jobs:
           for attempt in {1..45}; do
             for child in $(pgrep -P "$app_pid" || true); do
               command=$(ps -p "$child" -o comm=)
-              if [[ "$command" == *'SelectiveRemoteSession' ]] && lsof -nP -a -p "$child" -iTCP -sTCP:ESTABLISHED | grep -q '127.0.0.1:53389'; then
+              if [[ "$command" == *'SelectiveRemoteSession' ]] && lsof -nP -a -p "$child" -iTCP -sTCP:ESTABLISHED | grep -q '127.0.0.1:3389'; then
                 connected="$child"
               fi
             done

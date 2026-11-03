@@ -309,7 +309,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     pressUnique("AXPopUpButton", "Add")
     pressUnique("AXMenuItem", "New RDP")
     setUniqueField("Work Computer", "TEST-ONLY-CODEX-RDP")
-    setUniqueField("server.example.local", "127.0.0.1:53389")
+    setUniqueField("server.example.local", "127.0.0.1")
     let hosts = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-RDP"
     }
