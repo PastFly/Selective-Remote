@@ -96,6 +96,9 @@ bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/resul
 status=$?
 set -e
 cat /tmp/sr-controller-acceptance/results/controller.log
+if grep -q '^deployment_compatibility_failed$' /tmp/sr-controller-acceptance/results/controller.log; then
+  docker run --rm --network cloud_private --read-only --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" --entrypoint node node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b --input-type=module -e 'try { const {default:pg}=await import("/controller/node_modules/pg/lib/index.js"); const {loadConfig}=await import("/controller/src/config.mjs"); const {MigrationFence}=await import("/controller/src/migration-fence.mjs"); const {currentCapabilities,verifyDeploymentCompatibility}=await import("/controller/src/deployment-compatibility.mjs"); const c=loadConfig(),p=new pg.Pool({connectionString:c.databaseURL,max:1}); try {console.log(await verifyDeploymentCompatibility({query:(q,v)=>p.query(q,v),fence:new MigrationFence(c.deployment.fencePath),candidate:currentCapabilities}));} finally {await p.end();} } catch(e) { console.log("DIAGNOSTIC_NAME="+e.name); console.log("DIAGNOSTIC_CODE="+(e.code??"none")); console.log("DIAGNOSTIC_MESSAGE="+e.message); process.exit(1); }' || true
+fi
 [[ $status -ne 0 ]]
 grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/controller.log
 grep -q '^v1_writer_fence_missing$' /tmp/sr-controller-acceptance/results/controller.log
