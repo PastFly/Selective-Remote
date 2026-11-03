@@ -122,6 +122,25 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-pa
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Keychain")
+    let names = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXStaticText" && (attr($0, "AXValue") as? String) == "TEST-ONLY-CODEX-SSH-KEY"
+    }
+    guard names.count == 1, let position = attr(names[0], "AXPosition"), let size = attr(names[0], "AXSize"),
+          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic SSH key row unavailable") }
+    var point = CGPoint.zero, dimensions = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions), dimensions.width > 0, dimensions.height > 0,
+          running.activate(options: [.activateIgnoringOtherApps]) else { stop("synthetic SSH key row geometry") }
+    point.x += dimensions.width / 2; point.y += dimensions.height / 2
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    var hit: AXUIElement?, hitPID: pid_t = 0
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid,
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("synthetic SSH key hit test") }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
