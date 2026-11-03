@@ -31,10 +31,10 @@ jobs:
             cd "$RUNNER_TEMP/candidate"
             printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
           elif [[ "$BUILD_KIND" == candidate ]]; then
-            expected=ddf78d436e135a75eb758bab3505e16e70c4133d
-            actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41620141542 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
+            expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
+            actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41628243576 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
             test "$actual" = "$expected"
-            gh run download 41620141542 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
+            gh run download 41628243576 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
             cd "$RUNNER_TEMP/candidate"
           else
             exit 1
@@ -45,11 +45,11 @@ jobs:
           shasum -a 256 -c "${hashes[0]}"
           shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
           if [[ "$BUILD_KIND" == upgrade ]]; then
-            expected=ddf78d436e135a75eb758bab3505e16e70c4133d
-            actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41620141542 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
+            expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
+            actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41628243576 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
             test "$actual" = "$expected"
             mkdir "$RUNNER_TEMP/upgrade-image"
-            gh run download 41620141542 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/upgrade-image"
+            gh run download 41628243576 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/upgrade-image"
             cd "$RUNNER_TEMP/upgrade-image"
             images=(*.dmg); hashes=(*.dmg.sha256)
             test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
@@ -77,6 +77,10 @@ jobs:
           test -x "$binary"
           shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/executable-sha256.txt"
           cleanup() {
+            local result=$?
+            if [[ "$result" -ne 0 ]]; then
+              screencapture -x "$RUNNER_TEMP/evidence/failure-screen.png" || true
+            fi
             if test -n "${app_pid:-}"; then
               ps -p "$app_pid" -o pid=,ppid=,state=,comm= > "$RUNNER_TEMP/evidence/cleanup-process.txt" 2>&1 || true
               screencapture -x "$RUNNER_TEMP/evidence/cleanup-screen.png" || true
