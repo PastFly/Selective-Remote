@@ -83,11 +83,13 @@ anchor_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
 anchor_name=sr-anchor-independent-test
 anchor_gateway=$(docker network inspect cloud_private --format '{{(index .IPAM.Config 0).Gateway}}')
 [[ "$anchor_gateway" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+anchor_host="sr-anchor-${anchor_gateway//./-}.sslip.io"
+getent ahostsv4 "$anchor_host" | awk '{print $1}' | grep -Fx "$anchor_gateway" >/dev/null
 mkdir -p /tmp/sr-controller-acceptance/anchor-certs
 chmod 755 /tmp/sr-controller-acceptance /tmp/sr-controller-acceptance/anchor-certs
 openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/sr-controller-acceptance/anchor-certs/ca.key -out /tmp/sr-controller-acceptance/anchor-certs/ca.crt -subj '/CN=TEST ONLY ANCHOR CA' -days 1 >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -keyout /tmp/sr-controller-acceptance/anchor-certs/server.key -out /tmp/sr-controller-acceptance/anchor-certs/server.csr -subj '/CN=TEST ONLY ANCHOR' >/dev/null 2>&1
-printf 'subjectAltName=IP:%s\nextendedKeyUsage=serverAuth\n' "$anchor_gateway" > /tmp/sr-controller-acceptance/anchor-certs/extensions
+printf 'subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\n' "$anchor_host" > /tmp/sr-controller-acceptance/anchor-certs/extensions
 openssl x509 -req -in /tmp/sr-controller-acceptance/anchor-certs/server.csr -CA /tmp/sr-controller-acceptance/anchor-certs/ca.crt -CAkey /tmp/sr-controller-acceptance/anchor-certs/ca.key -CAcreateserial -days 1 -extfile /tmp/sr-controller-acceptance/anchor-certs/extensions -out /tmp/sr-controller-acceptance/anchor-certs/server.crt >/dev/null 2>&1
 chown "$uid:$gid" /tmp/sr-controller-acceptance/anchor-certs/server.key
 chmod 600 /tmp/sr-controller-acceptance/anchor-certs/server.key
@@ -99,7 +101,7 @@ docker exec "$anchor_name" pg_isready -U sradmin -d sranchor >/dev/null
 docker exec -i "$anchor_name" psql -U sradmin -d sranchor -v ON_ERROR_STOP=1 < "$cloud/scripts/independent-fence-anchor.sql" >/dev/null
 genesis=$(node --input-type=module -e 'import {fenceHistoryHead} from "./cloud/src/fence-history-head.mjs";console.log(fenceHistoryHead([]).digest)')
 docker exec "$anchor_name" psql -U sradmin -d sranchor -v ON_ERROR_STOP=1 -c "CREATE ROLE sr_anchor_runtime LOGIN PASSWORD 'synthetic-anchor-runtime'; GRANT USAGE ON SCHEMA selective_remote_anchor TO sr_anchor_runtime; GRANT EXECUTE ON FUNCTION selective_remote_anchor.read_head(uuid), selective_remote_anchor.advance_head(uuid,bigint,text,text) TO sr_anchor_runtime; INSERT INTO selective_remote_anchor.heads(deployment_id,position,digest) VALUES ('$anchor_id',0,'$genesis');" >/dev/null
-printf 'PUBLICATION_FENCE_ANCHOR_URL=postgresql://sr_anchor_runtime:synthetic-anchor-runtime@%s:15432/sranchor\nPUBLICATION_FENCE_ANCHOR_ID=%s\nPUBLICATION_FENCE_ANCHOR_CA_BASE64=%s\n' "$anchor_gateway" "$anchor_id" "$(base64 -w 0 /tmp/sr-controller-acceptance/anchor-certs/ca.crt)" >> "$cloud/.env"
+printf 'PUBLICATION_FENCE_ANCHOR_URL=postgresql://sr_anchor_runtime:synthetic-anchor-runtime@%s:15432/sranchor\nPUBLICATION_FENCE_ANCHOR_ID=%s\nPUBLICATION_FENCE_ANCHOR_CA_BASE64=%s\n' "$anchor_host" "$anchor_id" "$(base64 -w 0 /tmp/sr-controller-acceptance/anchor-certs/ca.crt)" >> "$cloud/.env"
 echo 'SYNTHETIC_TLS_ANCHOR_CONFIGURED=YES'
 touch "$state/publication/journal"
 chmod 644 "$state/publication/journal"
