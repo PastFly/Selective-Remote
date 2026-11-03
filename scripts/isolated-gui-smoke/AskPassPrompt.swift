@@ -42,6 +42,7 @@ func focusedPID() -> pid_t? {
     return AXUIElementGetPid(unsafeBitCast(focused, to: AXUIElement.self), &pid) == .success ? pid : nil
 }
 let deadline = Date(timeIntervalSinceNow: 35)
+var reported = Set<String>()
 while Date() < deadline {
     guard kill(appPID, 0) == 0 else { fail("target app terminated") }
     guard CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { fail("unexpected prompt geometry") }
@@ -50,7 +51,15 @@ while Date() < deadline {
         var pid: pid_t = 0
         if AXUIElementGetPid(hit, &pid) == .success, pid > 1 {
             var buffer = [CChar](repeating: 0, count: 4096)
-            if buffer.withUnsafeMutableBytes({ pathFn(pid, $0.baseAddress!, UInt32($0.count)) }) > 0,
+            let count = buffer.withUnsafeMutableBytes({ pathFn(pid, $0.baseAddress!, UInt32($0.count)) })
+            if count > 0 {
+                let processPath = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+                let role = (attribute(hit, "AXRole") as? String) ?? ""
+                let placeholder = (attribute(hit, "AXPlaceholderValue") as? String) ?? ""
+                let diagnostic = "SYNTHETIC_ASKPASS_HIT role=\(role) placeholder=\(placeholder) helperMatch=\(processPath == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path) process=\(URL(fileURLWithPath: processPath).lastPathComponent)"
+                if reported.insert(diagnostic).inserted { print(diagnostic) }
+            }
+            if count > 0,
                URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path,
                (attribute(hit, "AXRole") as? String) == "AXTextField",
                (attribute(hit, "AXPlaceholderValue") as? String) == "Passphrase" {
