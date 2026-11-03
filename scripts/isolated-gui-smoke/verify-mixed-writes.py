@@ -9,6 +9,8 @@ LATE = {'friendlyName': 'TEST-ONLY-CODEX-LATE-HOST', 'group': 'TEST-ONLY-CODEX-M
         'host': '192.0.2.11', 'username': 'test'}
 NEW = {'friendlyName': 'TEST-ONLY-CODEX-CURRENT-HOST', 'group': 'TEST-ONLY-CODEX-MIXED-FOLDER',
        'host': '192.0.2.12', 'username': 'test'}
+LIVE_OLD = {**LATE, 'friendlyName': 'TEST-ONLY-CODEX-LIVE-OLD', 'host': '192.0.2.13'}
+LIVE_NEW = {**NEW, 'friendlyName': 'TEST-ONLY-CODEX-LIVE-NEW', 'host': '192.0.2.14'}
 
 
 def profiles(domain, key):
@@ -32,29 +34,31 @@ def find(values, expected):
     return found[0][0]
 
 
-if len(sys.argv) != 4 or sys.argv[1] not in ('late', 'current'):
-    raise SystemExit('usage: verify-mixed-writes.py late|current BEFORE AFTER')
+if len(sys.argv) != 4 or sys.argv[1] not in ('late', 'current', 'live-old', 'live-current'):
+    raise SystemExit('usage: verify-mixed-writes.py late|current|live-old|live-current BEFORE AFTER')
 with open(sys.argv[2], 'rb') as stream:
     before = plistlib.load(stream)
 with open(sys.argv[3], 'rb') as stream:
     after = plistlib.load(stream)
 old_before, old_after = profiles(before, LEGACY), profiles(after, LEGACY)
 new_before, new_after = profiles(before, CURRENT), profiles(after, CURRENT)
-if sys.argv[1] == 'late':
-    late_id = find(old_after, LATE)
+if sys.argv[1] in ('late', 'live-old'):
+    expected = LATE if sys.argv[1] == 'late' else LIVE_OLD
+    late_id = find(old_after, expected)
     if late_id in old_before or {k: v for k, v in old_after.items() if k != late_id} != old_before:
         raise SystemExit('legacy mutation was not one synthetic addition')
     if new_after != new_before:
         raise SystemExit('new-version profiles changed during downgrade write')
-    print(json.dumps({'baselineHost': {'id': late_id, **LATE}, 'lateLegacyWritePersisted': True,
+    print(json.dumps({'baselineHost': {'id': late_id, **expected}, 'lateLegacyWritePersisted': True,
                       'currentCollectionUnchanged': True}))
 else:
-    late_id = find(old_after, LATE)
-    current_id = find(new_after, NEW)
+    expected_old, expected_new = (LATE, NEW) if sys.argv[1] == 'current' else (LIVE_OLD, LIVE_NEW)
+    late_id = find(old_after, expected_old)
+    current_id = find(new_after, expected_new)
     if old_after != old_before:
         raise SystemExit('current write modified the legacy collection')
     if current_id in new_before or {k: v for k, v in new_after.items() if k != current_id} != new_before:
         raise SystemExit('current mutation was not one synthetic addition')
-    print(json.dumps({'baselineHost': {'id': current_id, **NEW}, 'lateLegacyProfileStillRetained': True, 'currentWritePersisted': True,
+    print(json.dumps({'baselineHost': {'id': current_id, **expected_new}, 'lateLegacyProfileStillRetained': True, 'currentWritePersisted': True,
                       'lateLegacyProfilePresentInCurrent': late_id in new_after,
                       'legacyCollectionUnchangedByCurrent': True, 'mixedVersionSafetyVerified': False}))

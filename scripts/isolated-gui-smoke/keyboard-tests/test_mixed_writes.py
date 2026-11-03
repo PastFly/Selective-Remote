@@ -47,6 +47,19 @@ class MixedWrites(unittest.TestCase):
         self.assertFalse(json.loads(result.stdout)['lateLegacyProfilePresentInCurrent'])
         self.assertNotEqual(self.check('current', before, {OLD: [original], NEW: [original, current]}).returncode, 0)
 
+    def test_live_process_writes_preserve_each_separate_collection(self):
+        original = host('original', '192.0.2.10')
+        old = host('TEST-ONLY-CODEX-LIVE-OLD', '192.0.2.13')
+        new = host('TEST-ONLY-CODEX-LIVE-NEW', '192.0.2.14')
+        before = {OLD: [original], NEW: [original]}
+        after_old = {OLD: [original, old], NEW: [original]}
+        after_both = {OLD: [original, old], NEW: [original, new]}
+        self.assertEqual(self.check('live-old', before, after_old).returncode, 0)
+        result = self.check('live-current', after_old, after_both)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(json.loads(result.stdout)['lateLegacyProfilePresentInCurrent'])
+        self.assertNotEqual(self.check('live-current', after_old, {OLD: [original], NEW: [original, new]}).returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

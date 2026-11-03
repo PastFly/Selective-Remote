@@ -102,6 +102,8 @@ jobs:
               screencapture -x "$RUNNER_TEMP/evidence/cleanup-screen.png" || true
               kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true
             fi
+            if test -n "${app_pid2:-}"; then kill "$app_pid2" 2>/dev/null || true; wait "$app_pid2" 2>/dev/null || true; fi
+            if test -d "$RUNNER_TEMP/candidate-mount2"; then hdiutil detach "$RUNNER_TEMP/candidate-mount2" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true; fi
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
@@ -283,6 +285,43 @@ jobs:
                 app_pid=""
                 defaults export "$bundle" "$RUNNER_TEMP/after-second-downgrade.plist"
                 python3 scripts/isolated-gui-smoke/verify-downgrade.py "$RUNNER_TEMP/after-current.plist" "$RUNNER_TEMP/after-second-downgrade.plist" | tee "$RUNNER_TEMP/evidence/second-downgrade-persistence.json"
+                for version in 031 032; do
+                  if [[ "$version" == 031 ]]; then report=late-persistence.json; else report=mixed-persistence.json; fi
+                  python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$RUNNER_TEMP/evidence/$report" > "$RUNNER_TEMP/evidence/after-second-downgrade-keychain-$version.log" 2>&1 &
+                  probe_pid=$!
+                  python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe
+                  wait "$probe_pid"
+                  cat "$RUNNER_TEMP/evidence/after-second-downgrade-keychain-$version.log"
+                done
+                mount2="$RUNNER_TEMP/candidate-mount2"
+                mkdir "$mount2"
+                hdiutil attach -readonly -nobrowse -mountpoint "$mount2" "${upgraded_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
+                app2="$mount2/Selective Remote.app"
+                codesign --verify --deep --strict "$app2"
+                executable2=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app2/Contents/Info.plist")
+                binary2="$app2/Contents/MacOS/$executable2"
+                sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/live-old-app.log" 2>&1 &
+                app_pid=$!
+                sleep 12
+                sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/live-current-app.log" 2>&1 &
+                app_pid2=$!
+                sleep 12
+                kill -0 "$app_pid" && kill -0 "$app_pid2"
+                printf '%s\n' 'BOTH_SYNTHETIC_APP_PROCESSES_ALIVE=YES' | tee "$RUNNER_TEMP/evidence/live-processes.log"
+                SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --create-live-old | tee "$RUNNER_TEMP/evidence/live-old-ui.log"
+                kill -0 "$app_pid" && kill -0 "$app_pid2"
+                defaults export "$bundle" "$RUNNER_TEMP/after-live-old.plist"
+                python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/after-second-downgrade.plist" "$RUNNER_TEMP/after-live-old.plist" | tee "$RUNNER_TEMP/evidence/live-old-persistence.json"
+                SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$(shasum -a 256 "$binary2" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-app-probe" "$app_pid2" --create-live-current | tee "$RUNNER_TEMP/evidence/live-current-ui.log"
+                kill -0 "$app_pid" && kill -0 "$app_pid2"
+                SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$(shasum -a 256 "$binary2" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid2" --terminate
+                wait "$app_pid2" || true
+                app_pid2=""
+                SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+                wait "$app_pid" || true
+                app_pid=""
+                defaults export "$bundle" "$RUNNER_TEMP/after-live-both.plist"
+                python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after-live-old.plist" "$RUNNER_TEMP/after-live-both.plist" | tee "$RUNNER_TEMP/evidence/live-current-persistence.json"
                 exit 0
               fi
               SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-baseline | tee "$RUNNER_TEMP/evidence/downgrade-ui.log"
