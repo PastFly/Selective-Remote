@@ -121,7 +121,18 @@ if CommandLine.arguments.count == 3 && ["--inspect-passphrase", "--add-passphras
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
-    pressUnique("AXButton", "Keychain")
+    if env["SR_PASSPHRASE_CANDIDATE"] == "1" {
+        let tools = snapshot(app).filter { element in
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "Tools" } &&
+            ["AXMenuButton", "AXPopUpButton", "AXButton"].contains(attr(element, "AXRole") as? String ?? "")
+        }
+        guard tools.count == 1 else { stop("unique Tools menu unavailable") }
+        guard AXUIElementPerformAction(tools[0], kAXPressAction as CFString) == .success else { stop("Tools menu action") }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        pressUnique("AXMenuItem", "Keychain")
+    } else {
+        pressUnique("AXButton", "Keychain")
+    }
     let names = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXStaticText" && (attr($0, "AXValue") as? String) == "TEST-ONLY-CODEX-SSH-KEY"
     }

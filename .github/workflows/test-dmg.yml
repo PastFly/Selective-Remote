@@ -194,7 +194,7 @@ jobs:
             app_pid=$!
             sleep 12
             kill -0 "$app_pid"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 55 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --add-passphrase | tee "$RUNNER_TEMP/evidence/passphrase-upgrade-ui.log"
+            SR_PASSPHRASE_CANDIDATE=1 SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 55 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --add-passphrase | tee "$RUNNER_TEMP/evidence/passphrase-upgrade-ui.log"
             for attempt in {1..30}; do
               if /usr/bin/ssh-add -l 2>/dev/null | grep -Fq "$fingerprint"; then break; fi
               sleep 1
