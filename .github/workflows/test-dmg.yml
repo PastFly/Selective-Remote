@@ -1,41 +1,65 @@
-name: Isolated macOS GUI capability probe
+name: Isolated candidate GUI launch smoke
 on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  probe:
+  smoke:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Probe isolated runner GUI capabilities
+      - uses: actions/checkout@v6
+      - name: Fetch exact candidate artifact and check provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          cat > "$RUNNER_TEMP/gui-probe.swift" <<'SWIFT'
-          import AppKit
-          import ApplicationServices
-          import CoreGraphics
-          import Foundation
-
-          let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
-          print("GUI_SESSION_PRESENT=\(!session.isEmpty)")
-          let onConsole = session["kCGSSessionOnConsoleKey"] as? Bool ?? false
-          print("GUI_SESSION_ON_CONSOLE=\(onConsole)")
-          print("ACCESSIBILITY_TRUSTED=\(AXIsProcessTrusted())")
-          print("SCREEN_CAPTURE_ALLOWED=\(CGPreflightScreenCaptureAccess())")
-          print("EVENT_POST_ALLOWED=\(CGPreflightPostEventAccess())")
-          let application = NSApplication.shared
-          application.setActivationPolicy(.regular)
-          let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 320, height: 200),
-                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
-          window.title = "Synthetic GUI capability probe"
-          window.orderFront(nil)
-          application.activate(ignoringOtherApps: true)
-          RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
-          print("SYNTHETIC_WINDOW_NUMBER_VALID=\(window.windowNumber > 0)")
-          print("SYNTHETIC_WINDOW_VISIBLE=\(window.isVisible)")
-          window.close()
-          print("PRODUCT_E2E=NOT_RUN")
-          SWIFT
-          swiftc "$RUNNER_TEMP/gui-probe.swift" -o "$RUNNER_TEMP/gui-probe"
-          "$RUNNER_TEMP/gui-probe"
+          set -euo pipefail
+          expected=ddf78d436e135a75eb758bab3505e16e70c4133d
+          actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41620141542 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
+          test "$actual" = "$expected"
+          mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
+          gh run download 41620141542 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
+          cd "$RUNNER_TEMP/candidate"
+          shopt -s nullglob
+          images=(*.dmg); hashes=(*.dmg.sha256)
+          test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
+          shasum -a 256 -c "${hashes[0]}"
+          shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
+      - name: Launch actual app in the disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=("$RUNNER_TEMP"/candidate/*.dmg)
+          mount="$RUNNER_TEMP/candidate-mount"
+          mkdir "$mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${images[0]}" > "$RUNNER_TEMP/evidence/mount.log"
+          app="$mount/Selective Remote.app"
+          test -d "$app"
+          codesign --verify --deep --strict --verbose=2 "$app" 2>&1 | tee "$RUNNER_TEMP/evidence/codesign.log"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          binary="$app/Contents/MacOS/$executable"
+          test -x "$binary"
+          shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/executable-sha256.txt"
+          cleanup() {
+            if test -n "${app_pid:-}"; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
+          }
+          trap cleanup EXIT
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
+          app_pid=$!
+          sleep 12
+          kill -0 "$app_pid"
+          swiftc scripts/isolated-gui-smoke/probe.swift -o "$RUNNER_TEMP/gui-app-probe"
+          "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
+          screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
+      - name: Upload synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-candidate-gui-smoke
+          path: ${{ runner.temp }}/evidence/
+          if-no-files-found: error
+          retention-days: 7
