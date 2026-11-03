@@ -129,12 +129,16 @@ export class MigrationFence{
   await this.assertUnlocked();
   const file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
   try{
-   const records=await this.records(file);await this.assertAnchor(records);
+   const before=await file.stat(),records=await this.records(file);
+   await this.assertAnchor(records);
    const snapshot=reduceFenceEvents(records);
    if(snapshot.pending.length||snapshot.v1Pending?.length)throw Error('deployment_fence_pending');
    await file.sync();
    const dir=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);
    try{await dir.sync();}finally{await dir.close();}
+   const after=await file.stat(),current=await lstat(this.path);
+   if(before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs
+      ||current.dev!==after.dev||current.ino!==after.ino)throw Error('deployment_fence_changed');
    await this.assertUnlocked();return true;
   }finally{await file.close();}
  });}

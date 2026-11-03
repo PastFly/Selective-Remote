@@ -168,3 +168,16 @@ test('31 archived segments retain exact order and reject a missing middle segmen
  assert.deepEqual(await fence.readRecords(),all);
  await rm(join(path+'.archives',digests[15]));await assert.rejects(fence.snapshot(),/corrupt_deployment_fence/);
 });
+
+test('assertWritable rejects a concurrent unresolved intent completed between both lock checks',async t=>{
+ const {path}=await fixture(t),writer=new MigrationFence(path);for(const event of pair())await writer.append(event);
+ let release,notify;const entered=new Promise(r=>{notify=r;}),resume=new Promise(r=>{release=r;});
+ const openFile=async(...args)=>{const h=await fsOpen(...args);return new Proxy(h,{get(target,key){
+  if(key==='readFile'&&args[0]===path)return async(...rest)=>{const bytes=await target.readFile(...rest);notify();await resume;return bytes;};
+  const value=target[key];return typeof value==='function'?value.bind(target):value;
+ }});};
+ const gate=new MigrationFence(path,{openFile}),checking=gate.assertWritable();await entered;
+ const [pending]=pair();await writer.append(pending);release();
+ await assert.rejects(checking,/deployment_fence_changed/);
+ assert.equal((await writer.snapshot()).pending.length,1);
+});
