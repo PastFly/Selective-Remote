@@ -1,6 +1,7 @@
-import {open, mkdir, rmdir, lstat} from 'node:fs/promises';
+import {open, mkdir, rmdir, lstat, rename} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {dirname, isAbsolute} from 'node:path';
+import {createHash,randomUUID} from 'node:crypto';
 import {FENCE_MAX_BYTES,validateFenceEvent,reduceFenceEvents} from './migration-fence-journal.mjs';
 import {fenceHistoryHead,sameFenceHistoryHead} from './fence-history-head.mjs';
 
@@ -21,15 +22,74 @@ export class MigrationFence{
   const current=await this.anchor.read();
   if(!sameFenceHistoryHead(current,fenceHistoryHead(records)))throw Error('deployment_anchor_mismatch');
  }
- async records(file,{validateHistory=true}={}){
+ async #segment(file){
   const stat=await file.stat();
   if(!stat.isFile()||stat.size>FENCE_MAX_BYTES)throw Error('corrupt_deployment_fence');
   const bytes=await file.readFile();
   if(bytes.length>FENCE_MAX_BYTES||(bytes.length&&bytes.at(-1)!==10))throw Error('corrupt_deployment_fence');
   let parsed;try{parsed=bytes.length?bytes.toString('utf8').slice(0,-1).split('\n').map(line=>JSON.parse(line)):[];}
   catch{throw Error('corrupt_deployment_fence');}
-  const records=parsed.map(validateFenceEvent);if(validateHistory)reduceFenceEvents(records);return records;
+  return {bytes,parsed};
  }
+ async records(file,{validateHistory=true}={}){
+  let {parsed}=await this.#segment(file);
+  const segments=[],seen=new Set();
+  while(parsed[0]?.version===3){
+   const marker=parsed[0];
+   if(Object.keys(marker).sort().join(',')!=='archiveDigest,type,version'||marker.type!=='ARCHIVE_CHECKPOINT'
+    ||typeof marker.archiveDigest!=='string'||!/^[a-f0-9]{64}$/u.test(marker.archiveDigest)||seen.has(marker.archiveDigest))throw Error('corrupt_deployment_fence');
+   seen.add(marker.archiveDigest);segments.push(parsed.slice(1));
+   const directory=this.path+'.archives',stat=await lstat(directory).catch(()=>null);
+   if(!stat?.isDirectory()||stat.isSymbolicLink())throw Error('corrupt_deployment_fence');
+   const archive=await this.openFile(directory+'/'+marker.archiveDigest,constants.O_RDONLY|constants.O_NOFOLLOW).catch(()=>{throw Error('corrupt_deployment_fence');});
+   try{const segment=await this.#segment(archive);if(createHash('sha256').update(segment.bytes).digest('hex')!==marker.archiveDigest)throw Error('corrupt_deployment_fence');parsed=segment.parsed;}
+   finally{await archive.close();}
+  }
+  segments.push(parsed);const records=segments.reverse().flat().map(validateFenceEvent);
+  if(validateHistory)reduceFenceEvents(records);return records;
+ }
+ // No production cutover may call this until the independent high-water anchor
+ // validates the complete logical history before and after checkpoint recovery.
+ async compact(){return this.#enqueue(async()=>{
+  const directory=dirname(this.path),dirStat=await lstat(directory);
+  if(!dirStat.isDirectory()||dirStat.isSymbolicLink())throw Error('invalid_deployment_fence_directory');
+  const lock=this.path+'.lock';let acquired=false,retain=false,file;
+  for(let n=0;n<100;n++){
+   try{await mkdir(lock,{mode:0o700});acquired=true;break;}
+   catch(e){if(e.code!=='EEXIST')throw e;await new Promise(r=>setTimeout(r,10));}
+  }
+  if(!acquired)throw Error('deployment_fence_locked');
+  try{
+   file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
+   const events=await this.records(file),state=reduceFenceEvents(events);
+   if(state.pending.length||state.v1Pending?.length)throw Error('deployment_fence_pending');
+   await file.sync();
+   await file.close();file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
+   const {bytes,parsed}=await this.#segment(file);
+   if(!bytes.length||(parsed.length===1&&parsed[0]?.version===3))throw Error('deployment_fence_empty');
+   const digest=createHash('sha256').update(bytes).digest('hex'),archiveDir=this.path+'.archives';
+   try{await mkdir(archiveDir,{mode:0o700});retain=true;const parent=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);try{await parent.sync();}finally{await parent.close();}}
+   catch(e){if(e.code!=='EEXIST')throw e;}
+   const aStat=await lstat(archiveDir);if(!aStat.isDirectory()||aStat.isSymbolicLink())throw Error('invalid_deployment_fence_directory');
+   let archive;
+   try{
+    try{archive=await this.openFile(archiveDir+'/'+digest,constants.O_RDWR|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);retain=true;
+     for(let at=0;at<bytes.length;){const {bytesWritten}=await archive.write(bytes,at,bytes.length-at,at);if(!Number.isSafeInteger(bytesWritten)||bytesWritten<=0)throw Error('deployment_fence_short_write');at+=bytesWritten;}}
+    catch(e){if(e.code!=='EEXIST')throw e;archive=await this.openFile(archiveDir+'/'+digest,constants.O_RDONLY|constants.O_NOFOLLOW);const stored=await archive.readFile();if(!stored.equals(bytes))throw Error('corrupt_deployment_fence');}
+    await archive.sync();
+   }finally{await archive?.close();}
+   const archives=await this.openFile(archiveDir,constants.O_RDONLY|constants.O_NOFOLLOW);try{await archives.sync();}finally{await archives.close();}
+   const marker=Buffer.from(JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n');
+   const temp=this.path+'.checkpoint-'+randomUUID();let staged;
+   try{staged=await this.openFile(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);retain=true;
+    for(let at=0;at<marker.length;){const {bytesWritten}=await staged.write(marker,at,marker.length-at,at);if(!Number.isSafeInteger(bytesWritten)||bytesWritten<=0)throw Error('deployment_fence_short_write');at+=bytesWritten;}
+    await staged.sync();
+   }finally{await staged?.close();}
+   await rename(temp,this.path);
+   const parent=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);try{await parent.sync();}finally{await parent.close();}
+   retain=false;return {originalBytes:bytes.length,archiveDigest:digest};
+  }finally{await file?.close();if(!retain)await rmdir(lock);}
+ });}
  async intent(record){
   const validated=validateFenceEvent(record);
   if(validated.version)throw Error('invalid_deployment_fence');
@@ -132,19 +192,23 @@ export class MigrationFence{
   try{await lstat(this.path+'.lock');}catch(e){if(e.code==='ENOENT')return;throw e;}
   throw Error('deployment_fence_locked');
  }
- async readRecords(){
-  await this.assertUnlocked();
-  const file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
-  try{const records=await this.records(file);await this.assertAnchor(records);await this.assertUnlocked();return records;}finally{await file.close();}
- }
- async snapshot(){
+ async #readStable(){
   await this.assertUnlocked();
   const file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
   try{
-   const records=await this.records(file,{validateHistory:false});await this.assertAnchor(records);
-   const snapshot=reduceFenceEvents(records);
-   await this.assertUnlocked();return snapshot;
+   const before=await file.stat(),records=await this.records(file);
+   await this.assertAnchor(records);
+   const after=await file.stat(),current=await lstat(this.path);
+   if(before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs
+      ||current.dev!==after.dev||current.ino!==after.ino)throw Error('deployment_fence_changed');
+   await this.assertUnlocked();return records;
   }finally{await file.close();}
+ }
+ async readRecords(){
+  return this.#readStable();
+ }
+ async snapshot(){
+  return reduceFenceEvents(await this.#readStable());
  }
  async verifySchemaFloor(schemaVersion){return verifySchemaFloor(schemaVersion,await this.snapshot());}
  async verify({schemaVersion,publications}){
