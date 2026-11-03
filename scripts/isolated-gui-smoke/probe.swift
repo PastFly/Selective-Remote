@@ -117,7 +117,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     capture.arguments = ["-x", temp + "/evidence/snippet-editor-screen.png"]
     try? capture.run()
     capture.waitUntilExit()
-    for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
+    let modalRoots = windows.flatMap { (attr($0, "AXSheets") as? [AXUIElement]) ?? [] }
+    print("SNIPPET_MODAL_COUNT=\(modalRoots.count)")
+    for element in modalRoots.flatMap({ snapshot($0) }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
         let description = attr(element, "AXDescription") as? String ?? ""
