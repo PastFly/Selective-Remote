@@ -71,6 +71,33 @@ jobs:
         working-directory: cloud
         run: npm ci
 
+      - name: Test separately running TLS fence anchor
+        working-directory: cloud
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/fence-anchor-test"
+          mkdir -m 755 "$certdir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout "$certdir/server.key" -out "$certdir/server.crt" >/dev/null 2>&1
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          uid=$(docker run --rm --entrypoint id "$image" -u postgres)
+          chmod 600 "$certdir/server.key"
+          sudo chown "$uid" "$certdir/server.key"
+          trap 'docker rm -f sr-test-fence-anchor >/dev/null 2>&1 || true' EXIT
+          docker run -d --name sr-test-fence-anchor -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=sranchor -e POSTGRES_PASSWORD=integration-only-anchor -e POSTGRES_DB=postgres \
+            -v "$certdir:/certs:ro" "$image" -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key >/dev/null
+          for attempt in {1..30}; do
+            if docker exec sr-test-fence-anchor pg_isready -U sranchor -d postgres >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec sr-test-fence-anchor pg_isready -U sranchor -d postgres >/dev/null
+          SR_TEST_ANCHOR_DATABASE_URL='postgresql://sranchor:integration-only-anchor@127.0.0.1:55432/postgres' \
+          SR_TEST_ANCHOR_TLS_URL='postgresql://sranchor:integration-only-anchor@127.0.0.1:55432/postgres' \
+          SR_TEST_ANCHOR_TLS_CA="$certdir/server.crt" node --test --test-concurrency=1 \
+            tests/v1-independent-anchor-postgres.test.mjs tests/v1-independent-anchor-tls.test.mjs \
+            tests/migration-fence-anchored-compact.test.mjs tests/migration-fence-retention.test.mjs tests/migration-fence-retention-bounds.test.mjs
+
       - name: Test mobile Cloud status layout
         working-directory: cloud
         run: |

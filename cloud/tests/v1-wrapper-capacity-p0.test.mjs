@@ -23,11 +23,12 @@ test('wrapper batch reserves sufficient space for its terminal record before adm
   await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:[original]});await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
   const intent={version:2,type:'V1_WRAPPER_BATCH_PENDING_INTENT',intentID:randomUUID(),operationID:randomUUID(),changes:[{...original,beforeEnvelopeHash:original.envelopeHash,envelopeHash:'c'.repeat(64)}]};
   const terminal={version:2,type:'V1_CONFIRMED_COMMIT',intentID:intent.intentID,intentDigest:fenceIntentDigest(intent)};
-  const prefix=await readFile(file),floor=Buffer.from(JSON.stringify({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1})+'\n'),line=Buffer.byteLength(JSON.stringify(intent)+'\n'),end=Buffer.byteLength(JSON.stringify(terminal)+'\n');
-  const fill=count=>Buffer.concat([prefix,Buffer.from(floor.toString().repeat(count))]);
-  const tooMany=Math.floor((FENCE_MAX_BYTES-prefix.length-line)/floor.length),blocked=fill(tooMany);await writeFile(file,blocked);
+  const prefix=await readFile(file),floor=Buffer.from(JSON.stringify({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1})+' '.repeat(128)+'\n'),line=Buffer.byteLength(JSON.stringify(intent)+'\n'),end=Buffer.byteLength(JSON.stringify(terminal)+'\n');
+  const fill=size=>{const count=Math.floor((size-prefix.length)/floor.length),extra=size-prefix.length-count*floor.length;
+   return Buffer.concat([prefix,Buffer.from(floor.toString().repeat(count-1)),floor.subarray(0,-1),Buffer.from(' '.repeat(extra)+'\n')]);};
+  const blocked=fill(FENCE_MAX_BYTES-line);await writeFile(file,blocked);
   await assert.rejects(fence.append(intent),/deployment_fence_limit/);assert.deepEqual(await readFile(file),blocked);
-  const allowed=Math.floor((FENCE_MAX_BYTES-prefix.length-line-end)/floor.length);await writeFile(file,fill(allowed));
+  const allowed=FENCE_MAX_BYTES-line-end;await writeFile(file,fill(allowed));
   await fence.append(intent);await fence.append(terminal);assert.equal((await fence.snapshot()).v1Pending.length,0);
  }finally{await rm(dir,{recursive:true,force:true});}
 });

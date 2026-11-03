@@ -204,7 +204,7 @@ export class MigrationFence{
    const dir=await this.openFile(directory,constants.O_RDONLY);
    try{await dir.sync();}finally{await dir.close();}
    if(this.anchor&&anchorNext&&!sameFenceHistoryHead(anchorPrevious,anchorNext))
-    await this.anchor.advance(anchorPrevious,anchorNext);
+    await this.anchor.advance(anchorPrevious,anchorNext,record);
    retain=false;
   }finally{
    if(retain)this.#recovery={key,ino:identity.ino,dev:identity.dev,anchorPrevious,anchorNext};

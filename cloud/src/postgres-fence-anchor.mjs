@@ -1,4 +1,5 @@
-import {sameFenceHistoryHead} from './fence-history-head.mjs';
+import {nextFenceHistoryHead,sameFenceHistoryHead} from './fence-history-head.mjs';
+import {validateFenceEvent} from './migration-fence-journal.mjs';
 
 // The pool must connect to a separately administered durable primary. The
 // runtime role receives EXECUTE on these functions, never direct table rights.
@@ -19,11 +20,12 @@ export class PostgresFenceAnchor {
   if(!sameFenceHistoryHead(head,head))throw Error('invalid_deployment_anchor');
   return head;
  }
- async advance(before,after){
+ async advance(before,after,event){
   if(!sameFenceHistoryHead(before,before)||!sameFenceHistoryHead(after,after)
-   ||after.position!==before.position+1)throw Error('invalid_deployment_anchor');
-  const result=await this.queryable.query('SELECT selective_remote_anchor.advance_head($1::uuid,$2::bigint,$3::text,$4::bigint,$5::text) AS advanced',
-   [this.deploymentID,before.position,before.digest,after.position,after.digest]);
+   ||!sameFenceHistoryHead(nextFenceHistoryHead(before,event),after))throw Error('invalid_deployment_anchor');
+  const encoded=JSON.stringify(validateFenceEvent(event))+'\n';
+  const result=await this.queryable.query('SELECT selective_remote_anchor.advance_head($1::uuid,$2::bigint,$3::text,$4::text) AS advanced',
+   [this.deploymentID,before.position,before.digest,encoded]);
   if(result?.rows?.length!==1||result.rows[0].advanced!==true)throw Error('deployment_anchor_unavailable');
  }
 }

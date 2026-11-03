@@ -19,8 +19,11 @@ and EXECUTE on the read/advance functions. The runtime identity must not own the
 schema, functions or table and must have no ability to alter, delete, restore,
 truncate or provision anchor rows. The administrator and the anchor service's
 storage are trusted: compromise, rollback, or dishonest re-provisioning of the
-anchor itself is outside this model. Compromise of a runtime writer can deny
-service by raising the anchor, but cannot lower it through these functions.
+anchor itself is outside this model. The service computes each successor hash
+itself from the retained previous digest and event bytes; the runtime cannot
+submit an arbitrary successor digest through these functions. A compromised
+runtime can still create malicious new writes or deny service, and this anchor
+does not claim to protect against those authorized operations.
 
 The logical history hash is SHA-256 chained over validated events and ordinal,
 not the on-disk active segment layout. A checkpoint must retain the entire
