@@ -80,6 +80,10 @@ chmod 600 "$root/settings.json"
 # A restore from before fence activation must not be served against retained successor journal.
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/old.dump >/tmp/sr-controller-acceptance/restore.log 2>&1
 before=$(sha256sum "$state/publication/journal" | cut -d ' ' -f 1)
+for probe in / /opt "$root" "$root/settings.json" "$root/bundle.sha256" /var /var/lib "$state" "$state/publication" /var/backups /var/backups/sr-acceptance /opt/selective-remote "$cloud" "$cloud/.env" "${composefiles[@]}"; do
+  stat -c 'PATH=%n UID=%u MODE=%a' "$probe"
+  printf 'REALPATH=%s\n' "$(realpath "$probe")"
+done
 set +e
 bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/controller.log 2>&1
 status=$?
