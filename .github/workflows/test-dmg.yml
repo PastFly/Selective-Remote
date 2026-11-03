@@ -116,6 +116,7 @@ jobs:
             app_pid=""
             defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
             python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restart-persistence.json"
+            python3 scripts/isolated-gui-smoke/compare-legacy.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/legacy-baseline-restart.json"
             if [[ "$run_build" == upgrade ]]; then
               hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
               upgraded_images=("$RUNNER_TEMP"/upgrade-image/*.dmg)
@@ -138,7 +139,8 @@ jobs:
               wait "$app_pid" || true
               app_pid=""
               defaults export "$bundle" "$RUNNER_TEMP/upgraded.plist"
-              python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/upgrade-persistence.json"
+              python3 scripts/isolated-gui-smoke/compare-legacy.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/legacy-upgrade.json"
+              python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/upgrade-persistence.json"
             fi
           fi
       - name: Upload synthetic evidence
