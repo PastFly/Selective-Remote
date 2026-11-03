@@ -120,6 +120,8 @@ echo 'INSTALLED_CONTROLLER_NORMAL_START=PASS'
 # Test-only actual store creation against a protected journal. This is not SMTP
 # or public registration acceptance, and must not unlock the HTTP write stop.
 docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg";import {randomUUID} from "node:crypto";import {PostgresStore} from "./src/postgres-store.mjs";import {MigrationFence} from "./src/migration-fence.mjs";const p=new pg.Pool({connectionString:process.env.DATABASE_URL});try{const owner="11111111-1111-4111-8111-111111111111",team=randomUUID();await p.query("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,$2,$3)",[team,"TEST-ONLY-CODEX",owner]);await p.query("INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,$3)",[team,owner,"owner"]);const f=new MigrationFence("/publication-fence/journal"),store=new PostgresStore(null,p,{v1Fence:f});const user=await store.createUser({email:"prototype-create@example.test",username:"prototype_create",displayName:"Synthetic",passwordHash:"synthetic",device:{id:randomUUID(),name:"Synthetic",platform:"web",appVersion:"test",publicKey:null},verificationHash:"b".repeat(64),verificationExpiresAt:new Date(Date.now()+60000)});const v=await store.createSharedVault({actorUserID:owner,teamID:team,name:"TEST-ONLY-CODEX-VAULT",idempotencyKey:"prototype-create-team-vault"});if(!user.id||!v.vault.id||(await f.snapshot()).v1Pending.length)throw Error("empty_creation_failed");console.log("PROTOTYPE_EMPTY_PERSONAL_AND_TEAM_JOURNALED=PASS")}finally{await p.end()}'
+# Preserve an older, valid journal to test independent journal rollback.
+cp "$state/publication/journal" /tmp/sr-controller-acceptance/journal-before-writes
 # Retain a genuine post-fence backup, then commit revision 2 through the real store.
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/post-floor.dump
 # Write through the actual Cloud HTTP route using the supported framed protocol.
@@ -187,6 +189,22 @@ echo 'CONTROLLER_STARTS_AFTER_DURABLE_RECONCILIATION=PASS'
 # Ensure the independent checker accepts the committed state before any restore.
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/new-baseline.json
 jq -e '.compatible == true and .writerFloor == 1' /tmp/sr-controller-acceptance/results/new-baseline.json >/dev/null
+# The database is current while an older, syntactically valid journal is restored.
+# Replace it only in this disposable environment; retain and restore exact bytes.
+cp "$state/publication/journal" /tmp/sr-controller-acceptance/journal-current
+current_journal_hash=$(sha256sum /tmp/sr-controller-acceptance/journal-current | cut -d ' ' -f 1)
+cat /tmp/sr-controller-acceptance/journal-before-writes > "$state/publication/journal"
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/old-journal-controller.log 2>&1
+old_journal_status=$?
+set -e
+[[ $old_journal_status -ne 0 ]]
+grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/old-journal-controller.log
+grep -q '^deployment_compatibility_failed$' /tmp/sr-controller-acceptance/results/old-journal-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/old-journal-controller.log
+cat /tmp/sr-controller-acceptance/journal-current > "$state/publication/journal"
+[[ $(sha256sum "$state/publication/journal" | cut -d ' ' -f 1) == "$current_journal_hash" ]]
+echo 'OLD_JOURNAL_WITH_CURRENT_DATABASE_REJECTED=PASS'
 # Restore the post-fence but old revision; the real controller must reject it.
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/post-floor.dump >/tmp/sr-controller-acceptance/post-floor-restore.log 2>&1
 [[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 1 ]]
