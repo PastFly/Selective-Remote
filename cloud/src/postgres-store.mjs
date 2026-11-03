@@ -20,6 +20,20 @@ import {
 } from "../public/resource-crypto-v2.js";
 
 const { Pool } = pg;
+
+// An empty Vault is part of the retained floor too. Its creation is journaled
+// inside the same transaction as its owner and cannot be inferred from a
+// missing row after an ambiguous COMMIT.
+async function retainEmptyVaultCreation(fenced, client, vaultKind, ownerID, vaultID) {
+  if (!fenced) return;
+  const state = (await readV1VaultState((sql, values) => client.query(sql, values)))
+    .find(item => item.vaultKind === vaultKind && item.vaultID === vaultID && item.ownerID === ownerID);
+  if (!state || state.revision !== 0 || state.ciphertextHash !== v1CiphertextHash(null)) {
+    throw Error('deployment_v1_data_mismatch');
+  }
+  await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind,ownerID,vaultID,
+    baseRevision:-1,revision:0,ciphertextHash:state.ciphertextHash,envelopeHash:state.envelopeHash});
+}
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const resourceClasses = new Set(["folder", "secret", "general"]);
@@ -577,8 +591,15 @@ export class PostgresStore {
 
   async createUser({ email, username, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
+    const fenced = this.v1Fence ? createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}) : null;
     try {
       await client.query("BEGIN");
+      if (fenced) {
+        await this.writerFence(client,this.v1Fence);
+        const snapshot = await this.v1Fence.snapshot();
+        if (snapshot.writerFloor !== 1) throw Error('deployment_v1_history_unavailable');
+        await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
+      }
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
         [device.id],
@@ -607,16 +628,18 @@ export class PostgresStore {
            CASE WHEN $6::text IS NULL THEN NULL ELSE now() END)`,
         [device.id, user.id, device.name, device.platform, device.appVersion, device.publicKey],
       );
-      await client.query("INSERT INTO personal_vaults (user_id) VALUES ($1)", [user.id]);
+      const vault = await client.query("INSERT INTO personal_vaults (user_id) VALUES ($1) RETURNING id", [user.id]);
       await client.query(
         `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
          VALUES ($1, $2, $3)`,
         [user.id, verificationHash, verificationExpiresAt],
       );
-      await client.query("COMMIT");
+      if (fenced) await retainEmptyVaultCreation(fenced,client,'PERSONAL',user.id,vault.rows[0].id);
+      if (fenced) { await fenced.commit(); await fenced.confirm(); }
+      else await client.query("COMMIT");
       return user;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { if (fenced) await fenced.rollback(); else await client.query("ROLLBACK"); } catch {}
       if (error?.code === "23505" && error?.constraint === "users_username_unique") {
         throw new Error("username_exists");
       }
@@ -2269,7 +2292,7 @@ export class PostgresStore {
   }
 
   async createSharedVault({ actorUserID, teamID, name, idempotencyKey }) {
-    return this.withTeamMutation(actorUserID, "team.vault.create", idempotencyKey, async (client) => {
+    return this.withTeamMutation(actorUserID, "team.vault.create", idempotencyKey, async (client, fenced) => {
       const actor = await lockTeamActor(client, teamID, actorUserID);
       if (!actor) throw new Error("team_not_found");
       requireTeamPermission(actor.role, "create_vault");
@@ -2292,6 +2315,7 @@ export class PostgresStore {
         action: "team.vault_created",
         targetVaultID: vault.id,
       });
+      await retainEmptyVaultCreation(fenced,client,'TEAM',teamID,vault.id);
       return { vault };
     });
   }
@@ -2630,7 +2654,7 @@ export class PostgresStore {
 
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
     const client = await this.pool.connect();
-    const fenced=operation==='team.vault.put'&&this.v1Fence
+    const fenced=['team.vault.put','team.vault.create'].includes(operation)&&this.v1Fence
       ?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");

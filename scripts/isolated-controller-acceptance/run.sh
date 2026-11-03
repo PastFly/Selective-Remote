@@ -3,10 +3,12 @@ set -Eeuo pipefail
 umask 022
 cd "$GITHUB_WORKSPACE"
 git merge-base --is-ancestor b31462894beef06677385ecab75740174bc3253f HEAD
-git diff --exit-code b31462894beef06677385ecab75740174bc3253f HEAD -- cloud
+source_head=$(git rev-parse HEAD)
+[[ "$source_head" == "$GITHUB_SHA" ]]
+git diff --exit-code HEAD -- cloud
 mkdir -p /tmp/sr-controller-acceptance/results
 exec > >(tee /tmp/sr-controller-acceptance/results/acceptance.log) 2>&1
-echo 'BASE_HEAD=b31462894beef06677385ecab75740174bc3253f'
+echo "PROTOTYPE_HEAD=$source_head BASE_HEAD=b31462894beef06677385ecab75740174bc3253f"
 echo 'ENVIRONMENT=EPHEMERAL_GITHUB_HOSTED_RUNNER'
 root=/opt/selective-remote-controller
 state=/var/lib/selective-remote-controller
@@ -64,7 +66,7 @@ source_device=$(findmnt -nr -M "$pgmount" -o SOURCE)
 uid=$(docker run --rm --entrypoint id postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef -u postgres)
 gid=$(docker run --rm --entrypoint id postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef -g postgres)
 install -d -m 0700 -o "$uid" -g "$gid" "$pgmount/data"
-docker build --quiet --label org.opencontainers.image.revision=b31462894beef06677385ecab75740174bc3253f -t sr-acceptance-candidate "$cloud" >/tmp/sr-controller-acceptance/image-build.log
+docker build --quiet --label "org.opencontainers.image.revision=$source_head" -t sr-acceptance-candidate "$cloud" >/tmp/sr-controller-acceptance/image-build.log
 image=$(docker image inspect --format '{{.Id}}' sr-acceptance-candidate)
 [[ $image =~ ^sha256:[a-f0-9]{64}$ ]]
 docker pull node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b >/dev/null
@@ -99,7 +101,7 @@ chmod 600 "$root/runtime-node.sha256" "$root/bundle.sha256"
 controller_digest=$(sha256sum "$root/bundle.sha256" | cut -d ' ' -f 1)
 composefiles=("$cloud/compose.yaml" "$cloud/compose.443-only.yaml" "$cloud/compose.small-host.yaml" "$cloud/compose.publication-fence.yaml" "$cloud/compose.loopback-test.yaml" "$cloud/compose.postgres-bind.yaml")
 composejson=$(for f in "${composefiles[@]}"; do jq -cn --arg path "$f" --arg hash "$(sha256sum "$f"|cut -d ' ' -f 1)" '{path:$path,sha256:$hash}'; done | jq -s .)
-jq -n --arg sha b31462894beef06677385ecab75740174bc3253f --arg image "$image" --arg ctrl "$controller_digest" --arg envhash "$(sha256sum "$cloud/.env"|cut -d ' ' -f 1)" --arg root "$pgmount" --arg src "$source_device" --arg uid "$uid" --arg gid "$gid" --argjson compose "$composejson" '{version:1,sourceSHA:$sha,imageDigest:$image,controllerDigest:$ctrl,cloudDirectory:"/opt/selective-remote/cloud",envPath:"/opt/selective-remote/cloud/.env",envDigest:$envhash,network:"cloud_private",fencePath:"/var/lib/selective-remote-controller/publication/journal",backupDirectory:"/var/backups/sr-acceptance",composeFiles:$compose,storage:{POSTGRES_DATA_MOUNT_ROOT:$root,POSTGRES_DATA_HOST_PATH:($root+"/data"),POSTGRES_DATA_EXPECTED_SOURCE:$src,POSTGRES_DATA_EXPECTED_FSTYPE:"ext4",POSTGRES_DATA_UID:$uid,POSTGRES_DATA_GID:$gid}}' > "$root/settings.json"
+jq -n --arg sha "$source_head" --arg image "$image" --arg ctrl "$controller_digest" --arg envhash "$(sha256sum "$cloud/.env"|cut -d ' ' -f 1)" --arg root "$pgmount" --arg src "$source_device" --arg uid "$uid" --arg gid "$gid" --argjson compose "$composejson" '{version:1,sourceSHA:$sha,imageDigest:$image,controllerDigest:$ctrl,cloudDirectory:"/opt/selective-remote/cloud",envPath:"/opt/selective-remote/cloud/.env",envDigest:$envhash,network:"cloud_private",fencePath:"/var/lib/selective-remote-controller/publication/journal",backupDirectory:"/var/backups/sr-acceptance",composeFiles:$compose,storage:{POSTGRES_DATA_MOUNT_ROOT:$root,POSTGRES_DATA_HOST_PATH:($root+"/data"),POSTGRES_DATA_EXPECTED_SOURCE:$src,POSTGRES_DATA_EXPECTED_FSTYPE:"ext4",POSTGRES_DATA_UID:$uid,POSTGRES_DATA_GID:$gid}}' > "$root/settings.json"
 chmod 600 "$root/settings.json"
 # Positive baseline uses the independently installed checker, same Docker mounts and PG/journal.
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/baseline.json
@@ -115,6 +117,9 @@ for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' clo
 [[ $(docker inspect --format '{{.State.Running}}' cloud-caddy-1) == true ]]
 docker exec cloud-cloud-1 node -e 'fetch("http://127.0.0.1:8080/readyz").then(async r=>{if(!r.ok)throw Error("not_ready_"+r.status);console.log("INSTALLED_CONTROLLER_CLOUD_READYZ=PASS")}).catch(e=>{console.error(e.message);process.exit(1)})'
 echo 'INSTALLED_CONTROLLER_NORMAL_START=PASS'
+# Test-only actual store creation against a protected journal. This is not SMTP
+# or public registration acceptance, and must not unlock the HTTP write stop.
+docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg";import {randomUUID} from "node:crypto";import {PostgresStore} from "./src/postgres-store.mjs";import {MigrationFence} from "./src/migration-fence.mjs";const p=new pg.Pool({connectionString:process.env.DATABASE_URL});try{const owner="11111111-1111-4111-8111-111111111111",team=randomUUID();await p.query("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,$2,$3)",[team,"TEST-ONLY-CODEX",owner]);await p.query("INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,$3)",[team,owner,"owner"]);const f=new MigrationFence("/publication-fence/journal"),store=new PostgresStore(null,p,{v1Fence:f});const user=await store.createUser({email:"prototype-create@example.test",username:"prototype_create",displayName:"Synthetic",passwordHash:"synthetic",device:{id:randomUUID(),name:"Synthetic",platform:"web",appVersion:"test",publicKey:null},verificationHash:"b".repeat(64),verificationExpiresAt:new Date(Date.now()+60000)});const v=await store.createSharedVault({actorUserID:owner,teamID:team,name:"TEST-ONLY-CODEX-VAULT",idempotencyKey:"prototype-create-team-vault"});if(!user.id||!v.vault.id||(await f.snapshot()).v1Pending.length)throw Error("empty_creation_failed");console.log("PROTOTYPE_EMPTY_PERSONAL_AND_TEAM_JOURNALED=PASS")}finally{await p.end()}'
 # Retain a genuine post-fence backup, then commit revision 2 through the real store.
 docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/post-floor.dump
 # Write through the actual Cloud HTTP route using the supported framed protocol.

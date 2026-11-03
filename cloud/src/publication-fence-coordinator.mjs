@@ -106,11 +106,17 @@ export async function readCommittedV1Outcome({query,intent}){
   const table=personal?'personal_vaults':'shared_vaults';
   const history=personal?'vault_revisions':'shared_vault_revisions';
   const owner=personal?'user_id':'team_id';
-  const result=await query(`SELECT v.id AS vault_id,v.${owner} AS owner_id,r.revision,v.revision AS current_revision,
-      ${v1CiphertextHashSQL('r.ciphertext')} AS ciphertext_hash,${v1CiphertextHashSQL('v.ciphertext')} AS current_ciphertext_hash,
-      ${v1EnvelopeHashSQL(v1EnvelopeSQL('r',personal))} AS envelope_hash,${v1EnvelopeHashSQL(v1EnvelopeSQL('v',personal))} AS current_envelope_hash
-    FROM public.${table} v JOIN public.${history} r ON r.vault_id=v.id
-    WHERE v.id=$1 AND v.${owner}=$2 AND r.revision=$3`,[intent.vaultID,intent.ownerID,intent.revision]);
+  // Empty Vault creation has no revision-history row. Positive readback of
+  // the exact new revision-0 row is required; absence remains unresolved.
+  const source=intent.baseRevision===-1
+    ? `public.${table} v` : `public.${table} v JOIN public.${history} r ON r.vault_id=v.id`;
+  const record=intent.baseRevision===-1?'v':'r';
+  const extra=intent.baseRevision===-1?'': ' AND r.revision=$3';
+  const params=intent.baseRevision===-1?[intent.vaultID,intent.ownerID]:[intent.vaultID,intent.ownerID,intent.revision];
+  const result=await query(`SELECT v.id AS vault_id,v.${owner} AS owner_id,${record}.revision,v.revision AS current_revision,
+      ${v1CiphertextHashSQL(`${record}.ciphertext`)} AS ciphertext_hash,${v1CiphertextHashSQL('v.ciphertext')} AS current_ciphertext_hash,
+      ${v1EnvelopeHashSQL(v1EnvelopeSQL(record,personal))} AS envelope_hash,${v1EnvelopeHashSQL(v1EnvelopeSQL('v',personal))} AS current_envelope_hash
+    FROM ${source} WHERE v.id=$1 AND v.${owner}=$2${extra}`,params);
   if(!Array.isArray(result?.rows))fail('deployment_fence_mismatch');
   if(!result.rows.length)return null;
   if(result.rows.length!==1)fail('deployment_fence_mismatch');
