@@ -12,7 +12,7 @@ function requireCandidate(candidate) {
   const emptyCreateAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion'].sort().join(',')
     && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1;
   const fields=Object.keys(candidate??{}).sort().join(',');
-  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion']];
+  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion']];
   const extended=variants.some(extra=>fields===[...keys,'v1WriterProtocol','emptyVaultCreationVersion',...extra].sort().join(',')
     &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&extra.every(k=>candidate[k]===1));
   if ((!legacy && !writerAware && !emptyCreateAware && !extended)
@@ -86,6 +86,7 @@ export function createDeploymentGuard(check, {
 export async function verifyDeploymentCompatibility({ query, fence, candidate, mode = 'traffic' }) {
   requireCandidate(candidate);
   if(fence?.anchor&&candidate.v1AnchorProtocol!==1)throw Error('deployment_code_floor');
+  if(fence?.anchor&&candidate.teamSafetyStopVersion!==1)throw Error('deployment_code_floor');
   if (!['traffic', 'maintenance-upgrade'].includes(mode)) throw Error('invalid_deployment_mode');
   const before = await fence.snapshot();
   requireResolved(before);

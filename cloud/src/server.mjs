@@ -150,6 +150,14 @@ async function route(request, response) {
     if (v1WriteRequiresFence(method, url.pathname)) {
       return sendError(response, 503, "vault_write_temporarily_unavailable");
     }
+    // Team membership, roles and device trust are not yet included in the
+    // anchored history. A restored database can otherwise resurrect access.
+    // Keep Team traffic and trust mutations closed until a durable security
+    // baseline and every transition are protected by the independent fence.
+    if (/^\/v1\/(?:teams|team-invitations)(?:\/|$)/i.test(url.pathname)
+      || (!['GET','HEAD'].includes(method) && /^\/v1\/(?:devices|device-trust)(?:\/|$)/i.test(url.pathname))) {
+      return sendError(response, 503, "team_security_temporarily_unavailable");
+    }
     if (method === "GET" && url.pathname === "/v1/me") {
       response.setHeader("X-Selective-Session-Binding", browserBinding.binding);
     }

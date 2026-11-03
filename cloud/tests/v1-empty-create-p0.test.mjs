@@ -221,7 +221,9 @@ test('controller and installer explicitly recognize empty-creation capability', 
   const {validateInstallerCapabilities}=await import('../scripts/staging-reviewed-installer.mjs');
   const capabilities={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1,v1WriterProtocol:1,emptyVaultCreationVersion:1};
   assert.doesNotThrow(()=>validateCandidateCapabilities(capabilities));
-  assert.doesNotThrow(()=>validateInstallerCapabilities(capabilities));
+  assert.throws(()=>validateInstallerCapabilities(capabilities),/staging_install_candidate_code/);
+  const {currentCapabilities}=await import('../src/deployment-compatibility.mjs');
+  assert.doesNotThrow(()=>validateInstallerCapabilities(currentCapabilities));
   assert.throws(()=>validateCandidateCapabilities({...capabilities,emptyVaultCreationVersion:2}),/deployment_code_floor/);
   assert.throws(()=>validateInstallerCapabilities({...capabilities,emptyVaultCreationVersion:2}),/staging_install_candidate_code/);
 });

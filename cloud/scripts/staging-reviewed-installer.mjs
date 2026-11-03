@@ -11,7 +11,7 @@ const archiveSHA='c1bfeecf1d7404fa74728f9db72e697decbd8119ccc6f5a294d795756dfcfc
 const hash=value=>createHash('sha256').update(value).digest('hex'),hex=(value,n)=>typeof value==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(value);
 const fail=code=>{throw Error('staging_install_'+code);};
 export function validateInstallerCapabilities(capabilities){
- if(!capabilities||!(Object.keys(capabilities).length===6||(Object.keys(capabilities).length===7&&capabilities.emptyVaultCreationVersion===1)||(Object.keys(capabilities).length===8&&capabilities.emptyVaultCreationVersion===1&&((capabilities.v1AnchorProtocol===1)!==(capabilities.wrapperEnvelopeVersion===1)))||(Object.keys(capabilities).length===9&&capabilities.emptyVaultCreationVersion===1&&capabilities.v1AnchorProtocol===1&&capabilities.wrapperEnvelopeVersion===1))||capabilities.version!==1||capabilities.fenceVersion!==2
+ if(!capabilities||Object.keys(capabilities).length!==10||capabilities.teamSafetyStopVersion!==1||capabilities.emptyVaultCreationVersion!==1||capabilities.v1AnchorProtocol!==1||capabilities.wrapperEnvelopeVersion!==1||capabilities.version!==1||capabilities.fenceVersion!==2
   ||capabilities.maxSchemaVersion!==22||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
   ||capabilities.v1WriterProtocol!==1)fail('candidate_code');
  return true;
@@ -200,7 +200,7 @@ async function runHost(phase,planPath,archivePath,dryRun){
    const manifest=await bundleManifest(bundle);await save(join(bundle,'bundle.sha256'),manifest);
    const candidateIdentity={sourceSHA:plan.sourceSHA,tree:plan.tree,imageDigest,controllerDigest:hash(manifest)};
    const composeFiles=[];for(const file of plan.composeFiles)composeFiles.push({path:join(cloud,file),sha256:hash(await readFile(join(candidate,'cloud',file)))});
-   const settings={version:1,...candidateIdentity,cloudDirectory:cloud,envPath:cloud+'/.env',envDigest,network:'cloud_private',fencePath:state+'/publication/journal',backupDirectory:run,composeFiles,storage:plan.storage};delete settings.tree;
+   const settings={version:1,teamSafetyStopVersion:1,...candidateIdentity,cloudDirectory:cloud,envPath:cloud+'/.env',envDigest,network:'cloud_private',fencePath:state+'/publication/journal',backupDirectory:run,composeFiles,storage:plan.storage};delete settings.tree;
    await save(preparedPath,{formatVersion:1,planDigest,identity:candidateIdentity,envDigest,uid:Number(account[2]),gid:Number(account[3]),settings});
    return {prepared:true,...candidateIdentity};
   }

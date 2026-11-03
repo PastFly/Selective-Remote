@@ -25,7 +25,7 @@ import {seedPublishedTeam,storeFor,prepareWholeFixture,uploadWholeFixture} from 
 import {seedMigration} from './vault-v2-migration-db-fixtures.mjs';
 const execute=promisify(execFile),database=process.env.TEST_DATABASE_URL;
 const migrations=fileURLToPath(new URL('../migrations/',import.meta.url));
-const settings=()=>({version:1,sourceSHA:'a'.repeat(40),imageDigest:'sha256:'+'b'.repeat(64),controllerDigest:'c'.repeat(64),
+const settings=()=>({version:1,teamSafetyStopVersion:1,sourceSHA:'a'.repeat(40),imageDigest:'sha256:'+'b'.repeat(64),controllerDigest:'c'.repeat(64),
  cloudDirectory:'/opt/selective-remote/cloud',envPath:'/opt/selective-remote/cloud/.env',envDigest:'d'.repeat(64),network:'cloud_private',
  fencePath:'/var/lib/selective-remote-controller/publication/journal',backupDirectory:'/var/backups/selective-remote',
  composeFiles:[{path:'/opt/selective-remote/cloud/compose.yaml',sha256:'e'.repeat(64)},{path:'/opt/selective-remote/cloud/compose.publication-fence.yaml',sha256:'170dd70074fb4735fc15b17d1609101cb283961fb2b1bdbe1d83a16c7b8d9576'}],
@@ -250,7 +250,7 @@ test('additional env-file dependencies are rejected even when their present valu
 
 test('controller validates writer capability metadata without accepting unknown versions', () => {
   assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
-  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, ...oldCandidate}=currentCapabilities;
+  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, teamSafetyStopVersion: _____, ...oldCandidate}=currentCapabilities;
   assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
   for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
@@ -258,10 +258,10 @@ test('controller validates writer capability metadata without accepting unknown 
 
 
 test('retained writer floor prevents old image startup before migration or traffic',async()=>{
- const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,wrapperEnvelopeVersion:____,...oldMetadata}=currentCapabilities;
+ const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,wrapperEnvelopeVersion:____,teamSafetyStopVersion:_____,...oldMetadata}=currentCapabilities;
  const fence={snapshot:async()=>({schemaFloor:19,writerFloor:1,pending:[],committed:[],outcomes:[]})};
  const f=await fixtureController({query:emptyDB,fence,metadata:oldMetadata});
- await assert.rejects(f.promise,/deployment_writer_floor/);
+ await assert.rejects(f.promise,/deployment_code_floor/);
  assert.ok(!f.stages.includes('migrate'));
  assert.ok(!f.stages.includes('open-traffic'));
  assert.deepEqual(f.queries,[]);
@@ -292,4 +292,13 @@ test('controller accepts only a root-owned, private service-group journal direct
  assert.equal(validateFenceDirectory(good),101);
  for(const bad of [{...good,uid:100},{...good,gid:0},{...good,mode:0o40775},{...good,mode:0o44770},{...good,isSymbolicLink:()=>true}])
   assert.throws(()=>validateFenceDirectory(bad),/deployment_fence_permissions/);
+});
+
+test('protected Team safety stop floor rejects anchor-capable images without the stop before traffic opens',async()=>{
+ const floor={...settings(),teamSafetyStopVersion:1};assert.equal(validateControllerSettings(floor),floor);
+ const {teamSafetyStopVersion:_,...old}=currentCapabilities;
+ assert.throws(()=>validateControllerSettings({...floor,teamSafetyStopVersion:undefined}),/invalid_deployment_settings/);
+ assert.throws(()=>validateCandidateCapabilities(old,floor),/deployment_code_floor/);
+ let queried=false;const f=await fixtureController({metadata:old,fence:emptyFence,query:()=>{queried=true;throw Error('unexpected_query');}});
+ await assert.rejects(f.promise,/deployment_code_floor/);assert.equal(queried,false);assert.ok(!f.stages.includes('open-traffic'));
 });

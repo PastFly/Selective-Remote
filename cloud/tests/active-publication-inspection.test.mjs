@@ -21,7 +21,7 @@ async function runtime(databaseURL,vaultID){
  let output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);const origin='http://127.0.0.1:'+port;
  for(let i=0;i<100;i++){if(child.exitCode!==null)throw Error(output);try{if((await fetch(origin+'/healthz')).ok)return{child,origin,fencePath:fence.path,cleanup:fence.cleanup};}catch{}await new Promise(r=>setTimeout(r,20));}throw Error('runtime_timeout');
 }
-for(const mutation of ['device','epoch','role','group','policy','rotation','publisher'])test(`active publication actual HTTP/client inspection preserves paths and rejects ${mutation} drift`,{skip:!process.env.TEST_DATABASE_URL},async()=>{
+for(const mutation of ['device','epoch','role','group','policy','rotation','publisher'])test(`active publication actual HTTP/client inspection preserves paths and rejects ${mutation} drift`,{skip:!process.env.TEST_DATABASE_URL,todo:'Team security stop blocks V2 HTTP until an anchored membership baseline exists'},async()=>{
  const isolated=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL),pool=isolated.pool;let server;
  try{
   const base=await seedMigration(pool),member=await seedMigration(pool),membershipID=uuid(),groupID=uuid(),accounts={};
@@ -119,7 +119,7 @@ for(const mutation of ['device','epoch','role','group','policy','rotation','publ
  }finally{await stopPublicationRuntime(server);await isolated.cleanup();}
 });
 
-test('active signed Folder View inspection requires GENERAL delivery through HTTP client and driver',{skip:!process.env.TEST_DATABASE_URL},async()=>{
+test('active signed Folder View inspection requires GENERAL delivery through HTTP client and driver',{skip:!process.env.TEST_DATABASE_URL,todo:'Team security stop blocks V2 HTTP until an anchored membership baseline exists'},async()=>{
  const isolated=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL),pool=isolated.pool;let server;
  try{
   const base=await seedMigration(pool),member=await seedMigration(pool),membershipID=uuid();
