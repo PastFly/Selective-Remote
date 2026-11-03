@@ -156,7 +156,7 @@ test('only explicit empty-journal maintenance can upgrade a pre019 DB; never tra
 test('a retained writer floor denies an old candidate before database access', async () => {
   const s = scenario();
   s.fence.snapshot = async () => ({ schemaFloor:19, writerFloor:1, committed:[], pending:[], outcomes:[] });
-  const { v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, ...oldCandidate } = candidate;
+  const { v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, ...oldCandidate } = candidate;
   await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: oldCandidate }), /deployment_writer_floor/);
   assert.deepEqual(s.events, []);
 });

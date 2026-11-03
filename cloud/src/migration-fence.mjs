@@ -178,7 +178,7 @@ export class MigrationFence{
     const line=Buffer.from(key+'\n'),size=(await file.stat()).size;
     if(size+line.length>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
     if(budget.bytes+line.length>FENCE_MAX_REPLAY_BYTES||budget.records+1>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
-    if(!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'){
+    if(!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'||record.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
      // Reserve the larger terminal outcome for every pending intent, including
      // legacy IDs. New work must not consume another intent's resolution space.
      const reserved=snapshot.pending.reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({

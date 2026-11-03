@@ -11,15 +11,18 @@ function requireCandidate(candidate) {
     && candidate.v1WriterProtocol === 1;
   const emptyCreateAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion'].sort().join(',')
     && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1;
-  const anchorAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion','v1AnchorProtocol'].sort().join(',')
-    && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1 && candidate.v1AnchorProtocol === 1;
-  if ((!legacy && !writerAware && !emptyCreateAware && !anchorAware)
+  const fields=Object.keys(candidate??{}).sort().join(',');
+  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion']];
+  const extended=variants.some(extra=>fields===[...keys,'v1WriterProtocol','emptyVaultCreationVersion',...extra].sort().join(',')
+    &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&extra.every(k=>candidate[k]===1));
+  if ((!legacy && !writerAware && !emptyCreateAware && !extended)
       || candidate.version !== 1 || candidate.fenceVersion !== 2 || candidate.maxSchemaVersion !== 22
       || candidate.readerProjectionVersion !== 1 || candidate.wholePublicationVersion !== 1)
     throw Error('deployment_code_floor');
 }
 function requireWriterFloor(snapshot, candidate) {
   if (snapshot?.emptyVaultCreationVersion === 1 && candidate.emptyVaultCreationVersion !== 1) throw Error('deployment_code_floor');
+  if (snapshot?.wrapperEnvelopeVersion === 1 && candidate.wrapperEnvelopeVersion !== 1) throw Error('deployment_code_floor');
   const floor = snapshot?.writerFloor ?? 0;
   if (![0, 1].includes(floor) || floor > (candidate.v1WriterProtocol ?? 0)) throw Error('deployment_writer_floor');
   return floor;

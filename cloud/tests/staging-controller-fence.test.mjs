@@ -250,7 +250,7 @@ test('additional env-file dependencies are rejected even when their present valu
 
 test('controller validates writer capability metadata without accepting unknown versions', () => {
   assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
-  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, ...oldCandidate}=currentCapabilities;
+  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, ...oldCandidate}=currentCapabilities;
   assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
   for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
@@ -258,7 +258,7 @@ test('controller validates writer capability metadata without accepting unknown 
 
 
 test('retained writer floor prevents old image startup before migration or traffic',async()=>{
- const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,...oldMetadata}=currentCapabilities;
+ const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,wrapperEnvelopeVersion:____,...oldMetadata}=currentCapabilities;
  const fence={snapshot:async()=>({schemaFloor:19,writerFloor:1,pending:[],committed:[],outcomes:[]})};
  const f=await fixtureController({query:emptyDB,fence,metadata:oldMetadata});
  await assert.rejects(f.promise,/deployment_writer_floor/);

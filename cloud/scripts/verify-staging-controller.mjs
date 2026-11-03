@@ -43,7 +43,8 @@ export function validateCandidateIdentity(settings,image){
 export function validateCandidateCapabilities(candidate,settings={}){
   const expected={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1};
   const count=candidate&&Object.keys(candidate).length;
-  if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1)||(count===8&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1))
+  const validExtended=count===9&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1&&candidate.wrapperEnvelopeVersion===1;
+  if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1)||(count===8&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&((candidate.v1AnchorProtocol===1)!==(candidate.wrapperEnvelopeVersion===1)))||validExtended)
     ||(settings.anchorProtocol===1&&candidate.v1AnchorProtocol!==1)
     ||Object.entries(expected).some(([k,v])=>candidate[k]!==v))fail('deployment_code_floor');
 }

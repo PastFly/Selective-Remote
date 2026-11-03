@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {canonicalMigrationJSON,migrationHash,verifyMigrationManifest} from './migration-policy.mjs';
 import {publicationHash,verifyReaderHeader} from '../public/vault-publication-v1.js';
 import {validateFenceEvent,fenceIntentDigest} from './migration-fence-journal.mjs';
-import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL} from './v1-data-fence.mjs';
+import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL,readV1VaultState} from './v1-data-fence.mjs';
 
 const same=(a,b)=>canonicalMigrationJSON(a)===canonicalMigrationJSON(b);
 const abortProofs=new WeakMap();
@@ -15,9 +15,9 @@ export class PublicationFenceCoordinator{
     this.fence=fence;
   }
   async beforeCommit(fields){
-    const copy=structuredClone(fields),isV1=copy.kind==='V1';
-    if(isV1)delete copy.kind;
-    const intent=validateFenceEvent({...copy,version:2,type:isV1?'V1_PENDING_INTENT':'PENDING_INTENT',intentID:randomUUID()});
+    const copy=structuredClone(fields),isV1=copy.kind==='V1',isWrapper=copy.kind==='V1_WRAPPER_BATCH';
+    if(isV1||isWrapper)delete copy.kind;
+    const intent=validateFenceEvent({...copy,version:2,type:isV1?'V1_PENDING_INTENT':isWrapper?'V1_WRAPPER_BATCH_PENDING_INTENT':'PENDING_INTENT',intentID:randomUUID()});
     await this.fence.append(intent);
     this.#intents.set(intent.intentID,{...structuredClone(intent),intentDigest:fenceIntentDigest(intent)});
     return structuredClone(intent);
@@ -35,10 +35,12 @@ export class PublicationFenceCoordinator{
     if(!outcome)fail('deployment_fence_pending');
     if(intent.type==='V1_PENDING_INTENT'){
       if(outcome.kind!=='V1'||['operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'].some(key=>outcome[key]!==intent[key]))fail('deployment_fence_mismatch');
+    }else if(intent.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
+      if(outcome.kind!=='V1_WRAPPER_BATCH'||outcome.operationID!==intent.operationID||!same(outcome.changes,intent.changes))fail('deployment_fence_mismatch');
     }else if(outcome.kind!==intent.kind||outcome.operationID!==intent.operationID||!same(outcome.vaults,intent.vaults))fail('deployment_fence_mismatch');
     // Cache retains only the exact authenticated intent, allowing the same
     // confirmation to retry its durability barriers after a failed append.
-    await this.fence.append({version:2,type:intent.type==='V1_PENDING_INTENT'?'V1_CONFIRMED_COMMIT':'CONFIRMED_COMMIT',intentID,intentDigest:intent.intentDigest});
+    await this.fence.append({version:2,type:intent.type.startsWith('V1_')?'V1_CONFIRMED_COMMIT':'CONFIRMED_COMMIT',intentID,intentDigest:intent.intentDigest});
     this.#intents.delete(intentID);
     return {status:'confirmed',intentID};
   }
@@ -47,7 +49,7 @@ export class PublicationFenceCoordinator{
     if(!provenance||provenance.coordinator!==this||provenance.intentID!==intentID)fail('invalid_deployment_abort_proof');
     const intent=await this.#pending(intentID);
     if(intent.legacy||intent.intentDigest!==provenance.intentDigest)fail('invalid_deployment_abort_proof');
-    await this.fence.append({version:2,type:intent.type==='V1_PENDING_INTENT'?'V1_PROVEN_ABORT':'PROVEN_ABORT',intentID,intentDigest:intent.intentDigest});
+    await this.fence.append({version:2,type:intent.type.startsWith('V1_')?'V1_PROVEN_ABORT':'PROVEN_ABORT',intentID,intentDigest:intent.intentDigest});
     this.#intents.delete(intentID);
     abortProofs.delete(proof);return {status:'aborted',intentID};
   }
@@ -85,7 +87,8 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
       if(!intent)return;
       return coordinator.confirmCommit({intentID:intent.intentID,
         readCommittedOutcome:readCommittedOutcome??(pending=>pending.type==='V1_PENDING_INTENT'
-          ?readCommittedV1Outcome({query,intent:pending}):readCommittedPublicationOutcome({query,intent:pending}))});
+          ?readCommittedV1Outcome({query,intent:pending}):pending.type==='V1_WRAPPER_BATCH_PENDING_INTENT'
+          ?readCommittedV1WrapperBatchOutcome({query,intent:pending}):readCommittedPublicationOutcome({query,intent:pending}))});
     },
     async rollback(){
       await query('ROLLBACK');
@@ -96,6 +99,21 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
       const result=await coordinator.proveAbort({intentID:intent.intentID,proof});abortProven=true;return result;
     },
   };
+}
+
+export async function readCommittedV1WrapperBatchOutcome({query,intent}){
+  const rows=await readV1VaultState(query),byID=new Map(rows.map(row=>[row.vaultKind+':'+row.vaultID,row]));
+  let before=0,after=0;
+  for(const change of intent.changes){
+    const row=byID.get(change.vaultKind+':'+change.vaultID);
+    if(!row||row.ownerID!==change.ownerID||row.revision!==change.revision||row.ciphertextHash!==change.ciphertextHash)fail('deployment_fence_mismatch');
+    if(row.envelopeHash===change.beforeEnvelopeHash)before++;
+    else if(row.envelopeHash===change.envelopeHash)after++;
+    else fail('deployment_fence_mismatch');
+  }
+  if(before===intent.changes.length)return null;
+  if(after!==intent.changes.length)fail('deployment_fence_mismatch');
+  return {kind:'V1_WRAPPER_BATCH',operationID:intent.operationID,changes:structuredClone(intent.changes)};
 }
 
 // Positive evidence only: a missing historical revision is unresolved, never

@@ -34,6 +34,17 @@ async function retainEmptyVaultCreation(fenced, client, vaultKind, ownerID, vaul
   await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind,ownerID,vaultID,
     baseRevision:-1,revision:0,ciphertextHash:state.ciphertextHash,envelopeHash:state.envelopeHash});
 }
+async function retainWrapperChanges(fenced,client,snapshot,teamID,vaultIDs){
+  if(!fenced||vaultIDs.length===0)return;
+  const before=new Map(snapshot.v1Committed.filter(row=>row.vaultKind==='TEAM'&&row.ownerID===teamID).map(row=>[row.vaultID,row]));
+  const after=new Map((await readV1VaultState((sql,values)=>client.query(sql,values))).filter(row=>row.vaultKind==='TEAM'&&row.ownerID===teamID).map(row=>[row.vaultID,row]));
+  const changes=[...new Set(vaultIDs)].sort().map(vaultID=>{
+    const old=before.get(vaultID),current=after.get(vaultID);
+    if(!old||!current||old.revision!==current.revision||old.ciphertextHash!==current.ciphertextHash||old.envelopeHash===current.envelopeHash)throw Error('deployment_v1_data_mismatch');
+    return {...current,beforeEnvelopeHash:old.envelopeHash};
+  });
+  await fenced.beforeCommit({kind:'V1_WRAPPER_BATCH',operationID:randomUUID(),changes});
+}
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const resourceClasses = new Set(["folder", "secret", "general"]);
@@ -2016,7 +2027,7 @@ export class PostgresStore {
     tokenHash,
     idempotencyKey,
   }) {
-    return this.withTeamMutation(actorUserID, "team.invitation.accept", idempotencyKey, async (client) => {
+    return this.withTeamMutation(actorUserID, "team.invitation.accept", idempotencyKey, async (client,fenced,snapshot) => {
       const invitationResult = await client.query(
         `SELECT invitation.id, invitation.team_id, invitation.invitation_type, invitation.role,
            invitation.reserved_membership_id, invitation.reserved_membership_epoch,
@@ -2119,7 +2130,7 @@ export class PostgresStore {
            ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING`,
           [invitation.id, membership.id, nextEpoch],
         );
-        await client.query(
+        const newWrappers=await client.query(
           `INSERT INTO shared_vault_key_wrappers
             (vault_id, key_generation, membership_id, membership_epoch, device_id,
              wrapper_version, ephemeral_public_key, ciphertext, nonce, auth_tag,
@@ -2131,9 +2142,10 @@ export class PostgresStore {
            FROM team_invitation_vault_wrappers AS staged
            JOIN shared_vaults AS vault ON vault.id = staged.vault_id
              AND vault.format_state = 'V1_ACTIVE'
-           WHERE staged.invitation_id = $1`,
+           WHERE staged.invitation_id = $1 RETURNING vault_id`,
           [invitation.id, membership.id, nextEpoch],
         );
+        await retainWrapperChanges(fenced,client,snapshot,invitation.team_id,newWrappers.rows.map(row=>row.vault_id));
         await client.query(
           "DELETE FROM team_invitation_vault_wrappers WHERE invitation_id = $1",
           [invitation.id],
@@ -2570,7 +2582,7 @@ export class PostgresStore {
     keyGeneration,
     idempotencyKey,
   }) {
-    return this.withTeamMutation(actorUserID, "team.vault.wrapper.grant", idempotencyKey, async (client) => {
+    return this.withTeamMutation(actorUserID, "team.vault.wrapper.grant", idempotencyKey, async (client,fenced,snapshot) => {
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) { await this.requireLegacyPublication(teamID, vaultID, actorUserID, client); throw new Error("team_not_found"); }
       if (!context.device_key_authorized) throw new Error("device_approval_required");
@@ -2603,6 +2615,7 @@ export class PostgresStore {
       if (!inserted) {
         return { granted: true, keyGeneration, deviceID: wrapper.deviceID };
       }
+      await retainWrapperChanges(fenced,client,snapshot,teamID,[vaultID]);
       await writeTeamAudit(client, {
         teamID,
         actorUserID,
@@ -2654,13 +2667,14 @@ export class PostgresStore {
 
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
     const client = await this.pool.connect();
-    const fenced=['team.vault.put','team.vault.create'].includes(operation)&&this.v1Fence
+    const fenced=['team.vault.put','team.vault.create','team.vault.wrapper.grant','team.invitation.accept'].includes(operation)&&this.v1Fence
       ?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
       await client.query("BEGIN");
+      let snapshot=null;
       if(fenced){
         await this.writerFence(client, this.v1Fence);
-        const snapshot=await this.v1Fence.snapshot();
+        snapshot=await this.v1Fence.snapshot();
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
       }
@@ -2680,7 +2694,7 @@ export class PostgresStore {
         await client.query("COMMIT");
         return replay.rows[0]?.response ?? {};
       }
-      const response = await mutation(client,fenced);
+      const response = await mutation(client,fenced,snapshot);
       await client.query(
         `UPDATE team_mutation_receipts SET response = $4::jsonb
          WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
