@@ -40,7 +40,6 @@ jobs:
       NODE_OPTIONS: --dns-result-order=ipv4first
       SR_TEST_ANCHOR_DATABASE_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
       SR_TEST_ANCHOR_TLS_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
-      SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
     # The 1,000-resource migration and publication benchmarks can take 20 minutes.
     timeout-minutes: 40
     services:
@@ -78,6 +77,8 @@ jobs:
 
       - name: Test separately running TLS fence anchor
         working-directory: cloud
+        env:
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
         run: |
           set -euo pipefail
           certdir="$RUNNER_TEMP/fence-anchor-test"
@@ -112,6 +113,7 @@ jobs:
         working-directory: cloud
         env:
           TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
         run: |
           pg_dump --version
           pg_restore --version
