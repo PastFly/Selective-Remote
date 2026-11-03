@@ -317,6 +317,26 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     print("SYNTHETIC_HOST_DOUBLE_CLICK_POSTED=YES")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP fixture runner identity") }
+    let tabs = snapshot(app).filter {
+        guard (attr($0, "AXRole") as? String) == "AXButton", (attr($0, "AXDescription") as? String) == "SFTP",
+              let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
+        var point = CGPoint.zero
+        return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
+    }
+    guard tabs.count == 1, AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP tab unavailable") }
+    let deadline = Date(timeIntervalSinceNow: 35)
+    while Date() < deadline {
+        let rows = snapshot(app).filter { element in
+            ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }
+                .contains(where: { $0.contains("TEST-ONLY-CODEX-SFTP-CHECK") })
+        }
+        if !rows.isEmpty { print("SYNTHETIC_SFTP_FILE_VISIBLE=YES"); exit(0) }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    }
+    stop("synthetic SFTP file not visible")
+}
 if CommandLine.arguments.count == 3 {
     guard CommandLine.arguments[2] == "--verify-baseline", env["SR_BUILD_KIND"] == "baseline" else { stop("unknown verification mode") }
     let welcome = snapshot(app).filter {
