@@ -158,7 +158,7 @@ install -m 0600 /tmp/sr-controller-acceptance/current-settings.json "$root/setti
 mv "$root/settings.next" "$root/settings.json"
 [[ $legacy_status -ne 0 ]]
 grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/old-image-controller.log
-grep -q '^deployment_writer_floor$' /tmp/sr-controller-acceptance/results/old-image-controller.log
+grep -q '^deployment_code_floor$' /tmp/sr-controller-acceptance/results/old-image-controller.log
 ! grep -q '"stage":"close-traffic"' /tmp/sr-controller-acceptance/results/old-image-controller.log
 [[ $(docker inspect --format '{{.Image}}' cloud-cloud-1) == "$image" ]]
 [[ $(docker inspect --format '{{.State.Running}}' cloud-cloud-1) == true ]]
