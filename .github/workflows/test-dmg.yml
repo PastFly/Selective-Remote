@@ -19,7 +19,8 @@ jobs:
 
           let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
           print("GUI_SESSION_PRESENT=\(!session.isEmpty)")
-          print("GUI_SESSION_ON_CONSOLE=\(session[\"kCGSSessionOnConsoleKey\"] as? Bool ?? false)")
+          let onConsole = session["kCGSSessionOnConsoleKey"] as? Bool ?? false
+          print("GUI_SESSION_ON_CONSOLE=\(onConsole)")
           print("ACCESSIBILITY_TRUSTED=\(AXIsProcessTrusted())")
           print("SCREEN_CAPTURE_ALLOWED=\(CGPreflightScreenCaptureAccess())")
           print("EVENT_POST_ALLOWED=\(CGPreflightPostEventAccess())")
