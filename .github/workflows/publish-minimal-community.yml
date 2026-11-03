@@ -19,8 +19,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: PastFly/Selective-Remote
-      SOURCE_SHA: 6ff7dfec4cb4c9ffc9472f192bd14069c833dbfc
-      VERIFIED_RUN: "41616485070"
+      SOURCE_SHA: c6ca15238c0bbc13f82c5ac92d2bf98a053fec85
+      VERIFIED_RUN: "41617254323"
       PREVIEW_TAG: v0.32.0-community.1
       ARTIFACT: SelectiveRemote-0.32.0-minimal-community-arm64
     steps:
