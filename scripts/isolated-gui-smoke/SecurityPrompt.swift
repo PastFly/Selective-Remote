@@ -41,7 +41,7 @@ while Date() < deadline {
             print("SECURITY_AGENT_AX_ROLES=\(snapshot(root).compactMap { attribute($0, "AXRole") as? String }.joined(separator: ","))")
         }
         guard let path = agent.bundleURL?.resolvingSymlinksInPath().path,
-              path == "/System/Library/CoreServices/SecurityAgent.app" else { continue }
+              path == "/System/Library/Frameworks/Security.framework/Versions/A/MachServices/SecurityAgent.bundle" else { continue }
         let root = AXUIElementCreateApplication(agent.processIdentifier)
         for window in snapshot(root).filter({ (attribute($0, "AXRole") as? String) == "AXWindow" }) {
             let nodes = snapshot(window)
