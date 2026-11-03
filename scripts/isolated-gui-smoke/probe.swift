@@ -79,8 +79,28 @@ func setUniqueField(_ placeholder: String, _ value: String) {
         (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
     }
     guard matches.count == 1 else { stop("unique field unavailable: \(placeholder)") }
-    guard AXUIElementSetAttributeValue(matches[0], kAXValueAttribute as CFString, value as CFTypeRef) == .success,
-          (attr(matches[0], "AXValue") as? String) == value else { stop("field value not confirmed: \(placeholder)") }
+    guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("input permission or activation") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          AXUIElementSetAttributeValue(matches[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { stop("input focus") }
+    func key(_ code: CGKeyCode, down: Bool, flags: CGEventFlags = []) {
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { stop("keyboard event") }
+        event.flags = flags
+        event.post(tap: .cghidEventTap)
+    }
+    key(0, down: true, flags: .maskCommand); key(0, down: false, flags: .maskCommand)
+    let units = Array(value.utf16)
+    guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+          let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { stop("text event") }
+    units.withUnsafeBufferPointer { buffer in
+        down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+        up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+    }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard (attr(matches[0], "AXValue") as? String) == value else { stop("typed field not confirmed: \(placeholder)") }
+    key(48, down: true); key(48, down: false)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
 setUniqueField("SSH Server", "TEST-ONLY-CODEX-UPGRADE-HOST")
 setUniqueField("For example: Work", "TEST-ONLY-CODEX-UPGRADE-FOLDER")
