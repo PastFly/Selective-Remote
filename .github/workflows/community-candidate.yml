@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - release/0.32.0-minimal-community
+    paths:
+      - 'scripts/**'
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'CHANGELOG.md'
+      - 'CHANGELOG_EN.md'
+      - 'Resources/**'
   workflow_dispatch:
 
 permissions:
