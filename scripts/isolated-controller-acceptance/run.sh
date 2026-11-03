@@ -156,6 +156,11 @@ docker run --rm --network cloud_private --user root --mount "type=bind,src=$stat
 anchor_after=$(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'")
 [[ "$anchor_after" =~ ^[0-9]+:[a-f0-9]{64}$ && "$anchor_after" != "$anchor_before" ]]
 [[ ${anchor_after%%:*} -gt ${anchor_before%%:*} ]]
+# Rotate as the actual application UID, and make the installed checker replay
+# the retained archive through its authenticated external high-water anchor.
+cloud_uid=$(docker run --rm --entrypoint id "$image" -u)
+docker run --rm --network cloud_private --user "$cloud_uid:$cloudgid" --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const f=createConfiguredMigrationFence(loadConfig().deployment);try{const x=await f.fence.compact();if(!x.archiveDigest)throw Error("checkpoint_failed");console.log("ANCHORED_JOURNAL_CHECKPOINT=PASS")}finally{await f.close()}'
+[[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
 bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/post-write-controller.log 2>&1
 grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/post-write-controller.log
 for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
@@ -173,6 +178,8 @@ for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' clo
 echo 'INSTALLED_CONTROLLER_CRASH_RESTART=PASS'
 # Restore matching older primary DB and journal while leaving independent anchor unchanged.
 "${compose[@]}" stop cloud caddy >/dev/null
+docker exec cloud-postgres-1 pg_dump -U sraccept -d sraccept --format=custom --no-owner --no-acl > /tmp/sr-controller-acceptance/after-write.dump
+cp "$state/publication/journal" /tmp/sr-controller-acceptance/after-write.journal
 docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/before-write.dump >/tmp/sr-controller-acceptance/restore.log 2>&1
 cat /tmp/sr-controller-acceptance/before-write.journal > "$state/publication/journal"
 [[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 1 ]]
@@ -188,5 +195,14 @@ grep -q '^deployment_anchor_mismatch$' /tmp/sr-controller-acceptance/results/sim
 [[ -z $("${compose[@]}" ps --status running --services | grep -E '^(cloud|caddy)$' || true) ]]
 [[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
 echo 'MATCHING_DATABASE_AND_JOURNAL_ROLLBACK_REJECTED=PASS'
+# Automatic recovery in the disposable test uses the newer independently
+# verified snapshot and retained archives, never by lowering the anchor.
+docker exec -i cloud-postgres-1 pg_restore -U sraccept -d sraccept --clean --if-exists --exit-on-error --no-owner --no-acl < /tmp/sr-controller-acceptance/after-write.dump >/tmp/sr-controller-acceptance/recovery.log 2>&1
+cat /tmp/sr-controller-acceptance/after-write.journal > "$state/publication/journal"
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/recovery-controller.log 2>&1
+grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/recovery-controller.log
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == 2 ]]
+[[ $(docker exec "$anchor_name" psql -U sradmin -d sranchor -tAc "SELECT position||':'||digest FROM selective_remote_anchor.heads WHERE deployment_id='$anchor_id'") == "$anchor_after" ]]
+echo 'MATCHING_NEWER_SNAPSHOT_RECOVERY=PASS'
 echo 'ANCHOR_FAILURE_DOMAIN=SEPARATE_DATABASE_SAME_EPHEMERAL_VM_NOT_PRODUCTION_ISOLATION'
 echo 'V1_HTTP_WRITES=STOPPED'
