@@ -115,7 +115,7 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
-if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-passphrase" {
+if CommandLine.arguments.count == 3 && ["--inspect-passphrase", "--add-passphrase"].contains(CommandLine.arguments[2]) {
     guard env["SR_BUILD_KIND"] == "passphrase", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("passphrase inspection requires isolated runner") }
     let welcome = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
@@ -141,6 +141,11 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-pa
           let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("synthetic SSH key hit test") }
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+    if CommandLine.arguments[2] == "--add-passphrase" {
+        pressUnique("AXButton", "Add")
+        print("SYNTHETIC_SSH_KEY_ADD_REQUESTED=YES")
+        exit(0)
+    }
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""

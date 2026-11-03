@@ -94,6 +94,7 @@ jobs:
           shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/executable-sha256.txt"
           cleanup() {
             local result=$?
+            if test -n "${responder_pid:-}"; then kill "$responder_pid" 2>/dev/null || true; wait "$responder_pid" 2>/dev/null || true; fi
             if [[ "$result" -ne 0 ]]; then
               screencapture -x "$RUNNER_TEMP/evidence/failure-screen.png" || true
             fi
@@ -148,11 +149,30 @@ jobs:
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           if [[ "$SR_BUILD_KIND" == passphrase ]]; then
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 40 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-passphrase | tee "$RUNNER_TEMP/evidence/passphrase-ui.log"
+            cp scripts/isolated-gui-smoke/AskPassPrompt.swift "$RUNNER_TEMP/main.swift"
+            swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/askpass-prompt"
+            askpass="$app/Contents/Helpers/SelectiveRemoteSSHAskPass"
+            test -x "$askpass"
+            SR_EXPECTED_ASKPASS_HASH="$(shasum -a 256 "$askpass" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/askpass-prompt" "$app_pid" > "$RUNNER_TEMP/evidence/passphrase-responder.log" 2>&1 &
+            responder_pid=$!
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 70 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --add-passphrase | tee "$RUNNER_TEMP/evidence/passphrase-ui.log"
+            wait "$responder_pid"
+            responder_pid=""
+            cat "$RUNNER_TEMP/evidence/passphrase-responder.log"
+            test "$SSH_AUTH_SOCK" = "$fixture/agent.sock"
+            /usr/bin/ssh-add -l | grep -Fq "$fingerprint"
+            printf '%s\n' 'SYNTHETIC_SSH_AGENT_ADDED=YES'
             screencapture -x "$RUNNER_TEMP/evidence/passphrase-screen.png"
             SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
             wait "$app_pid" || true
             app_pid=""
+            /usr/bin/ssh-add -d "$fixture/key" >/dev/null 2>&1
+            if /usr/bin/ssh-add -l 2>/dev/null | grep -Fq "$fingerprint"; then echo 'Synthetic agent key was not unloaded'; exit 1; fi
+            printf '#!/bin/sh\nexit 99\n' > "$fixture/no-askpass"
+            chmod 700 "$fixture/no-askpass"
+            DISPLAY=:0 SSH_ASKPASS="$fixture/no-askpass" SSH_ASKPASS_REQUIRE=force /usr/bin/ssh-add --apple-load-keychain "$fixture/key" >/dev/null 2>&1
+            /usr/bin/ssh-add -l | grep -Fq "$fingerprint"
+            printf '%s\n' 'SYNTHETIC_OPENSSH_KEYCHAIN_RELOAD=PASS'
             exit 0
           fi
           inspect_synthetic_keychain() {
