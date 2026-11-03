@@ -6,14 +6,14 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, snippets, snippet-fix-tests, ci-gaps]
+        options: [baseline, candidate, upgrade, snippets, network, snippet-fix-tests, ci-gaps]
         default: candidate
 permissions:
   contents: read
   actions: read
 jobs:
   smoke:
-    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' }}
+    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' && inputs.build != 'network' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -292,3 +292,119 @@ jobs:
           test -n "$browser"
           PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
             node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs tests/public-mobile-locale-browser.test.mjs tests/whole-publication-browser-postgres.test.mjs
+
+  double-click:
+    if: ${{ inputs.build == 'network' }}
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fetch exact PR229 candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
+          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41628243576 --jq '.head_sha')" = 5b35c409ee79cf4f48eb10424bde22acf41fe1f5
+          gh run download 41628243576 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
+          cd "$RUNNER_TEMP/candidate"
+          shopt -s nullglob
+          images=(*.dmg); hashes=(*.dmg.sha256)
+          test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
+          shasum -a 256 -c "${hashes[0]}"
+      - name: Exercise real SSH with synthetic loopback server
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          test "${HOME:-}" = /Users/runner
+          fixture="$RUNNER_TEMP/ssh-fixture"
+          mount="$RUNNER_TEMP/candidate-mount"
+          ssh_dir_created=no
+          config_created=no
+          cleanup() {
+            local result=$?
+            if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
+            if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            if [[ -n "${sshd_pid:-}" ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
+            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
+            if [[ "$config_created" = yes ]]; then rm -f "$HOME/.ssh/config"; fi
+            if [[ "$ssh_dir_created" = yes ]]; then rmdir "$HOME/.ssh" || true; fi
+          }
+          trap cleanup EXIT
+          mkdir -m 700 "$fixture"
+          ssh-keygen -q -t ed25519 -N '' -f "$fixture/hostkey"
+          ssh-keygen -q -t ed25519 -N '' -f "$fixture/clientkey"
+          cp "$fixture/clientkey.pub" "$fixture/authorized_keys"
+          chmod 600 "$fixture/authorized_keys"
+          cat > "$fixture/sshd_config" <<EOF
+          Port 52222
+          ListenAddress 127.0.0.1
+          HostKey $fixture/hostkey
+          PidFile $fixture/sshd.pid
+          AuthorizedKeysFile $fixture/authorized_keys
+          StrictModes no
+          PubkeyAuthentication yes
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+          AllowUsers runner
+          AllowTcpForwarding no
+          X11Forwarding no
+          UsePAM no
+          LogLevel VERBOSE
+          EOF
+          test ! -e "$HOME/.ssh/config"
+          if [[ ! -d "$HOME/.ssh" ]]; then mkdir -m 700 "$HOME/.ssh"; ssh_dir_created=yes; fi
+          set -o noclobber
+          cat > "$HOME/.ssh/config" <<EOF
+          Host 127.0.0.1
+            IdentityFile $fixture/clientkey
+            IdentitiesOnly yes
+            UserKnownHostsFile $fixture/known_hosts
+          EOF
+          config_created=yes
+          set +o noclobber
+          chmod 600 "$HOME/.ssh/config"
+          printf '[127.0.0.1]:52222 %s\n' "$(cut -d ' ' -f 1,2 "$fixture/hostkey.pub")" > "$fixture/known_hosts"
+          mkdir "$mount"
+          sudo /usr/sbin/sshd -D -e -f "$fixture/sshd_config" > "$fixture/sshd.log" 2>&1 &
+          sshd_pid=$!
+          sleep 3
+          kill -0 "$sshd_pid"
+          ssh -o BatchMode=yes -o ConnectTimeout=5 -p 52222 runner@127.0.0.1 'printf TEST-ONLY-CODEX-SSH-ENDPOINT' | grep -Fx TEST-ONLY-CODEX-SSH-ENDPOINT
+          baseline_auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
+          test "$baseline_auth_count" -ge 1
+          images=("$RUNNER_TEMP"/candidate/*.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${images[0]}" > "$RUNNER_TEMP/evidence/mount.log"
+          app="$mount/Selective Remote.app"
+          codesign --verify --deep --strict "$app"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          binary="$app/Contents/MacOS/$executable"
+          policy='(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:52222"))'
+          sandbox-exec -p "$policy" "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
+          app_pid=$!
+          sleep 12
+          kill -0 "$app_pid"
+          cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
+          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
+          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --double-click-ssh | tee "$RUNNER_TEMP/evidence/ssh-ui.log"
+          for attempt in {1..30}; do
+            auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
+            if (( auth_count > baseline_auth_count )); then break; fi
+            sleep 1
+          done
+          test "$auth_count" -gt "$baseline_auth_count"
+          printf '%s\n' 'REAL_LOOPBACK_SSH_AUTHENTICATION=PASS' | tee "$RUNNER_TEMP/evidence/ssh-server-result.txt"
+          screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+          wait "$app_pid" || true
+          app_pid=""
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: isolated-double-click-evidence
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
