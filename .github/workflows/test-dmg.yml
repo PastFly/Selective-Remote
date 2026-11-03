@@ -74,7 +74,11 @@ jobs:
           app_pid=$!
           sleep 12
           kill -0 "$app_pid"
-          swiftc scripts/isolated-gui-smoke/probe.swift -o "$RUNNER_TEMP/gui-app-probe"
+          swiftc scripts/isolated-gui-smoke/keyboard-tests/main.swift scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/keyboard-tests"
+          "$RUNNER_TEMP/keyboard-tests"
+          python3 -m unittest discover -s scripts/isolated-gui-smoke/keyboard-tests -p 'test_*.py' -v
+          cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
+          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
           screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/termination.log"

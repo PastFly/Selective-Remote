@@ -9,6 +9,8 @@ def read(path):
         domain = plistlib.load(stream)
     raw = domain['SelectiveRemote.connectionProfiles.v2']
     profiles = json.loads(raw)
+    if not isinstance(profiles, list) or len(profiles) < 2:
+        raise ValueError('expected initial and newly created profiles')
     matches = [profile for profile in profiles if profile.get('friendlyName') == 'TEST-ONLY-CODEX-UPGRADE-HOST']
     if len(matches) != 1:
         raise ValueError('synthetic host missing or duplicated')
@@ -18,7 +20,7 @@ def read(path):
                 'host': '192.0.2.10', 'username': 'test'}
     if any(host.get(key) != value for key, value in expected.items()):
         raise ValueError('synthetic host field mismatch')
-    return {'id': str(uuid.UUID(host['id'])).upper(), **expected}
+    return {'id': str(uuid.UUID(host['id'])).upper(), 'profileCount': len(profiles), **expected}
 
 
 if len(sys.argv) != 3:

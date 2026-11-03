@@ -72,8 +72,9 @@ print("WELCOME_CLOSED=YES")
 if env["SR_BUILD_KIND"] == "baseline" {
 pressUnique("AXButton", "Connections")
 print("CONNECTIONS_OPEN_REQUESTED=YES")
-pressUnique("AXRadioButton", "SSH")
-print("SYNTHETIC_PROFILE_SSH_SELECTED=YES")
+pressUnique("AXPopUpButton", "Add")
+pressUnique("AXMenuItem", "Новое SSH")
+print("SYNTHETIC_PROFILE_CREATION_REQUESTED=YES")
 func setUniqueField(_ placeholder: String, _ value: String) {
     let matches = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
@@ -89,10 +90,14 @@ func setUniqueField(_ placeholder: String, _ value: String) {
         event.post(tap: .cghidEventTap)
     }
     key(0, down: true, flags: .maskCommand); key(0, down: false, flags: .maskCommand)
-    let pasteboard = NSPasteboard.general
-    pasteboard.clearContents()
-    guard pasteboard.setString(value, forType: .string), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("synthetic clipboard or focus") }
-    key(9, down: true, flags: .maskCommand); key(9, down: false, flags: .maskCommand)
+    for character in value {
+        guard let stroke = syntheticKeyStroke(character),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("unsupported input or focus") }
+        let flags: CGEventFlags = stroke.shift ? .maskShift : []
+        key(stroke.code, down: true, flags: flags)
+        key(stroke.code, down: false, flags: flags)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
+    }
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     guard (attr(matches[0], "AXValue") as? String) == value else { stop("typed field not confirmed: \(placeholder)") }
     key(48, down: true); key(48, down: false)
