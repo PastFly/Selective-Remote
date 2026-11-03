@@ -73,8 +73,10 @@ export class MigrationFence{
   }
   if(!acquired)throw Error('deployment_fence_locked');
   try{
+   if(!this.anchor)throw Error('deployment_anchor_required');
    file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
    const {records:events,budget}=await this.records(file,{withBudget:true}),state=reduceFenceEvents(events);
+   await this.assertAnchor(events);
    if(state.pending.length||state.v1Pending?.length)throw Error('deployment_fence_pending');
    await file.sync();
    await file.close();file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
@@ -101,6 +103,8 @@ export class MigrationFence{
    }finally{await staged?.close();}
    await rename(temp,this.path);
    const parent=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);try{await parent.sync();}finally{await parent.close();}
+   const current=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
+   try{await this.assertAnchor(await this.records(current));}finally{await current.close();}
    retain=false;return {originalBytes:bytes.length,archiveDigest:digest};
   }finally{await file?.close();if(!retain)await rmdir(lock);}
  });}
