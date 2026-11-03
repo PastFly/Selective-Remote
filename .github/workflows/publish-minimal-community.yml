@@ -25,6 +25,8 @@ jobs:
       ARTIFACT: SelectiveRemote-0.32.0-minimal-community-arm64
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Verify exact source and successful workflow
         shell: bash
         run: |
