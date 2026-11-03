@@ -117,6 +117,16 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     capture.arguments = ["-x", temp + "/evidence/snippet-editor-screen.png"]
     try? capture.run()
     capture.waitUntilExit()
+    let system = AXUIElementCreateSystemWide()
+    for (x, y) in [(450.0, 153.0), (450.0, 300.0), (250.0, 508.0)] {
+        var hit: AXUIElement?
+        let status = AXUIElementCopyElementAtPosition(system, Float(x), Float(y), &hit)
+        if let hit {
+            var hitPID: pid_t = 0
+            _ = AXUIElementGetPid(hit, &hitPID)
+            print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) pidMatch=\(hitPID == pid) role=\(attr(hit, "AXRole") as? String ?? "") description=\(attr(hit, "AXDescription") as? String ?? "") placeholder=\(attr(hit, "AXPlaceholderValue") as? String ?? "")")
+        } else { print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) missing=YES") }
+    }
     let modalRoots = windows.flatMap { (attr($0, "AXSheets") as? [AXUIElement]) ?? [] }
     print("SNIPPET_MODAL_COUNT=\(modalRoots.count)")
     for element in modalRoots.flatMap({ snapshot($0) }) {
