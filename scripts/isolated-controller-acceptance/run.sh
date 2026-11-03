@@ -183,6 +183,7 @@ if [[ "$checker_original_status" -ne 0 ]]; then
   echo "CAP_DAC_READ_SEARCH_STATUS=$checker_cap_status"
   # This is an isolated permissions experiment, not a product change. Parent
   # publication dir remains mode 0770 and group ownership is unchanged.
+  chmod 0640 "$state/publication/journal"
   chmod 0750 "$state/publication/journal.archives"
   chmod 0640 "$state/publication/journal.archives/"*
   set +e
@@ -191,6 +192,7 @@ if [[ "$checker_original_status" -ne 0 ]]; then
   set -e
   cat /tmp/sr-controller-acceptance/results/checker-group-permissions.log
   echo "GROUP_ADDED_RESTRICTED_ARCHIVE_STATUS=$checker_group_status"
+  chmod 0600 "$state/publication/journal"
   chmod 0700 "$state/publication/journal.archives"
   chmod 0600 "$state/publication/journal.archives/"*
   echo 'CHECKPOINT_CHECKER_PERMISSION_BROKEN=YES'
