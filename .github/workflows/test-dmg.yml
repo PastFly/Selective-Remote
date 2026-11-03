@@ -6,7 +6,7 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, credentials, network, network-current, snippet-fix-tests, ci-gaps]
+        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, credentials, forwarding, network, network-current, snippet-fix-tests, ci-gaps]
         default: candidate
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials ]]; then
+          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix || "$BUILD_KIND" == credentials || "$BUILD_KIND" == forwarding ]]; then
             gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/candidate"
             cd "$RUNNER_TEMP/candidate"
             printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
@@ -129,6 +129,14 @@ jobs:
           swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
+          if [[ "$SR_BUILD_KIND" == forwarding ]]; then
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 40 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-forwarding | tee "$RUNNER_TEMP/evidence/forwarding-ui.log"
+            screencapture -x "$RUNNER_TEMP/evidence/forwarding-screen.png"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
+            wait "$app_pid" || true
+            app_pid=""
+            exit 0
+          fi
           inspect_synthetic_keychain() {
             local version="$1" output="$2" baseline="${3:-$RUNNER_TEMP/evidence/baseline-persistence.json}"
             python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$baseline" > "$output" 2>&1 &
