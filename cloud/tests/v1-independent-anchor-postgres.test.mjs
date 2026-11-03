@@ -66,7 +66,7 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
  const admin=new pg.Pool({connectionString:url});const db='sr_anchor_test_'+randomUUID().replaceAll('-','');
  await admin.query(`CREATE DATABASE ${db}`);
  const dbURL=new URL(url);dbURL.pathname='/'+db;
- const pool=new pg.Pool({connectionString:dbURL.toString()});const id=randomUUID(),integratedID=randomUUID();
+ const pool=new pg.Pool({connectionString:dbURL.toString()});const id=randomUUID(),integratedID=id;
  const dir=await mkdtemp(join(tmpdir(),'sr-anchor-integrated-'));const path=join(dir,'journal');await writeFile(path,'');
  const role='sr_anchor_client_'+randomUUID().replaceAll('-','');
  const ddl=await readFile(new URL('../scripts/independent-fence-anchor.sql',import.meta.url),'utf8');
@@ -76,7 +76,7 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
   await pool.query(`GRANT USAGE ON SCHEMA selective_remote_anchor TO ${role}`);
   await pool.query(`GRANT EXECUTE ON FUNCTION selective_remote_anchor.read_head(uuid), selective_remote_anchor.advance_head(uuid,bigint,text,text) TO ${role}`);
   await pool.query('INSERT INTO selective_remote_anchor.heads (deployment_id,position,digest) VALUES ($1,0,$2)',[id,genesis]);
-  await pool.query('INSERT INTO selective_remote_anchor.heads (deployment_id,position,digest) VALUES ($1,0,$2)',[integratedID,genesis]);
+  await assert.rejects(()=>pool.query('INSERT INTO selective_remote_anchor.heads (deployment_id,position,digest) VALUES ($1,0,$2)',[randomUUID(),genesis]));
   const client=await pool.connect();
   try{
    await client.query(`SET ROLE ${role}`);
@@ -97,6 +97,7 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
    await assert.rejects(()=>client.query('SELECT selective_remote_anchor.advance_head($1,NULL,$2,$3)',[id,one.digest,'{}\n']),/invalid_deployment_anchor/);
    assert.deepEqual(await anchor.read(),one);
    await assert.rejects(()=>new PostgresFenceAnchor(client,randomUUID()).read(),/deployment_anchor_unavailable/);
+   await pool.query('UPDATE selective_remote_anchor.heads SET position=0,digest=$1 WHERE deployment_id=$2',[genesis,id]);
    const integrated=new PostgresFenceAnchor(client,integratedID),fence=new MigrationFence(path,{anchor:integrated});
    const pending={version:2,type:'PENDING_INTENT',intentID:randomUUID(),operationID:randomUUID(),kind:'PUBLICATION',schemaFloor:22,
     vaults:[{teamID:randomUUID(),vaultID:randomUUID(),generationID:randomUUID(),sequence:1,headerHash:'a'.repeat(64),manifestHash:'b'.repeat(64)}]};

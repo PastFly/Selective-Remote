@@ -4,6 +4,7 @@ CREATE SCHEMA selective_remote_anchor;
 REVOKE ALL ON SCHEMA selective_remote_anchor FROM PUBLIC;
 CREATE EXTENSION pgcrypto WITH SCHEMA selective_remote_anchor;
 CREATE TABLE selective_remote_anchor.heads (
+ singleton boolean NOT NULL DEFAULT true UNIQUE CHECK (singleton),
  deployment_id uuid PRIMARY KEY,
  position bigint NOT NULL CHECK (position >= 0 AND position <= 9007199254740991),
  digest text NOT NULL CHECK (digest ~ '^[a-f0-9]{64}$')

@@ -24,6 +24,8 @@ itself from the retained previous digest and event bytes; the runtime cannot
 submit an arbitrary successor digest through these functions. A compromised
 runtime can still create malicious new writes or deny service, and this anchor
 does not claim to protect against those authorized operations.
+Each anchor database contains exactly one deployment row: sharing a database
+between deployments would allow one runtime role to deny service to another.
 The reader checks the active role against the table, schema, database and both
 function owners, direct table/DDL privileges, privileged role flags and primary
 status. The trusted operator must also prevent restoring the anchor or promoting
