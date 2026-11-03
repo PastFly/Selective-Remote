@@ -333,6 +333,15 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
     }
     guard tabs.count == 1, AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP tab unavailable") }
+    Thread.sleep(forTimeInterval: 2)
+    let remoteSelectors = snapshot(app).filter {
+        guard ["AXButton", "AXRadioButton"].contains((attr($0, "AXRole") as? String) ?? ""),
+              ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK"),
+              let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
+        var point = CGPoint.zero
+        return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
+    }
+    guard remoteSelectors.count == 1, AXUIElementPerformAction(remoteSelectors[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP remote selector") }
     let deadline = Date(timeIntervalSinceNow: 35)
     while Date() < deadline {
         let rows = snapshot(app).filter { element in

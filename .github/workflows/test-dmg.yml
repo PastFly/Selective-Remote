@@ -49,8 +49,8 @@ jobs:
             expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
             artifact=SelectiveRemote-test-229-arm64
             if [[ "$BUILD_KIND" == snippets-current ]]; then
-              run=41645837943
-              expected=6f44a19e941428c280f09dc8bb5ec80c17122ae8
+              run=41647499832
+              expected=1bb9e373a86df43323c56d3c21c954bd4105c00a
             fi
             if [[ "$BUILD_KIND" == snippetfix ]]; then
               run=41642527522
@@ -321,8 +321,8 @@ jobs:
           run=41628243576
           expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
           if [[ "$BUILD_KIND" == network-current ]]; then
-            run=41645837943
-            expected=6f44a19e941428c280f09dc8bb5ec80c17122ae8
+            run=41647499832
+            expected=1bb9e373a86df43323c56d3c21c954bd4105c00a
           fi
           test "$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
           gh run download "$run" --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
