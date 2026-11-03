@@ -181,6 +181,26 @@ jobs:
               python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/upgrade-persistence.json"
               inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/legacy-keychain-after-upgrade.log"
               inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/upgraded-keychain.log"
+              hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
+              baseline_images=("$RUNNER_TEMP"/candidate/*.dmg)
+              test "${#baseline_images[@]}" -eq 1
+              hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${baseline_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
+              codesign --verify --deep --strict "$app"
+              executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+              binary="$app/Contents/MacOS/$executable"
+              export SR_BUILD_KIND=baseline
+              sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-downgrade.log" 2>&1 &
+              app_pid=$!
+              sleep 12
+              kill -0 "$app_pid"
+              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-baseline | tee "$RUNNER_TEMP/evidence/downgrade-ui.log"
+              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/downgrade-termination.log"
+              wait "$app_pid" || true
+              app_pid=""
+              defaults export "$bundle" "$RUNNER_TEMP/downgraded.plist"
+              python3 scripts/isolated-gui-smoke/verify-downgrade.py "$RUNNER_TEMP/upgraded.plist" "$RUNNER_TEMP/downgraded.plist" | tee "$RUNNER_TEMP/evidence/downgrade-persistence.json"
+              inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/legacy-keychain-after-downgrade.log"
+              inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/upgraded-keychain-after-downgrade.log"
             fi
           fi
       - name: Upload synthetic evidence
