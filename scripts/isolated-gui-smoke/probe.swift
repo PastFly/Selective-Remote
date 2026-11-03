@@ -155,6 +155,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-cu
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXButton", "Connections")
     let visible = snapshot(app).contains {
         (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-CURRENT-HOST" ||
         (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-CURRENT-HOST"
@@ -323,8 +324,14 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     pressUnique("AXMenuItem", "New RDP")
     setUniqueField("Work Computer", "TEST-ONLY-CODEX-RDP")
     setUniqueField("server.example.local", "127.0.0.1")
-    setUniqueField("Enter RDP Password", "TEST-ONLY-CODEX-RDP-SECRET", verifyVisibleValue: false)
-    pressUnique("AXButton", "Save")
+    setUniqueField("Введите пароль RDP", "TEST-ONLY-CODEX-RDP-SECRET", verifyVisibleValue: false)
+    let save = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        ((attr($0, "AXTitle") as? String) == "Save" || (attr($0, "AXDescription") as? String) == "Save") &&
+        (attr($0, "AXEnabled") as? Bool) == true
+    }
+    guard save.count == 1, AXUIElementPerformAction(save[0], kAXPressAction as CFString) == .success else { stop("synthetic RDP credential save") }
+    Thread.sleep(forTimeInterval: 1)
     let hosts = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-RDP"
     }
