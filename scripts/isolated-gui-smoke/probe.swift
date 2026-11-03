@@ -26,8 +26,8 @@ guard let sandbox = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW),
       let checkSymbol = dlsym(sandbox, "sandbox_check") else { stop("network policy unavailable") }
 let check = unsafeBitCast(checkSymbol, to: SandboxCheck.self)
 guard "network-outbound".withCString({ check(pid, $0, 0) }) == 1 else { stop("network restriction unverified") }
-if CommandLine.arguments.count == 3 {
-    guard CommandLine.arguments[2] == "--terminate", running.terminate() else { stop("graceful termination request failed") }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--terminate" {
+    guard running.terminate() else { stop("graceful termination request failed") }
     let deadline = Date(timeIntervalSinceNow: 15)
     while !running.isTerminated && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2)) }
     guard running.isTerminated else { stop("application did not terminate") }
@@ -62,6 +62,27 @@ func pressUnique(_ role: String, _ label: String) {
     guard matches.count == 1 else { stop("unique control unavailable: \(label)") }
     guard AXUIElementPerformAction(matches[0], kAXPressAction as CFString) == .success else { stop("action failed: \(label)") }
     Thread.sleep(forTimeInterval: 1)
+}
+if CommandLine.arguments.count == 3 {
+    guard CommandLine.arguments[2] == "--verify-baseline", env["SR_BUILD_KIND"] == "baseline" else { stop("unknown verification mode") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXButton", "Connections")
+    for (placeholder, expected) in [
+        ("SSH Server", "TEST-ONLY-CODEX-UPGRADE-HOST"),
+        ("For example: Work", "TEST-ONLY-CODEX-UPGRADE-FOLDER"),
+        ("server.example.com or a Host from ~/.ssh/config", "192.0.2.10"),
+        ("username", "test")
+    ] {
+        let fields = snapshot(app).filter {
+            (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+        }
+        guard fields.count == 1, (attr(fields[0], "AXValue") as? String) == expected else { stop("reopened field mismatch: \(placeholder)") }
+    }
+    print("BASELINE_REOPEN_UI=PASS")
+    exit(0)
 }
 pressUnique("AXButton", "Done")
 let remainingWelcome = snapshot(app).filter {

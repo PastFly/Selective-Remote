@@ -91,6 +91,17 @@ jobs:
             sleep 1
             defaults export "$bundle" "$RUNNER_TEMP/second.plist"
             python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/second.plist" | tee "$RUNNER_TEMP/evidence/baseline-persistence.json"
+            sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-restart.log" 2>&1 &
+            app_pid=$!
+            sleep 12
+            kill -0 "$app_pid"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-baseline | tee "$RUNNER_TEMP/evidence/restart-ui.log"
+            screencapture -x "$RUNNER_TEMP/evidence/baseline-reopened.png"
+            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/restart-termination.log"
+            wait "$app_pid" || true
+            app_pid=""
+            defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
+            python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restart-persistence.json"
           fi
       - name: Upload synthetic evidence
         if: always()
