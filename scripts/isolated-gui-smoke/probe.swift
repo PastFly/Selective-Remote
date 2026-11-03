@@ -65,6 +65,19 @@ pressUnique("AXButton", "Connections")
 print("CONNECTIONS_OPEN_REQUESTED=YES")
 pressUnique("AXRadioButton", "SSH")
 print("SYNTHETIC_PROFILE_SSH_SELECTED=YES")
+func setUniqueField(_ placeholder: String, _ value: String) {
+    let matches = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+    }
+    guard matches.count == 1 else { stop("unique field unavailable: \(placeholder)") }
+    guard AXUIElementSetAttributeValue(matches[0], kAXValueAttribute as CFString, value as CFTypeRef) == .success,
+          (attr(matches[0], "AXValue") as? String) == value else { stop("field value not confirmed: \(placeholder)") }
+}
+setUniqueField("SSH Server", "TEST-ONLY-CODEX-UPGRADE-HOST")
+setUniqueField("For example: Work", "TEST-ONLY-CODEX-UPGRADE-FOLDER")
+setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.10")
+setUniqueField("username", "test")
+print("SYNTHETIC_PROFILE_FIELDS_ENTERED=YES")
 for element in snapshot(app).prefix(500) {
     let role = attr(element, "AXRole") as? String ?? ""
     let title = attr(element, "AXTitle") as? String ?? ""
