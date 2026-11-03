@@ -6,14 +6,14 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, snippets, snippetfix, network, snippet-fix-tests, ci-gaps]
+        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, network, network-current, snippet-fix-tests, ci-gaps]
         default: candidate
 permissions:
   contents: read
   actions: read
 jobs:
   smoke:
-    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' && inputs.build != 'network' }}
+    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' && inputs.build != 'network' && inputs.build != 'network-current' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippetfix ]]; then
+          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix ]]; then
             gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/candidate"
             cd "$RUNNER_TEMP/candidate"
             printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
@@ -44,10 +44,14 @@ jobs:
           test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
           shasum -a 256 -c "${hashes[0]}"
           shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
-          if [[ "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippetfix ]]; then
+          if [[ "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix ]]; then
             run=41628243576
             expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
             artifact=SelectiveRemote-test-229-arm64
+            if [[ "$BUILD_KIND" == snippets-current ]]; then
+              run=41643120349
+              expected=e0c9dd7589a6e65f5b6f795519e865101e3ddbb0
+            fi
             if [[ "$BUILD_KIND" == snippetfix ]]; then
               run=41642527522
               expected=f9a83583c3eb2e674f07d2312025bffe1313966e
@@ -125,7 +129,7 @@ jobs:
           swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          if [[ "$SR_BUILD_KIND" == snippets || "$SR_BUILD_KIND" == snippetfix ]]; then
+          if [[ "$SR_BUILD_KIND" == snippets || "$SR_BUILD_KIND" == snippets-current || "$SR_BUILD_KIND" == snippetfix ]]; then
             SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 70 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-snippets | tee "$RUNNER_TEMP/evidence/snippets-ui.log"
             screencapture -x "$RUNNER_TEMP/evidence/snippets-screen.png"
             SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
@@ -301,7 +305,7 @@ jobs:
             node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs tests/public-mobile-locale-browser.test.mjs tests/whole-publication-browser-postgres.test.mjs
 
   double-click:
-    if: ${{ inputs.build == 'network' }}
+    if: ${{ inputs.build == 'network' || inputs.build == 'network-current' }}
     runs-on: macos-15
     timeout-minutes: 12
     steps:
@@ -309,12 +313,19 @@ jobs:
       - name: Fetch exact PR229 candidate
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_KIND: ${{ inputs.build }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41628243576 --jq '.head_sha')" = 5b35c409ee79cf4f48eb10424bde22acf41fe1f5
-          gh run download 41628243576 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
+          run=41628243576
+          expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
+          if [[ "$BUILD_KIND" == network-current ]]; then
+            run=41643120349
+            expected=e0c9dd7589a6e65f5b6f795519e865101e3ddbb0
+          fi
+          test "$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
+          gh run download "$run" --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
           cd "$RUNNER_TEMP/candidate"
           shopt -s nullglob
           images=(*.dmg); hashes=(*.dmg.sha256)

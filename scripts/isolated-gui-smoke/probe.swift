@@ -112,7 +112,7 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
-    guard ["snippets", "snippetfix"].contains(env["SR_BUILD_KIND"] ?? "") else { stop("snippet inspection requires isolated baseline") }
+    guard ["snippets", "snippets-current", "snippetfix"].contains(env["SR_BUILD_KIND"] ?? "") else { stop("snippet inspection requires isolated baseline") }
     let welcome = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
     }
