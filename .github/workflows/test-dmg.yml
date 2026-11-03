@@ -344,6 +344,7 @@ jobs:
           cleanup() {
             local result=$?
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
+            if [[ -n "${probe_pid:-}" ]]; then kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" 2>/dev/null || true; fi
             if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             if [[ -n "${sshd_pid:-}" ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
@@ -408,14 +409,31 @@ jobs:
           kill -0 "$app_pid"
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --double-click-ssh | tee "$RUNNER_TEMP/evidence/ssh-ui.log"
+          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --double-click-ssh > "$RUNNER_TEMP/evidence/ssh-ui.log" 2>&1 &
+          probe_pid=$!
+          for attempt in {1..90}; do
+            if [[ -f "$RUNNER_TEMP/ssh-host-ready.flag" ]]; then break; fi
+            if ! kill -0 "$probe_pid" 2>/dev/null; then cat "$RUNNER_TEMP/evidence/ssh-ui.log"; wait "$probe_pid"; exit 1; fi
+            sleep 1
+          done
+          test -f "$RUNNER_TEMP/ssh-host-ready.flag"
+          sleep 5
+          baseline_auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
+          baseline_shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
+          touch "$RUNNER_TEMP/ssh-click-go.flag"
+          wait "$probe_pid"
+          probe_pid=""
+          cat "$RUNNER_TEMP/evidence/ssh-ui.log"
           for attempt in {1..30}; do
             auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-            if (( auth_count > baseline_auth_count )); then break; fi
+            shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
+            if (( auth_count > baseline_auth_count && shell_count > baseline_shell_count )); then break; fi
             sleep 1
           done
           test "$auth_count" -gt "$baseline_auth_count"
-          printf '%s\n' 'REAL_LOOPBACK_SSH_AUTHENTICATION=PASS' | tee "$RUNNER_TEMP/evidence/ssh-server-result.txt"
+          test "$shell_count" -gt "$baseline_shell_count"
+          printf '%s\n' 'REAL_LOOPBACK_SSH_AUTHENTICATION=PASS' 'REAL_LOOPBACK_INTERACTIVE_SHELL=PASS' | tee "$RUNNER_TEMP/evidence/ssh-server-result.txt"
+          sleep 3
           screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
           wait "$app_pid" || true

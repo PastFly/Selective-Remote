@@ -298,6 +298,15 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
           running.activate(options: [.activateIgnoringOtherApps]) else { stop("synthetic host hit test") }
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("synthetic host focus") }
+    let ready = URL(fileURLWithPath: temp + "/ssh-host-ready.flag")
+    let go = temp + "/ssh-click-go.flag"
+    guard !FileManager.default.fileExists(atPath: ready.path), !FileManager.default.fileExists(atPath: go) else { stop("synthetic click barrier already exists") }
+    do { try Data("ready".utf8).write(to: ready, options: .withoutOverwriting) } catch { stop("synthetic click barrier") }
+    let deadline = Date(timeIntervalSinceNow: 30)
+    while !FileManager.default.fileExists(atPath: go) && Date() < deadline {
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    }
+    guard FileManager.default.fileExists(atPath: go), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("synthetic click barrier timeout") }
     for clicks in [1, 2] {
         guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("synthetic mouse event") }
