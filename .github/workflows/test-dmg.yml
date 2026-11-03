@@ -57,6 +57,13 @@ jobs:
               expected=f9a83583c3eb2e674f07d2312025bffe1313966e
               artifact=$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run/artifacts" --jq '.artifacts | map(select(.name | startswith("SelectiveRemote-test-"))) | if length == 1 then .[0].name else error("unexpected artifacts") end')
             fi
+            if [[ "$BUILD_KIND" == mixed ]]; then
+              for attempt in {1..30}; do
+                state=$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq '.status')
+                [[ "$state" == completed ]] && break
+                sleep 10
+              done
+            fi
             actual=$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
             test "$actual" = "$expected"
             mkdir "$RUNNER_TEMP/upgrade-image"
