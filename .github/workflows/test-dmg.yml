@@ -34,6 +34,7 @@ jobs:
           while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
           cleanup() {
             result=$?
+            python3 scripts/isolated-gui-smoke/save-synthetic-snapshots.py "$RUNNER_TEMP" "$RUNNER_TEMP/evidence" || true
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
             for pid in "${app_pid:-}" "${app_pid2:-}"; do if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; done
             hdiutil detach "$RUNNER_TEMP/candidate-mount2" >/dev/null 2>&1 || true
@@ -87,6 +88,8 @@ jobs:
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent | tee "$RUNNER_TEMP/evidence/reencode-ui.log"
           SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
           wait "$app_pid2" || true; app_pid2=""
+          defaults export "$bundle" "$RUNNER_TEMP/after-new-termination.plist"
+          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/after-new-termination.plist" | tee "$RUNNER_TEMP/evidence/shutdown-current-diff.json"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-late.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-concurrent.log" 2>&1 & app_pid2=$!
@@ -94,6 +97,7 @@ jobs:
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
           defaults export "$bundle" "$RUNNER_TEMP/before-late.plist"
+          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/after-new-termination.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/startup-current-diff.json"
           python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/before-late-current-diff.json"
           SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/late-ui.log"
           kill -0 "$app_pid" && kill -0 "$app_pid2"
