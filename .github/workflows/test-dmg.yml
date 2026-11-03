@@ -93,6 +93,8 @@ jobs:
           sleep 12; kill -0 "$app_pid" && kill -0 "$app_pid2"
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
+          defaults export "$bundle" "$RUNNER_TEMP/before-late.plist"
+          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/before-late-current-diff.json"
           SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/late-ui.log"
           kill -0 "$app_pid" && kill -0 "$app_pid2"
           "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Changes in the previous version' visible | tee "$RUNNER_TEMP/evidence/warning.log"
@@ -100,7 +102,8 @@ jobs:
           "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Open the previous version to view it.' dismiss | tee "$RUNNER_TEMP/evidence/alert.log"
           screencapture -x "$RUNNER_TEMP/evidence/warning.png"
           defaults export "$bundle" "$RUNNER_TEMP/after.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/after.plist" > "$RUNNER_TEMP/evidence/collections.json"
+          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/late-current-diff.json"
+          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" > "$RUNNER_TEMP/evidence/collections.json"
           echo 'ACTUAL_031_LATE_UI_WRITE_AND_032_WARNING=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
