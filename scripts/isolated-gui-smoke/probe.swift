@@ -10,7 +10,7 @@ func stop(_ message: String) -> Never { fputs("BLOCKED: \(message)\n", stderr); 
 let env = ProcessInfo.processInfo.environment
 guard env["GITHUB_ACTIONS"] == "true", let expected = env["SR_EXPECTED_EXECUTABLE"],
       let expectedHash = env["SR_EXPECTED_HASH"], let temp = env["RUNNER_TEMP"],
-      expected.hasPrefix(temp + "/candidate-mount/"), expectedHash.count == 64,
+      (expected.hasPrefix(temp + "/candidate-mount/") || expected.hasPrefix(temp + "/candidate-mount2/")), expectedHash.count == 64,
       [2, 3].contains(CommandLine.arguments.count), let pid = Int32(CommandLine.arguments[1]), pid > 1,
       let running = NSRunningApplication(processIdentifier: pid), !running.isTerminated else { stop("runner or process identity") }
 guard let lib = dlopen("/usr/lib/libproc.dylib", RTLD_NOW), let symbol = dlsym(lib, "proc_pidpath") else { stop("process path unavailable") }
@@ -63,10 +63,21 @@ func pressUnique(_ role: String, _ label: String) {
     guard AXUIElementPerformAction(matches[0], kAXPressAction as CFString) == .success else { stop("action failed: \(label)") }
     Thread.sleep(forTimeInterval: 1)
 }
-func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: Bool = true) {
-    let matches = snapshot(app).filter {
+func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: Bool = true, preferTopmost: Bool = false) {
+    var matches = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
     }
+    if preferTopmost && matches.count > 1 {
+        let positioned = matches.compactMap { element -> (AXUIElement, CGFloat)? in
+            guard let raw = attr(element, "AXPosition"), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+            var point = CGPoint.zero
+            guard AXValueGetValue(unsafeBitCast(raw, to: AXValue.self), .cgPoint, &point) else { return nil }
+            return (element, point.y)
+        }.sorted { $0.1 < $1.1 }
+        guard positioned.count == matches.count, positioned[0].1 < positioned[1].1 else { stop("ambiguous topmost field: \(placeholder)") }
+        matches = [positioned[0].0]
+    }
+    if matches.count != 1 { print("SYNTHETIC_FIELD_MATCHES placeholder=\(placeholder) count=\(matches.count)") }
     guard matches.count == 1 else { stop("unique field unavailable: \(placeholder)") }
     guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("input permission or activation") }
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
@@ -89,6 +100,7 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     let deadline = Date(timeIntervalSinceNow: 5)
     var confirmed = false
     while Date() < deadline {
+        if preferTopmost && ((attr(matches[0], "AXValue") as? String) == value) { confirmed = true; break }
         let current = snapshot(app).filter {
             (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
         }
@@ -115,8 +127,9 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
-if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host"].contains(CommandLine.arguments[2]) {
-    let late = CommandLine.arguments[2] == "--create-late-host"
+if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host", "--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2]) {
+    let late = ["--create-late-host", "--create-live-old"].contains(CommandLine.arguments[2])
+    let live = ["--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2])
     guard env["SR_BUILD_KIND"] == (late ? "baseline" : "candidate") else { stop("mixed-write version mismatch") }
     let welcome = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
@@ -125,12 +138,12 @@ if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-
     if late { pressUnique("AXButton", "Connections") }
     pressUnique("AXPopUpButton", "Add")
     pressUnique("AXMenuItem", "New SSH")
-    setUniqueField("SSH Server", late ? "TEST-ONLY-CODEX-LATE-HOST" : "TEST-ONLY-CODEX-CURRENT-HOST")
+    setUniqueField("SSH Server", live ? (late ? "TEST-ONLY-CODEX-LIVE-OLD" : "TEST-ONLY-CODEX-LIVE-NEW") : (late ? "TEST-ONLY-CODEX-LATE-HOST" : "TEST-ONLY-CODEX-CURRENT-HOST"))
     setUniqueField(late ? "For example: Work" : "For example: Work/Servers/Linux", "TEST-ONLY-CODEX-MIXED-FOLDER")
-    setUniqueField("server.example.com or a Host from ~/.ssh/config", late ? "192.0.2.11" : "192.0.2.12")
+    setUniqueField("server.example.com or a Host from ~/.ssh/config", live ? (late ? "192.0.2.13" : "192.0.2.14") : (late ? "192.0.2.11" : "192.0.2.12"))
     setUniqueField("username", "test")
     pressUnique("AXButton", "Authentication")
-    setUniqueField("Пароль SSH-сервера", late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-CURRENT-SECRET", verifyVisibleValue: false)
+    setUniqueField("Пароль SSH-сервера", live ? (late ? "TEST-ONLY-CODEX-LIVE-OLD-SECRET" : "TEST-ONLY-CODEX-LIVE-NEW-SECRET") : (late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-CURRENT-SECRET"), verifyVisibleValue: false)
     pressUnique("AXButton", "Save")
     pressUnique("AXButton", "General")
     print("SYNTHETIC_MIXED_PROFILE_SAVE_REQUESTED=YES")
@@ -324,6 +337,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     pressUnique("AXMenuItem", "New RDP")
     setUniqueField("Work Computer", "TEST-ONLY-CODEX-RDP")
     setUniqueField("server.example.local", "127.0.0.1")
+    setUniqueField("DOMAIN\\username", "test", preferTopmost: true)
     setUniqueField("Введите пароль RDP", "TEST-ONLY-CODEX-RDP-SECRET", verifyVisibleValue: false)
     let save = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" &&
