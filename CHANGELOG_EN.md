@@ -1,3 +1,10 @@
+## 0.32.0
+
+- **Stable local-app release:** a minimal branch based on published v0.31.0, without experimental Cloud migrations or storage-layout changes.
+- **Double-click to connect:** local profile list rows and grid cards support opening a connection with a double-click; single-click still selects a profile.
+- **Scope limitation:** public Cloud V1/V2 and Teams are not included. Their development continues separately; local-client and backup behavior is based on v0.31.0.
+- **Community preview:** distributed with ad-hoc signing only, without Apple Developer ID or notarization. The public update feed stays on v0.31.0 pending separate approval.
+
 ## 0.31.0
 
 - Added full encrypted Selective Remote backups in the `.srbackup` format, including connections, groups, Snippets, settings, and local workspace data.

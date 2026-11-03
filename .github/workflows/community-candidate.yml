@@ -1,0 +1,63 @@
+name: Minimal 0.32 Community Candidate
+
+on:
+  push:
+    branches:
+      - release/0.32.0-minimal-community
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: community-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-build:
+    name: Verify Swift and build unsigned community DMG
+    runs-on: macos-14
+    timeout-minutes: 70
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      SELECTIVEREMOTE_RELEASE_MODE: community
+      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify branch and release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "release/0.32.0-minimal-community"
+          grep -q '^VERSION="0.32.0"$' scripts/build_app.sh
+          grep -q '^BUILD_NUMBER="163"$' scripts/build_app.sh
+          test "$(node -e "const f=require('./Resources/updates.json');process.stdout.write(f.version)")" = "0.31.0"
+      - name: Swift tests and release build
+        run: |
+          set -euo pipefail
+          bash -n scripts/build_app.sh
+          swift test
+          swift build -c release
+      - name: Install build dependencies
+        run: brew install freerdp sdl3
+      - name: Build ad-hoc DMG
+        run: ./scripts/build_app.sh
+      - name: Check DMG and signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=dist/SelectiveRemote-0.32.0-arm64.dmg
+          test -s "$dmg"
+          test -s "$dmg.sha256"
+          (cd dist && shasum -a 256 -c SelectiveRemote-0.32.0-arm64.dmg.sha256)
+          hdiutil verify "$dmg"
+          codesign --verify --deep --strict --verbose=2 "dist/Selective Remote.app"
+      - name: Upload candidate (not published)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SelectiveRemote-0.32.0-minimal-community-arm64
+          path: |
+            dist/SelectiveRemote-0.32.0-arm64.dmg
+            dist/SelectiveRemote-0.32.0-arm64.dmg.sha256
+          retention-days: 30
+          if-no-files-found: error

@@ -657,6 +657,14 @@ struct ContentView: View {
                             )
                             .tag(item.id)
                             .contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                model.selectProfile(item.id)
+                                setMainArea(.connections)
+                                if item.connectionType != .rdp {
+                                    selectedTab = .terminal
+                                }
+                                model.connect()
+                            }
                             .onTapGesture { openProfile(item.id) }
                             .contextMenu { profileContextMenu(item) }
                         }
@@ -693,6 +701,16 @@ struct ContentView: View {
                                         )
                                     }
                                     .buttonStyle(.plain)
+                                    .simultaneousGesture(
+                                        TapGesture(count: 2).onEnded {
+                                            model.selectProfile(item.id)
+                                            setMainArea(.connections)
+                                            if item.connectionType != .rdp {
+                                                selectedTab = .terminal
+                                            }
+                                            model.connect()
+                                        }
+                                    )
                                     .contextMenu { profileContextMenu(item) }
                                 }
                             }
