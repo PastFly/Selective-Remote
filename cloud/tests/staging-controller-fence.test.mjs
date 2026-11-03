@@ -285,3 +285,11 @@ test('anchored controller refuses missing or changed anchor configuration',async
   assert.throws(()=>validateControllerCompose(m,{...s,...altered},evidence));
  const absent=compose(s);assert.throws(()=>validateControllerCompose(absent,s,environmentEvidence));
 });
+
+test('controller accepts only a root-owned, private service-group journal directory',async()=>{
+ const {validateFenceDirectory}=await import('../scripts/verify-staging-controller.mjs');
+ const good={uid:0,gid:101,mode:0o40770,isDirectory:()=>true,isSymbolicLink:()=>false};
+ assert.equal(validateFenceDirectory(good),101);
+ for(const bad of [{...good,uid:100},{...good,gid:0},{...good,mode:0o40775},{...good,mode:0o44770},{...good,isSymbolicLink:()=>true}])
+  assert.throws(()=>validateFenceDirectory(bad),/deployment_fence_permissions/);
+});

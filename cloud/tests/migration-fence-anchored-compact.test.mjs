@@ -40,3 +40,13 @@ test('checkpoint rejects a corrupted archive even when anchor remains available'
  await writeFile(join(path+'.archives',checkpoint.archiveDigest),'tampered\n');
  await assert.rejects(fence.snapshot(),/corrupt_deployment_fence/);
 });
+
+test('checkpoint files remain readable only to their service group even with restrictive umask',async t=>{
+ const {path,events}=await fixture(t),expected=head(events);
+ const anchor={read:async()=>expected,advance:async()=>{throw Error('must_not_advance');}};
+ const mask=process.umask(0o077);let checkpoint;
+ try{checkpoint=await new MigrationFence(path,{anchor}).compact();}finally{process.umask(mask);}
+ assert.equal((await lstat(path+'.archives')).mode&0o777,0o750);
+ assert.equal((await lstat(join(path+'.archives',checkpoint.archiveDigest))).mode&0o777,0o640);
+ assert.equal((await lstat(path)).mode&0o777,0o640);
+});

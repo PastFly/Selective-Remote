@@ -89,19 +89,25 @@ export class MigrationFence{
    const digest=createHash('sha256').update(bytes).digest('hex'),archiveDir=this.path+'.archives';
    const marker=Buffer.from(JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n');
    if(budget.bytes+marker.length>FENCE_MAX_REPLAY_BYTES||budget.records+1>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
-   try{await mkdir(archiveDir,{mode:0o700});retain=true;const parent=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);try{await parent.sync();}finally{await parent.close();}}
+   let archiveCreated=false;
+   try{await mkdir(archiveDir,{mode:0o750});archiveCreated=true;retain=true;const parent=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);try{await parent.sync();}finally{await parent.close();}}
    catch(e){if(e.code!=='EEXIST')throw e;}
-   const aStat=await lstat(archiveDir);if(!aStat.isDirectory()||aStat.isSymbolicLink())throw Error('invalid_deployment_fence_directory');
+   const archiveHandle=await this.openFile(archiveDir,constants.O_RDONLY|constants.O_NOFOLLOW);
+   try{if(archiveCreated)await archiveHandle.chmod(0o750);const aStat=await archiveHandle.stat();
+    if(!aStat.isDirectory()||aStat.gid!==dirStat.gid||(aStat.mode&0o777)!==0o750)throw Error('invalid_deployment_fence_directory');
+   }finally{await archiveHandle.close();}
    let archive;
    try{
-    try{archive=await this.openFile(archiveDir+'/'+digest,constants.O_RDWR|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);retain=true;
+    try{archive=await this.openFile(archiveDir+'/'+digest,constants.O_RDWR|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o640);retain=true;
+     await archive.chmod(0o640);if((await archive.stat()).gid!==dirStat.gid)throw Error('deployment_fence_group_mismatch');
      for(let at=0;at<bytes.length;){const {bytesWritten}=await archive.write(bytes,at,bytes.length-at,at);if(!Number.isSafeInteger(bytesWritten)||bytesWritten<=0)throw Error('deployment_fence_short_write');at+=bytesWritten;}}
-    catch(e){if(e.code!=='EEXIST')throw e;archive=await this.openFile(archiveDir+'/'+digest,constants.O_RDONLY|constants.O_NOFOLLOW);const stored=await archive.readFile();if(!stored.equals(bytes))throw Error('corrupt_deployment_fence');}
+    catch(e){if(e.code!=='EEXIST')throw e;archive=await this.openFile(archiveDir+'/'+digest,constants.O_RDONLY|constants.O_NOFOLLOW);const st=await archive.stat();if(st.gid!==dirStat.gid||(st.mode&0o777)!==0o640)throw Error('deployment_fence_group_mismatch');const stored=await archive.readFile();if(!stored.equals(bytes))throw Error('corrupt_deployment_fence');}
     await archive.sync();
    }finally{await archive?.close();}
    const archives=await this.openFile(archiveDir,constants.O_RDONLY|constants.O_NOFOLLOW);try{await archives.sync();}finally{await archives.close();}
    const temp=this.path+'.checkpoint-'+randomUUID();let staged;
-   try{staged=await this.openFile(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);retain=true;
+   try{staged=await this.openFile(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o640);retain=true;
+    await staged.chmod(0o640);if((await staged.stat()).gid!==dirStat.gid)throw Error('deployment_fence_group_mismatch');
     for(let at=0;at<marker.length;){const {bytesWritten}=await staged.write(marker,at,marker.length-at,at);if(!Number.isSafeInteger(bytesWritten)||bytesWritten<=0)throw Error('deployment_fence_short_write');at+=bytesWritten;}
     await staged.sync();
    }finally{await staged?.close();}

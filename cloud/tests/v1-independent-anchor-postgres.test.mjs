@@ -140,12 +140,18 @@ test('independent PostgreSQL anchor is durable, monotonic and prevents its runti
 
 test('anchor refuses a read served by a standby even when its row looks valid', async()=>{
  const {PostgresFenceAnchor}=await import('../src/postgres-fence-anchor.mjs');
- const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:true,constrained_role:true}]})},'11111111-1111-4111-8111-111111111111');
+ const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:true,constrained_role:true,durable_settings:true}]})},'11111111-1111-4111-8111-111111111111');
  await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
 });
 
 test('anchor refuses a privileged runtime identity even when the head and primary are valid', async()=>{
  const {PostgresFenceAnchor}=await import('../src/postgres-fence-anchor.mjs');
- const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:false,constrained_role:false}]})},'11111111-1111-4111-8111-111111111111');
+ const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:false,constrained_role:false,durable_settings:true}]})},'11111111-1111-4111-8111-111111111111');
+ await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
+});
+
+test('anchor refuses a primary with disabled PostgreSQL durability', async()=>{
+ const {PostgresFenceAnchor}=await import('../src/postgres-fence-anchor.mjs');
+ const anchor=new PostgresFenceAnchor({query:async()=>({rows:[{position:'0',digest:genesis,is_replica:false,constrained_role:true,durable_settings:false}]})},'11111111-1111-4111-8111-111111111111');
  await assert.rejects(()=>anchor.read(),/deployment_anchor_unavailable/);
 });

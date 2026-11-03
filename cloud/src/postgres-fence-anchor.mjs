@@ -12,6 +12,7 @@ export class PostgresFenceAnchor {
  }
  async read(){
   const result=await this.queryable.query(`SELECT h."position",h.digest,pg_catalog.pg_is_in_recovery() AS is_replica,
+    (pg_catalog.current_setting('fsync')='on' AND pg_catalog.current_setting('full_page_writes')='on') AS durable_settings,
     NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls
       OR pg_catalog.pg_has_role(r.oid,n.nspowner,'MEMBER') OR pg_catalog.pg_has_role(r.oid,c.relowner,'MEMBER')
       OR pg_catalog.pg_has_role(r.oid,reader.proowner,'MEMBER') OR pg_catalog.pg_has_role(r.oid,writer.proowner,'MEMBER')
@@ -28,7 +29,7 @@ export class PostgresFenceAnchor {
     JOIN pg_catalog.pg_proc writer ON writer.oid='selective_remote_anchor.advance_head(uuid,bigint,text,text)'::pg_catalog.regprocedure`,[this.deploymentID]);
   if(!Array.isArray(result?.rows)||result.rows.length!==1)throw Error('deployment_anchor_unavailable');
   const row=result.rows[0];
-  if(row.is_replica!==false||row.constrained_role!==true)throw Error('deployment_anchor_unavailable');
+  if(row.is_replica!==false||row.constrained_role!==true||row.durable_settings!==true)throw Error('deployment_anchor_unavailable');
   if(typeof row.position!=='string'||!/^(0|[1-9][0-9]*)$/u.test(row.position))throw Error('invalid_deployment_anchor');
   const head={position:Number(row.position),digest:row.digest};
   if(!sameFenceHistoryHead(head,head))throw Error('invalid_deployment_anchor');

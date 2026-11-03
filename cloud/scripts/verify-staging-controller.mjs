@@ -17,6 +17,12 @@ const validHash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const contains=(parent,path)=>path===parent||path.startsWith(parent+'/');
 function fail(code){throw Error(code);}
 
+export function validateFenceDirectory(stat){
+  if(!stat?.isDirectory()||stat.isSymbolicLink()||stat.uid!==0||!Number.isSafeInteger(stat.gid)||stat.gid<1
+    ||(stat.mode&0o5777)!==0o770)fail('deployment_fence_permissions');
+  return stat.gid;
+}
+
 export function validateControllerSettings(s){
   if(!s||s.version!==1||!/^[a-f0-9]{40}$/.test(s.sourceSHA)||!/^sha256:[a-f0-9]{64}$/.test(s.imageDigest)
     ||(Object.hasOwn(s,'registrationMode')&&s.registrationMode!=='production-v1')
@@ -190,7 +196,8 @@ export async function runController({maintenance=false}={}){
   await protectedPath(controllerState,{directory:true});
   await protectedPath(settings.backupDirectory,{directory:true});
   const fenceDirectory=dirname(settings.fencePath);
-  if(await realpath(fenceDirectory)!==fenceDirectory||!(await lstat(fenceDirectory)).isDirectory())fail('deployment_fence_mount');
+  if(await realpath(fenceDirectory)!==fenceDirectory)fail('deployment_fence_mount');
+  const fenceGroup=validateFenceDirectory(await lstat(fenceDirectory));
   const lock=join(controllerState,'controller.lock');
   try{await mkdir(lock,{mode:0o700});}catch{fail('deployment_controller_locked');}
   let temp;
@@ -244,7 +251,7 @@ export async function runController({maintenance=false}={}){
       if(stage==='check'){
         // A fresh process reads the independently retained checker + journal.
         // Candidate code is never used to decide whether it is safe to start.
-        return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
+        return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--group-add',String(fenceGroup),'--security-opt','no-new-privileges',
           '--env-file',join(temp,'effective.env'),
           '--mount',`type=bind,src=${controllerRoot},dst=/controller,readonly`,
           '--mount',`type=bind,src=${dirname(settings.fencePath)},dst=/publication-fence,readonly`,
