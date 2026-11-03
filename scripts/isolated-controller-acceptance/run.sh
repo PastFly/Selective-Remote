@@ -168,37 +168,11 @@ stat -c 'CHECKPOINT_PATH=%n UID=%u GID=%g MODE=%a' "$state/publication" "$state/
 read_checkpoint_as_checker() {
   docker run --rm --network cloud_private --user root --read-only --cap-drop ALL "$@" --security-opt no-new-privileges --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" --env-file "$cloud/.env" -e PUBLICATION_FENCE_PATH=/publication-fence/journal --entrypoint node "$image" --input-type=module -e 'import {loadConfig} from "./src/config.mjs";import {createConfiguredMigrationFence} from "./src/configured-migration-fence.mjs";const f=createConfiguredMigrationFence(loadConfig().deployment);try{await f.fence.snapshot();console.log("CHECKPOINT_READ=PASS")}catch(e){console.error("CHECKPOINT_READ_FAILURE="+(e.code??"none")+":"+e.message);process.exitCode=1}finally{await f.close()}'
 }
-set +e
-read_checkpoint_as_checker > /tmp/sr-controller-acceptance/results/checker-current-permissions.log 2>&1
-checker_original_status=$?
-set -e
-if [[ "$checker_original_status" -ne 0 ]]; then
-  cat /tmp/sr-controller-acceptance/results/checker-current-permissions.log
-  echo 'CURRENT_CHECKER_ARCHIVE_READ=FAIL'
-  set +e
-  read_checkpoint_as_checker --cap-add DAC_READ_SEARCH > /tmp/sr-controller-acceptance/results/checker-dac-read-search.log 2>&1
-  checker_cap_status=$?
-  set -e
-  cat /tmp/sr-controller-acceptance/results/checker-dac-read-search.log
-  echo "CAP_DAC_READ_SEARCH_STATUS=$checker_cap_status"
-  # This is an isolated permissions experiment, not a product change. Parent
-  # publication dir remains mode 0770 and group ownership is unchanged.
-  chmod 0640 "$state/publication/journal"
-  chmod 0750 "$state/publication/journal.archives"
-  chmod 0640 "$state/publication/journal.archives/"*
-  set +e
-  read_checkpoint_as_checker --group-add "$cloudgid" > /tmp/sr-controller-acceptance/results/checker-group-permissions.log 2>&1
-  checker_group_status=$?
-  set -e
-  cat /tmp/sr-controller-acceptance/results/checker-group-permissions.log
-  echo "GROUP_ADDED_RESTRICTED_ARCHIVE_STATUS=$checker_group_status"
-  chmod 0600 "$state/publication/journal"
-  chmod 0700 "$state/publication/journal.archives"
-  chmod 0600 "$state/publication/journal.archives/"*
-  echo 'CHECKPOINT_CHECKER_PERMISSION_BROKEN=YES'
-  exit 42
-fi
-cat /tmp/sr-controller-acceptance/results/checker-current-permissions.log
+[[ $(stat -c '%g:%a' "$state/publication/journal") == "$cloudgid:640" ]]
+[[ $(stat -c '%g:%a' "$state/publication/journal.archives") == "$cloudgid:750" ]]
+for archive in "$state/publication/journal.archives/"*; do [[ $(stat -c '%g:%a' "$archive") == "$cloudgid:640" ]]; done
+read_checkpoint_as_checker --group-add "$cloudgid" | tee /tmp/sr-controller-acceptance/results/checker-group-permissions.log
+echo 'CAP_DROPPED_GROUP_CHECKPOINT_READ=PASS'
 
 bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/post-write-controller.log 2>&1
 grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/post-write-controller.log
