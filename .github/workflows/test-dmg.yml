@@ -6,14 +6,14 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate, upgrade, mixed, snippets, snippets-current, snippetfix, network, network-current, rdp, snippet-fix-tests, ci-gaps]
+        options: [baseline, candidate, upgrade, mixed, snippets, snippets-current, snippetfix, network, network-current, rdp, snippet-fix-tests, ci-gaps, rdp-nla]
         default: candidate
 permissions:
   contents: read
   actions: read
 jobs:
   smoke:
-    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' && inputs.build != 'network' && inputs.build != 'network-current' && inputs.build != 'rdp' }}
+    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' && inputs.build != 'network' && inputs.build != 'network-current' && inputs.build != 'rdp' && inputs.build != 'rdp-nla' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -637,4 +637,47 @@ jobs:
         with:
           name: synthetic-rdp-evidence
           path: ${{ runner.temp }}/evidence
+          retention-days: 7
+
+  rdp-nla:
+    if: ${{ inputs.build == 'rdp-nla' }}
+    runs-on: macos-15
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fetch exact PR candidate and pinned official RDP example
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
+          run=41647499832
+          expected=1bb9e373a86df43323c56d3c21c954bd4105c00a
+          test "$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
+          gh run download "$run" --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
+          (cd "$RUNNER_TEMP/candidate"; shasum -a 256 -c ./*.dmg.sha256)
+          test "$(shasum -a 256 "$RUNNER_TEMP"/candidate/*.dmg | cut -d ' ' -f 1)" = 3251581d692649af50783bebd179c57bbf91516c4a46ccb44ea5a2dc0bfece99
+          git clone -q --filter=blob:none https://github.com/Devolutions/IronRDP.git "$RUNNER_TEMP/ironrdp"
+          git -C "$RUNNER_TEMP/ironrdp" checkout -q --detach c756ae3e2f803ce83994954adf4b77ed6dadce8d
+          test "$(git -C "$RUNNER_TEMP/ironrdp" rev-parse HEAD)" = c756ae3e2f803ce83994954adf4b77ed6dadce8d
+          python3 scripts/isolated-gui-smoke/prepare-ironrdp-pattern.py "$RUNNER_TEMP/ironrdp/crates/ironrdp/examples/server.rs"
+      - name: Build official RDP example with hybrid authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! brew list --versions opus >/dev/null; then brew install opus; fi
+          export PKG_CONFIG_PATH="$(brew --prefix opus)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          rustup toolchain install stable --profile minimal --no-self-update
+          cd "$RUNNER_TEMP/ironrdp"
+          cargo +stable build --locked -p ironrdp --example server --features cliprdr,connector,rdpsnd,server
+      - name: Test valid and invalid RDP credentials on loopback
+        shell: bash
+        run: scripts/isolated-gui-smoke/run-rdp-nla.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-rdp-nla-evidence
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
           retention-days: 7
