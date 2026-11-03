@@ -39,9 +39,20 @@ func snapshot(_ root: AXUIElement) -> [AXUIElement] {
     return result
 }
 let system = AXUIElementCreateSystemWide()
+var diagnostics = Set<String>()
+func report(_ message: String) { if diagnostics.insert(message).inserted { print(message) } }
 func syntheticPromptWindow(_ helperPID: pid_t) -> CGRect? {
-    guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-          let helperIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == helperPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
+    guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { report("SYNTHETIC_WINDOW_LIST=UNAVAILABLE"); return nil }
+    let helperWindows = windows.enumerated().filter { ($0.element[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == helperPID }
+    let appWindows = windows.enumerated().filter { ($0.element[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == appPID }
+    let descriptions = helperWindows.map { item -> String in
+        let layer = (item.element[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -999
+        let raw = item.element[kCGWindowBounds as String] as? [String: Any]
+        let rect = raw.flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) } ?? .zero
+        return "index:\(item.offset),layer:\(layer),rect:\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
+    }.joined(separator: ";")
+    report("SYNTHETIC_WINDOW helper=\(descriptions) appCount=\(appWindows.count)")
+    guard let helperIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == helperPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
           let appIndex = windows.firstIndex(where: { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == appPID && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }),
           helperIndex < appIndex, let raw = windows[helperIndex][kCGWindowBounds as String] as? [String: Any],
           let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), (300...600).contains(rect.width), (150...400).contains(rect.height),
@@ -58,7 +69,9 @@ func syntheticPromptArgumentsMatch(_ helperPID: pid_t) -> Bool {
     let output = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     guard process.terminationStatus == 0, output.count < 4096, let line = String(data: output, encoding: .utf8) else { return false }
-    return line.contains(key) && line.localizedCaseInsensitiveContains("passphrase")
+    let keyMatch = line.contains(key), phraseMatch = line.localizedCaseInsensitiveContains("passphrase")
+    report("SYNTHETIC_ASKPASS_ARGUMENTS keyMatch=\(keyMatch) phraseMatch=\(phraseMatch)")
+    return keyMatch && phraseMatch
 }
 func focusedPID() -> pid_t? {
     guard let focused = attribute(system, "AXFocusedUIElement"), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
