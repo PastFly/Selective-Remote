@@ -132,6 +132,49 @@ for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' clo
 [[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == '2:bmV3' ]]
 [[ $(sha256sum "$state/publication/journal" | cut -d ' ' -f 1) == "$journal_after_http" ]]
 echo 'CLOUD_CRASH_CONTROLLER_RESTART_DATA_PRESERVED=PASS'
+# Build an actual pre-fence Cloud binary from the immutable historical commit.
+legacy_source=f728db3592886f831cf0f8d7a9119d883d904120
+mkdir -p /tmp/sr-controller-acceptance/legacy-source
+git archive "$legacy_source" cloud | tar -x -C /tmp/sr-controller-acceptance/legacy-source
+docker build --quiet --label "org.opencontainers.image.revision=$legacy_source" -t sr-acceptance-legacy /tmp/sr-controller-acceptance/legacy-source/cloud >/tmp/sr-controller-acceptance/legacy-image-build.log
+legacy_image=$(docker image inspect --format '{{.Id}}' sr-acceptance-legacy)
+cp "$root/settings.json" /tmp/sr-controller-acceptance/current-settings.json
+jq --arg sha "$legacy_source" --arg img "$legacy_image" '.sourceSHA=$sha | .imageDigest=$img' "$root/settings.json" > "$root/settings.next"
+chmod 600 "$root/settings.next"
+mv "$root/settings.next" "$root/settings.json"
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/old-image-controller.log 2>&1
+legacy_status=$?
+set -e
+install -m 0600 /tmp/sr-controller-acceptance/current-settings.json "$root/settings.next"
+mv "$root/settings.next" "$root/settings.json"
+[[ $legacy_status -ne 0 ]]
+grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/old-image-controller.log
+grep -q '^deployment_writer_floor$' /tmp/sr-controller-acceptance/results/old-image-controller.log
+! grep -q '"stage":"close-traffic"' /tmp/sr-controller-acceptance/results/old-image-controller.log
+[[ $(docker inspect --format '{{.Image}}' cloud-cloud-1) == "$image" ]]
+[[ $(docker inspect --format '{{.State.Running}}' cloud-cloud-1) == true ]]
+echo 'OLD_CLOUD_IMAGE_REJECTED=PASS'
+"${compose[@]}" stop cloud caddy >/dev/null
+# Inject a lost COMMIT reply in an otherwise real V1 writer and durable PG transaction.
+docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {PostgresStore} from "./src/postgres-store.mjs"; import {MigrationFence} from "./src/migration-fence.mjs"; const real=new pg.Pool({connectionString:process.env.DATABASE_URL}),f=new MigrationFence("/publication-fence/journal"); let injected=false; const pool={async connect(){const c=await real.connect();return {async query(sql,values){if(sql==="COMMIT"&&!injected){injected=true;await c.query(sql,values);throw Error("synthetic_lost_commit_reply")}return c.query(sql,values)},release(){c.release()}}}}; try{const store=new PostgresStore(null,pool,{v1Fence:f}); try{await store.putVault("11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222",{baseRevision:2,envelopeVersion:1,wrappedKey:{algorithm:"synthetic"},ciphertext:"cmV2Mw",nonce:"A".repeat(16),authTag:"A".repeat(22),contentHash:"A".repeat(43)});throw Error("missing_injection")}catch(e){if(e.message!=="synthetic_lost_commit_reply")throw e} const row=await real.query("SELECT revision,ciphertext FROM personal_vaults WHERE user_id=$1",["11111111-1111-4111-8111-111111111111"]);if(Number(row.rows[0].revision)!==3||row.rows[0].ciphertext!=="cmV2Mw"||(await f.snapshot()).v1Pending.length!==1)throw Error("ambiguous_not_retained"); console.log("LOST_COMMIT_REPLY_PENDING=PASS")}finally{await real.end()}'
+set +e
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/ambiguous-controller.log 2>&1
+ambiguous_status=$?
+set -e
+[[ $ambiguous_status -ne 0 ]]
+grep -q '"stage":"check"' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
+grep -q '^deployment_fence_pending$' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
+! grep -q '"stage":"open-traffic"' /tmp/sr-controller-acceptance/results/ambiguous-controller.log
+echo 'CONTROLLER_REJECTS_AMBIGUOUS_COMMIT=PASS'
+# Resolve only by independent durable outcome readback in a new process.
+docker run --rm --network cloud_private --user root --mount "type=bind,src=$state/publication,dst=/publication-fence" --env-file "$cloud/.env" --entrypoint node "$image" --input-type=module -e 'import pg from "pg"; import {MigrationFence} from "./src/migration-fence.mjs"; import {PublicationFenceCoordinator,readCommittedV1Outcome} from "./src/publication-fence-coordinator.mjs"; const pool=new pg.Pool({connectionString:process.env.DATABASE_URL}),fence=new MigrationFence("/publication-fence/journal"); try{const pending=(await fence.snapshot()).v1Pending;if(pending.length!==1)throw Error("pending_missing");const result=await new PublicationFenceCoordinator({fence}).reconcile({intentID:pending[0].intentID,readCommittedOutcome:intent=>readCommittedV1Outcome({query:(sql,values)=>pool.query(sql,values),intent})});if(result.status!=="confirmed"||(await fence.snapshot()).v1Pending.length)throw Error("reconciliation_failed"); console.log("AMBIGUOUS_COMMIT_DURABLY_RECONCILED=PASS")}finally{await pool.end()}'
+bash "$root/scripts/staging-controller.sh" > /tmp/sr-controller-acceptance/results/reconciled-controller.log 2>&1
+grep -q '"stage":"complete","trafficOpened":true' /tmp/sr-controller-acceptance/results/reconciled-controller.log
+for _ in {1..60}; do [[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]] && break; sleep 2; done
+[[ $(docker inspect --format '{{.State.Health.Status}}' cloud-cloud-1) == healthy ]]
+[[ $(docker exec cloud-postgres-1 psql -U sraccept -d sraccept -tAc "SELECT revision||':'||ciphertext FROM personal_vaults WHERE user_id='11111111-1111-4111-8111-111111111111'") == '3:cmV2Mw' ]]
+echo 'CONTROLLER_STARTS_AFTER_DURABLE_RECONCILIATION=PASS'
 "${compose[@]}" stop cloud caddy >/dev/null
 # Ensure the independent checker accepts the committed state before any restore.
 docker run --rm --pull=never --network cloud_private --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$cloud/.env" -e NODE_ENV=production -e PUBLICATION_FENCE_PATH=/publication-fence/journal --mount "type=bind,src=$root,dst=/controller,readonly" --mount "type=bind,src=$state/publication,dst=/publication-fence,readonly" node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b node /controller/scripts/check-deployment-compatibility.mjs --candidate /controller/deployment-compatibility.json > /tmp/sr-controller-acceptance/results/new-baseline.json
