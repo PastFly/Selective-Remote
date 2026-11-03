@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -9,9 +10,27 @@ let args = CommandLine.arguments
 var console = stat()
 guard env["GITHUB_ACTIONS"] == "true", env["RUNNER_ENVIRONMENT"] == "github-hosted", env["USER"] == "runner",
       getuid() > 0, stat("/dev/console", &console) == 0, console.st_uid == getuid(),
-      let temp = env["RUNNER_TEMP"], args.count == 4, ["031", "032"].contains(args[3]),
+      let temp = env["RUNNER_TEMP"], args.count == 5, ["031", "032"].contains(args[3]), ["probe", "candidate"].contains(args[4]),
       args[1] == temp + "/synthetic-keychain-password", let observedPID = Int32(args[2]), observedPID > 1,
       AXIsProcessTrusted(), CGPreflightPostEventAccess() else { fail("runner identity or permissions") }
+if args[4] == "candidate" {
+    typealias PidPath = @convention(c) (Int32, UnsafeMutableRawPointer, UInt32) -> Int32
+    typealias SandboxCheck = @convention(c) (pid_t, UnsafePointer<CChar>, Int32) -> Int32
+    guard args[3] == "031", let expected = env["SR_EXPECTED_EXECUTABLE"], expected.hasPrefix(temp + "/candidate-mount/"),
+          let expectedHash = env["SR_EXPECTED_HASH"], expectedHash.count == 64,
+          let lib = dlopen("/usr/lib/libproc.dylib", RTLD_NOW), let symbol = dlsym(lib, "proc_pidpath"),
+          let sandbox = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW),
+          let checkSymbol = dlsym(sandbox, "sandbox_check") else { fail("candidate identity configuration") }
+    let pathFn = unsafeBitCast(symbol, to: PidPath.self)
+    var buffer = [CChar](repeating: 0, count: 4096)
+    guard buffer.withUnsafeMutableBytes({ pathFn(observedPID, $0.baseAddress!, UInt32($0.count)) }) > 0 else { fail("candidate process path") }
+    let actual = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+    let expectedPath = URL(fileURLWithPath: expected).resolvingSymlinksInPath().path
+    let check = unsafeBitCast(checkSymbol, to: SandboxCheck.self)
+    guard actual == expectedPath, let bytes = try? Data(contentsOf: URL(fileURLWithPath: actual), options: .mappedIfSafe),
+          SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == expectedHash,
+          "network-outbound".withCString({ check(observedPID, $0, 0) }) == 1 else { fail("candidate process identity") }
+}
 var file = stat()
 guard lstat(args[1], &file) == 0, (file.st_mode & S_IFMT) == S_IFREG, file.st_uid == getuid(),
       (file.st_mode & 0o777) == 0o600, file.st_nlink == 1,
@@ -50,7 +69,8 @@ while Date() < deadline {
                 + (((attribute(node, "AXRole") as? String) == "AXStaticText") ? [attribute(node, "AXValue") as? String].compactMap { $0 } : [])
             }.joined(separator: " ")
             let service = "local.selectiveremote.credentials.unified." + (args[3] == "031" ? "v1" : "v2")
-            guard labels.contains("selective-remote-synthetic"), labels.contains("keychain-probe"),
+            let requester = args[4] == "candidate" ? "Selective Remote" : "keychain-probe"
+            guard labels.contains("selective-remote-synthetic"), labels.contains(requester),
                   labels.contains(service) else { continue }
             let fields = nodes.filter { (attribute($0, "AXRole") as? String) == "AXTextField" || (attribute($0, "AXRole") as? String) == "AXSecureTextField" }
             let buttons = nodes.filter { (attribute($0, "AXRole") as? String) == "AXButton" &&
