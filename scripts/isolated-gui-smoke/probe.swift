@@ -119,7 +119,11 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
             print("SNIPPET_FOLDER_NODE role=\(role) title=\(title) description=\(description)")
         }
     }
-    pressUnique("AXButton", "New Snippet")
+    let createButtons = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "New Snippet"
+    }
+    guard createButtons.count == 2, AXUIElementPerformAction(createButtons[0], kAXPressAction as CFString) == .success else { stop("snippet folder creation control") }
+    Thread.sleep(forTimeInterval: 1)
     Thread.sleep(forTimeInterval: 3)
     let capture = Process()
     capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
