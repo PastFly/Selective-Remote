@@ -1,4 +1,10 @@
 import Carbon.HIToolbox
+import Foundation
+
+func syntheticPortMatches(_ formatted: String, _ expected: String) -> Bool {
+    formatted.range(of: "^[0-9]{1,3}(,[0-9]{3})*$", options: .regularExpression) != nil &&
+        formatted.replacingOccurrences(of: ",", with: "") == expected
+}
 
 struct SyntheticKeyStroke {
     let code: UInt16

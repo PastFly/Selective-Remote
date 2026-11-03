@@ -12,4 +12,7 @@ for (character, code, shift) in samples {
     }
 }
 guard syntheticKeyStroke("🔑") == nil else { fatalError("unsupported input must fail closed") }
+guard syntheticPortMatches("52,222", "52222"), syntheticPortMatches("522", "522"),
+      !syntheticPortMatches("5,2222", "52222"), !syntheticPortMatches("-52,222", "52222"),
+      !syntheticPortMatches("52,223", "52222") else { fatalError("bad synthetic port verification") }
 print("KEYBOARD_MAP_TEST=PASS")

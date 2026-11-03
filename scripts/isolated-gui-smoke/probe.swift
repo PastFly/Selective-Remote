@@ -97,6 +97,10 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
             if (fieldValue as? String) == value || (fieldValue as? NSNumber)?.stringValue == value {
                 confirmed = true; break
             }
+            if placeholder == "22", let formatted = fieldValue as? String,
+               syntheticPortMatches(formatted, value) {
+                confirmed = true; break
+            }
         }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
     }
