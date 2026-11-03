@@ -63,6 +63,8 @@ guard remainingWelcome.isEmpty else { stop("welcome remains open") }
 print("WELCOME_CLOSED=YES")
 pressUnique("AXButton", "Connections")
 print("CONNECTIONS_OPEN_REQUESTED=YES")
+pressUnique("AXRadioButton", "SSH")
+print("SYNTHETIC_PROFILE_SSH_SELECTED=YES")
 for element in snapshot(app).prefix(500) {
     let role = attr(element, "AXRole") as? String ?? ""
     let title = attr(element, "AXTitle") as? String ?? ""
