@@ -63,6 +63,29 @@ func pressUnique(_ role: String, _ label: String) {
     guard AXUIElementPerformAction(matches[0], kAXPressAction as CFString) == .success else { stop("action failed: \(label)") }
     Thread.sleep(forTimeInterval: 1)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-upgrade" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("upgrade inspection requires candidate") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    let nodes = snapshot(app)
+    let hostVisible = nodes.contains {
+        (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-UPGRADE-HOST" ||
+        (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-UPGRADE-HOST"
+    }
+    print("UPGRADE_HOST_ACCESSIBLE=\(hostVisible)")
+    for element in nodes.prefix(500) {
+        let role = attr(element, "AXRole") as? String ?? ""
+        let title = attr(element, "AXTitle") as? String ?? ""
+        let description = attr(element, "AXDescription") as? String ?? ""
+        let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
+        if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty {
+            print("AX_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
+        }
+    }
+    exit(0)
+}
 if CommandLine.arguments.count == 3 {
     guard CommandLine.arguments[2] == "--verify-baseline", env["SR_BUILD_KIND"] == "baseline" else { stop("unknown verification mode") }
     let welcome = snapshot(app).filter {
