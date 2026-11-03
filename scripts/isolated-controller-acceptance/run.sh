@@ -52,6 +52,7 @@ https://localhost:443 {
   respond "isolated controller acceptance" 200
 }
 CADDY
+chmod 644 "$cloud/compose.loopback-test.yaml" "$cloud/Caddyfile.443-only"
 # Restrict all possible test ingress even if a future regression reaches up.
 iptables -I DOCKER-USER -i eth0 -j DROP
 iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
