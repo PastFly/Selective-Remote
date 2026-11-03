@@ -339,6 +339,7 @@ jobs:
           test "${HOME:-}" = /Users/runner
           fixture="$RUNNER_TEMP/ssh-fixture"
           mount="$RUNNER_TEMP/candidate-mount"
+          control_probe_dir="/private/tmp/selectiveremote-$(id -u)-a11ce001"
           ssh_dir_created=no
           config_created=no
           cleanup() {
@@ -355,6 +356,7 @@ jobs:
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
             if [[ "$config_created" = yes ]]; then rm -f "$HOME/.ssh/config"; fi
             if [[ "$ssh_dir_created" = yes ]]; then rmdir "$HOME/.ssh" || true; fi
+            if [[ "${control_probe_created:-no}" = yes ]]; then rm -f "$control_probe_dir/probe.sock"; rmdir "$control_probe_dir" || true; fi
           }
           trap cleanup EXIT
           mkdir -m 700 "$fixture"
@@ -420,6 +422,18 @@ jobs:
           else
             printf '%s\n' 'SYNTHETIC_UNIX_SOCKET_OUTBOUND=DENIED'
             exit 1
+          fi
+          wait "$unix_probe_pid" || true
+          test ! -e "$control_probe_dir"
+          mkdir -m 700 "$control_probe_dir"
+          control_probe_created=yes
+          python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); s.settimeout(5); exec("try:\n c,_=s.accept(); c.close()\nexcept TimeoutError:\n pass"); s.close()' "$control_probe_dir/probe.sock" &
+          unix_probe_pid=$!
+          sleep 1
+          if sandbox-exec -p "$policy" python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.close()' "$control_probe_dir/probe.sock" 2>/dev/null; then
+            printf '%s\n' 'SYNTHETIC_CONTROL_SOCKET_OUTBOUND=ALLOWED'
+          else
+            printf '%s\n' 'SYNTHETIC_CONTROL_SOCKET_OUTBOUND=DENIED'
           fi
           wait "$unix_probe_pid" || true
           printf 'ls -1\n' | sandbox-exec -p "$policy" /usr/bin/sftp -b - -o BatchMode=yes -o ConnectTimeout=5 -P 52222 runner@127.0.0.1 | grep -Fx TEST-ONLY-CODEX-SFTP-CHECK
