@@ -122,6 +122,22 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-cr
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Connections")
+    setUniqueField("Work Computer", "TEST-ONLY-CODEX-RDP")
+    setUniqueField("server.example.local", "192.0.2.11")
+    func saveEnabledCredential() {
+        let buttons = snapshot(app).filter {
+            (attr($0, "AXRole") as? String) == "AXButton" &&
+            ((attr($0, "AXTitle") as? String) == "Save" || (attr($0, "AXDescription") as? String) == "Save") &&
+            (attr($0, "AXEnabled") as? Bool) == true
+        }
+        guard buttons.count == 1, AXUIElementPerformAction(buttons[0], kAXPressAction as CFString) == .success else { stop("synthetic RDP credential save") }
+        Thread.sleep(forTimeInterval: 1)
+    }
+    setUniqueField("Введите пароль RDP", "TEST-ONLY-CODEX-RDP-SECRET", verifyVisibleValue: false)
+    saveEnabledCredential()
+    setUniqueField("Отдельный пароль RD Gateway", "TEST-ONLY-CODEX-GATEWAY-SECRET", verifyVisibleValue: false)
+    saveEnabledCredential()
+    print("SYNTHETIC_RDP_AND_GATEWAY_SAVE_REQUESTED=YES")
     for element in snapshot(app).filter({ !["AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem"].contains(attr($0, "AXRole") as? String ?? "") }) {
         let role = attr(element, "AXRole") as? String ?? ""
         let title = attr(element, "AXTitle") as? String ?? ""
@@ -253,6 +269,20 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-up
             print("AX_NODE role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")
         }
     }
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-rdp" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("RDP verification requires candidate") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    let host = snapshot(app).filter {
+        (attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-RDP" ||
+        (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-RDP"
+    }
+    guard !host.isEmpty else { stop("synthetic RDP host unavailable after upgrade") }
+    print("SYNTHETIC_RDP_HOST_VISIBLE=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-snippets" {
