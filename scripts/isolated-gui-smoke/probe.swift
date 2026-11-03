@@ -100,7 +100,14 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
         }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
     }
-    if verifyVisibleValue && !confirmed { stop("typed field not confirmed: \(placeholder)") }
+    if verifyVisibleValue && !confirmed {
+        if placeholder == "22" {
+            let current = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder }
+            let originalValue = attr(matches[0], "AXValue")
+            print("SYNTHETIC_PORT_DIAGNOSTIC matches=\(current.count) string=\(originalValue as? String ?? "none") number=\((originalValue as? NSNumber)?.stringValue ?? "none")")
+        }
+        stop("typed field not confirmed: \(placeholder)")
+    }
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
