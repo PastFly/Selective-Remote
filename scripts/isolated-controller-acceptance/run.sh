@@ -93,7 +93,8 @@ chown "$uid:$gid" /tmp/sr-controller-acceptance/anchor-certs/server.key
 chmod 600 /tmp/sr-controller-acceptance/anchor-certs/server.key
 chmod 644 /tmp/sr-controller-acceptance/anchor-certs/server.crt /tmp/sr-controller-acceptance/anchor-certs/ca.crt
 docker run -d --name "$anchor_name" --network bridge -p "$anchor_gateway:15432:5432" -e POSTGRES_DB=sranchor -e POSTGRES_USER=sradmin -e POSTGRES_PASSWORD=synthetic-anchor-admin --mount type=bind,src=/tmp/sr-controller-acceptance/anchor-certs,dst=/anchor-certs,readonly postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef -c ssl=on -c ssl_cert_file=/anchor-certs/server.crt -c ssl_key_file=/anchor-certs/server.key >/dev/null
-for _ in {1..60}; do if docker exec "$anchor_name" pg_isready -U sradmin -d sranchor >/dev/null 2>&1; then break; fi; sleep 1; done
+for _ in {1..60}; do if docker logs "$anchor_name" 2>&1 | grep -F 'PostgreSQL init process complete; ready for start up' >/dev/null && docker exec "$anchor_name" pg_isready -U sradmin -d sranchor >/dev/null 2>&1; then break; fi; sleep 1; done
+docker logs "$anchor_name" 2>&1 | grep -F 'PostgreSQL init process complete; ready for start up' >/dev/null
 docker exec "$anchor_name" pg_isready -U sradmin -d sranchor >/dev/null
 docker exec -i "$anchor_name" psql -U sradmin -d sranchor -v ON_ERROR_STOP=1 < "$cloud/scripts/independent-fence-anchor.sql" >/dev/null
 genesis=$(node --input-type=module -e 'import {fenceHistoryHead} from "./cloud/src/fence-history-head.mjs";console.log(fenceHistoryHead([]).digest)')
