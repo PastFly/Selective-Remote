@@ -209,3 +209,47 @@ test('isolated PostgreSQL restore before creation is rejected by retained journa
     await assertV1DataFloor((sql,values)=>db.pool.query(sql,values),await fence.snapshot());
   } finally {await restored?.cleanup();await db.cleanup();await rm(dir,{recursive:true,force:true});}
 });
+
+test('controller and installer explicitly recognize empty-creation capability', async()=>{
+  const {validateCandidateCapabilities}=await import('../scripts/verify-staging-controller.mjs');
+  const {validateInstallerCapabilities}=await import('../scripts/staging-reviewed-installer.mjs');
+  const capabilities={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1,v1WriterProtocol:1,emptyVaultCreationVersion:1};
+  assert.doesNotThrow(()=>validateCandidateCapabilities(capabilities));
+  assert.doesNotThrow(()=>validateInstallerCapabilities(capabilities));
+  assert.throws(()=>validateCandidateCapabilities({...capabilities,emptyVaultCreationVersion:2}),/deployment_code_floor/);
+  assert.throws(()=>validateInstallerCapabilities({...capabilities,emptyVaultCreationVersion:2}),/staging_install_candidate_code/);
+});
+
+test('prior installed controller rejects a candidate requiring empty-creation journal support', async()=>{
+  const {execFileSync}=await import('node:child_process'),{mkdir}=await import('node:fs/promises'),{pathToFileURL}=await import('node:url');
+  const dir=await mkdtemp(join(tmpdir(),'sr-old-controller-capability-'));
+  try{
+    await mkdir(join(dir,'scripts'));await mkdir(join(dir,'src'));
+    for(const path of ['scripts/verify-staging-controller.mjs','src/staging-registration.mjs','src/security.mjs']){
+      const source=execFileSync('git',['show',`b31462894beef06677385ecab75740174bc3253f:cloud/${path}`]);
+      await writeFile(join(dir,path),source);
+    }
+    const old=await import(pathToFileURL(join(dir,'scripts/verify-staging-controller.mjs')).href);
+    const {currentCapabilities}=await import('../src/deployment-compatibility.mjs');
+    assert.equal(currentCapabilities.emptyVaultCreationVersion,1);
+    assert.throws(()=>old.validateCandidateCapabilities(currentCapabilities),/deployment_code_floor/);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('confirmed empty creation blocks candidate without its journal capability before DB access', async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'sr-v1-empty-capability-'));
+  try{
+    const file=join(dir,'journal');await writeFile(file,'',{mode:0o600});const fence=new MigrationFence(file);
+    await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:[]});
+    await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
+    const {v1CiphertextHash}=await import('../src/v1-data-fence.mjs');
+    const {fenceIntentDigest}=await import('../src/migration-fence-journal.mjs');
+    const intent={version:2,type:'V1_PENDING_INTENT',intentID:randomUUID(),operationID:randomUUID(),vaultKind:'PERSONAL',ownerID:randomUUID(),vaultID:randomUUID(),baseRevision:-1,revision:0,ciphertextHash:v1CiphertextHash(null),envelopeHash:'b'.repeat(64)};
+    await fence.append(intent);await fence.append({version:2,type:'V1_CONFIRMED_COMMIT',intentID:intent.intentID,intentDigest:fenceIntentDigest(intent)});
+    const {currentCapabilities,verifyDeploymentCompatibility}=await import('../src/deployment-compatibility.mjs');
+    const {emptyVaultCreationVersion:_,...oldCandidate}=currentCapabilities;
+    let queried=false;
+    await assert.rejects(verifyDeploymentCompatibility({fence,candidate:oldCandidate,query:()=>{queried=true;throw Error('unexpected_query');}}),/deployment_code_floor/);
+    assert.equal(queried,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
