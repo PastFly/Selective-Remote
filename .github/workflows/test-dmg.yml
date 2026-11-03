@@ -6,13 +6,14 @@ on:
         description: Image to launch
         type: choice
         required: true
-        options: [baseline, candidate]
+        options: [baseline, candidate, ci-gaps]
         default: candidate
 permissions:
   contents: read
   actions: read
 jobs:
   smoke:
+    if: ${{ inputs.build != 'ci-gaps' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -99,3 +100,39 @@ jobs:
           path: ${{ runner.temp }}/evidence/
           if-no-files-found: error
           retention-days: 7
+  skipped-v1-and-browser:
+    if: ${{ inputs.build == 'ci-gaps' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_USER: selective_remote_test
+          POSTGRES_PASSWORD: integration-only-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U selective_remote_test -d selective_remote_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ddf78d436e135a75eb758bab3505e16e70c4133d
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+      - working-directory: cloud
+        run: npm ci
+      - name: Exercise skipped V1 and browser cases
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+        run: |
+          set -euo pipefail
+          browser="$(command -v google-chrome || command -v chromium || true)"
+          test -n "$browser"
+          PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
+            node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs tests/public-mobile-locale-browser.test.mjs tests/whole-publication-browser-postgres.test.mjs
