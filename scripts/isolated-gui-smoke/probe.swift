@@ -319,8 +319,15 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp" {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP fixture runner identity") }
+    for element in snapshot(app) where (attr(element, "AXDescription") as? String) == "SFTP" || (attr(element, "AXTitle") as? String) == "SFTP" {
+        let position = attr(element, "AXPosition")
+        var point = CGPoint.zero
+        if let position, CFGetTypeID(position) == AXValueGetTypeID() { _ = AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) }
+        print("SYNTHETIC_SFTP_CONTROL role=\(attr(element, "AXRole") as? String ?? "") x=\(point.x)")
+    }
     let tabs = snapshot(app).filter {
-        guard (attr($0, "AXRole") as? String) == "AXButton", (attr($0, "AXDescription") as? String) == "SFTP",
+        guard ["AXButton", "AXRadioButton"].contains((attr($0, "AXRole") as? String) ?? ""),
+              ((attr($0, "AXDescription") as? String) == "SFTP" || (attr($0, "AXTitle") as? String) == "SFTP"),
               let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
         var point = CGPoint.zero
         return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
