@@ -9,7 +9,7 @@ let args = CommandLine.arguments
 var console = stat()
 guard env["GITHUB_ACTIONS"] == "true", env["RUNNER_ENVIRONMENT"] == "github-hosted", env["USER"] == "runner",
       getuid() > 0, stat("/dev/console", &console) == 0, console.st_uid == getuid(),
-      let temp = env["RUNNER_TEMP"], args.count == 3,
+      let temp = env["RUNNER_TEMP"], args.count == 4, ["031", "032"].contains(args[3]),
       args[1] == temp + "/synthetic-keychain-password", let observedPID = Int32(args[2]), observedPID > 1,
       AXIsProcessTrusted(), CGPreflightPostEventAccess() else { fail("runner identity or permissions") }
 var file = stat()
@@ -49,8 +49,9 @@ while Date() < deadline {
                 ["AXTitle", "AXDescription", "AXHelp"].compactMap { attribute(node, $0) as? String }
                 + (((attribute(node, "AXRole") as? String) == "AXStaticText") ? [attribute(node, "AXValue") as? String].compactMap { $0 } : [])
             }.joined(separator: " ")
+            let service = "local.selectiveremote.credentials.unified." + (args[3] == "031" ? "v1" : "v2")
             guard labels.contains("selective-remote-synthetic"), labels.contains("keychain-probe"),
-                  labels.contains("local.selectiveremote.credentials.unified.v1") else { continue }
+                  labels.contains(service) else { continue }
             let fields = nodes.filter { (attribute($0, "AXRole") as? String) == "AXTextField" || (attribute($0, "AXRole") as? String) == "AXSecureTextField" }
             let buttons = nodes.filter { (attribute($0, "AXRole") as? String) == "AXButton" &&
                 ((attribute($0, "AXTitle") as? String) == "Allow" || (attribute($0, "AXDescription") as? String) == "Allow") }
