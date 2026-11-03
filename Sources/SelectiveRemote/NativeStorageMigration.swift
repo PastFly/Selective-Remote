@@ -64,6 +64,21 @@ enum NativeStorageMigration {
 
     static var versionedKeys: [String] { legacyKeys.compactMap { newKey(for: $0) } }
 
+    /// Return the legacy Host data at migration and now, without mutating it.
+    static func legacyProfileData(_ defaults: any NativePreferencesAccess) throws -> [(Data?, Data?)] {
+        guard defaults.synchronize(), let bytes = defaults.object(forKey: snapshotKey) as? Data,
+              defaults.object(forKey: markerKey) as? String == "complete:" + digest(bytes)
+        else { throw MigrationError.inconsistentCheckpoint }
+        let snapshot = try decodeSnapshot(bytes)
+        return try ["SelectiveRemote.connectionProfiles.v2", "SelectiveRemote.connectionProfile.v1"].map { key in
+            let original = snapshot[key], current = defaults.object(forKey: key)
+            guard original == nil || original is Data, current == nil || current is Data else {
+                throw MigrationError.invalidSource
+            }
+            return (original as? Data, current as? Data)
+        }
+    }
+
     static func workspaceKey(for profileID: UUID) -> String {
         versionedWorkspacePrefix + profileID.uuidString
     }

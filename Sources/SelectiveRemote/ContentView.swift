@@ -163,6 +163,9 @@ struct ContentView: View {
     @State private var showsSyncCenter = false
     @State private var diagnosticsCloudSyncRequestID: UUID?
     @State private var cloudSessionAvailable = false
+    @State private var legacyHostWarning: LegacyHostWarning?
+    @State private var legacyHostCheckInFlight = false
+    @State private var showsLegacyHostWarning = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID = UserDefaults.standard
         .string(forKey: "SelectiveRemote.host-shelf.team-selection.v1")
@@ -277,6 +280,10 @@ struct ContentView: View {
         .appTextSize(appAppearance.textSize)
         .controlSize(appAppearance.density.controlSize)
         .tint(.accentColor)
+        .onAppear { refreshLegacyHostWarning() }
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+            refreshLegacyHostWarning()
+        }
         .confirmationDialog(
             UpdateLocalization.text(ru: "Удалить Host?", en: "Delete Host?"),
             isPresented: Binding(
@@ -518,6 +525,65 @@ struct ContentView: View {
         }
     }
 
+    private enum LegacyHostWarning: Sendable, Equatable {
+        case changed, unavailable
+    }
+
+    private func refreshLegacyHostWarning() {
+        guard !legacyHostCheckInFlight else { return }
+        legacyHostCheckInFlight = true
+        Task {
+            let result = await Task.detached(priority: .utility) { () -> LegacyHostWarning? in
+                do {
+                    return try LegacyProfileChangeDetector.hasChanges(UserDefaults.standard) ? .changed : nil
+                } catch {
+                    return .unavailable
+                }
+            }.value
+            if result != nil && result != legacyHostWarning { showsLegacyHostWarning = true }
+            legacyHostWarning = result
+            legacyHostCheckInFlight = false
+        }
+    }
+
+    private func legacyHostWarningView(_ warning: LegacyHostWarning) -> some View {
+        let title = warning == .changed
+            ? UpdateLocalization.text(ru: "Изменения в предыдущей версии", en: "Changes in the previous version")
+            : UpdateLocalization.text(ru: "Не удалось проверить предыдущую версию", en: "Could not check the previous version")
+        let message = warning == .changed
+            ? UpdateLocalization.text(
+                ru: "Данные подключений предыдущей версии изменились после обновления и не отображаются здесь. Откройте предыдущую версию, чтобы их просмотреть. Не редактируйте подключения одновременно в обеих версиях.",
+                en: "Connection data from the previous version changed after the upgrade and is not shown here. Open the previous version to view it. Avoid editing connections in both versions at the same time."
+              )
+            : UpdateLocalization.text(
+                ru: "Не удалось проверить изменения подключений в предыдущей версии. Закройте предыдущую версию и перезапустите приложение. Если сообщение сохранится, сохраните копию данных перед дальнейшими изменениями.",
+                en: "Changes to connection data in the previous version could not be checked. Close the previous version and restart the app. If this message remains, keep a copy of your data before making further changes."
+              )
+        return Button {
+            showsLegacyHostWarning = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                Text(title).font(.callout.weight(.medium)).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("legacy-host-warning")
+        .help(message)
+        .alert(title, isPresented: $showsLegacyHostWarning) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(message)
+        }
+    }
+
     private func notificationLifecycle<V: View>(_ view: V) -> some View {
         view
             .task(id: cloudSessionAvailable) { await refreshNotificationSources() }
@@ -703,6 +769,12 @@ struct ContentView: View {
             .padding(.horizontal, 18)
             .padding(.top, 18)
             .padding(.bottom, 16)
+
+            if let legacyHostWarning {
+                legacyHostWarningView(legacyHostWarning)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
 
             if showsHostQuickAccess {
                 HStack(spacing: 7) {
