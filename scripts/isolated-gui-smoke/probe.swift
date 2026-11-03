@@ -96,10 +96,18 @@ func setUniqueField(_ placeholder: String, _ value: String) {
         let flags: CGEventFlags = stroke.shift ? .maskShift : []
         key(stroke.code, down: true, flags: flags)
         key(stroke.code, down: false, flags: flags)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.12))
     }
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    guard (attr(matches[0], "AXValue") as? String) == value else { stop("typed field not confirmed: \(placeholder)") }
+    let deadline = Date(timeIntervalSinceNow: 5)
+    var confirmed = false
+    while Date() < deadline {
+        let current = snapshot(app).filter {
+            (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+        }
+        if current.count == 1 && (attr(current[0], "AXValue") as? String) == value { confirmed = true; break }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    }
+    guard confirmed else { stop("typed field not confirmed: \(placeholder)") }
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
