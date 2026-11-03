@@ -165,7 +165,9 @@ test('full retained journal refuses account creation without DB mutation', {skip
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     const {readFile}=await import('node:fs/promises'),{FENCE_MAX_BYTES}=await import('../src/migration-fence-journal.mjs');
-    const prefix=await readFile(file),line=Buffer.from(JSON.stringify({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1})+'\n');
+    // Keep the fixture below the independent replay-record limit so this case
+    // specifically exercises the physical 4 MiB admission boundary.
+    const prefix=await readFile(file),line=Buffer.from(JSON.stringify({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1})+' '.repeat(512)+'\n');
     const count=Math.floor((FENCE_MAX_BYTES-prefix.length)/line.length);
     const full=Buffer.concat([prefix,Buffer.from(line.toString().repeat(count))]);await writeFile(file,full);
     const store=new PostgresStore(null,db.pool,{v1Fence:fence});
