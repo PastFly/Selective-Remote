@@ -344,6 +344,11 @@ jobs:
           cleanup() {
             local result=$?
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
+            if [[ "$result" -ne 0 && -f "$fixture/sshd.log" ]]; then
+              printf 'SYNTHETIC_SSHD_AUTH_COUNT=%s\n' "$(grep -c 'Accepted publickey' "$fixture/sshd.log" || true)"
+              printf 'SYNTHETIC_SSHD_SFTP_COUNT=%s\n' "$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)"
+              printf 'SYNTHETIC_SSHD_ERROR_COUNT=%s\n' "$(grep -ci 'error\|failed\|denied' "$fixture/sshd.log" || true)"
+            fi
             if [[ -n "${probe_pid:-}" ]]; then kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" 2>/dev/null || true; fi
             if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             if [[ -n "${sshd_pid:-}" ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
@@ -406,6 +411,8 @@ jobs:
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           binary="$app/Contents/MacOS/$executable"
           policy='(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:52222"))'
+          printf 'ls -1\n' | sandbox-exec -p "$policy" /usr/bin/sftp -b - -o BatchMode=yes -o ConnectTimeout=5 -P 52222 runner@127.0.0.1 | grep -Fx TEST-ONLY-CODEX-SFTP-CHECK
+          printf '%s\n' 'SYNTHETIC_SANDBOX_SFTP_ENDPOINT=PASS'
           sandbox-exec -p "$policy" "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
           app_pid=$!
           sleep 12

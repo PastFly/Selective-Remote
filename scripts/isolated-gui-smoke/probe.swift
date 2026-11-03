@@ -351,6 +351,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         if !rows.isEmpty { print("SYNTHETIC_SFTP_FILE_VISIBLE=YES"); exit(0) }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
     }
+    for element in snapshot(app) {
+        let labels = ["AXTitle", "AXDescription", "AXHelp"].compactMap { attr(element, $0) as? String }
+        for label in labels where ["error", "failed", "denied", "ошиб", "не удалось"].contains(where: { label.lowercased().contains($0) }) {
+            print("SYNTHETIC_SFTP_ERROR_UI=\(label.replacingOccurrences(of: temp, with: "$RUNNER_TEMP"))")
+        }
+    }
     stop("synthetic SFTP file not visible")
 }
 if CommandLine.arguments.count == 3 {
