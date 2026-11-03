@@ -5,6 +5,7 @@ import {readFile,writeFile,lstat,realpath,mkdtemp,mkdir,rm} from 'node:fs/promis
 import {dirname,join,resolve,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {stagingRegistrationEmails} from '../src/staging-registration.mjs';
+import {loadFenceAnchorConfig} from '../src/fence-anchor-config.mjs';
 
 const execute=promisify(execFile);
 export const controllerRoot='/opt/selective-remote-controller';
@@ -27,6 +28,8 @@ export function validateControllerSettings(s){
     ||s.composeFiles.some(f=>!isAbsolute(f.path??'')||!validHash(f.sha256))
     ||s.composeFiles.filter(f=>f.sha256===publicationFenceOverlayDigest).length!==1
     ||!s.storage||['POSTGRES_DATA_MOUNT_ROOT','POSTGRES_DATA_HOST_PATH','POSTGRES_DATA_EXPECTED_SOURCE','POSTGRES_DATA_EXPECTED_FSTYPE','POSTGRES_DATA_UID','POSTGRES_DATA_GID'].some(k=>typeof s.storage[k]!=='string'||!s.storage[k]))fail('invalid_deployment_settings');
+  if((s.anchorProtocol!==undefined||s.anchorDeploymentID!==undefined)
+    &&(s.anchorProtocol!==1||typeof s.anchorDeploymentID!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(s.anchorDeploymentID)))fail('invalid_deployment_settings');
   for(const path of [s.cloudDirectory,s.backupDirectory,s.storage.POSTGRES_DATA_MOUNT_ROOT,s.storage.POSTGRES_DATA_HOST_PATH]){
     if(!isAbsolute(path)||resolve(path)!==path||contains(path,controllerRoot)||contains(controllerRoot,path)
       ||contains(path,controllerState)||contains(controllerState,path))fail('deployment_fence_not_independent');
@@ -37,10 +40,11 @@ export function validateCandidateIdentity(settings,image){
   if(image?.Id!==settings.imageDigest||image.Config?.Labels?.['org.opencontainers.image.revision']!==settings.sourceSHA)
     fail('deployment_candidate_digest');
 }
-export function validateCandidateCapabilities(candidate){
+export function validateCandidateCapabilities(candidate,settings={}){
   const expected={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1};
   const count=candidate&&Object.keys(candidate).length;
-  if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1))
+  if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1)||(count===8&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1))
+    ||(settings.anchorProtocol===1&&candidate.v1AnchorProtocol!==1)
     ||Object.entries(expected).some(([k,v])=>candidate[k]!==v))fail('deployment_code_floor');
 }
 function safeBind(bind){
@@ -69,6 +73,11 @@ function effectiveEnvironment(cloud,{imageEnvironment,dockerEnvironment}={},sett
   const overrides={PUBLICATION_FENCE_PATH:'/publication-fence/journal',ALLOW_REGISTRATION:'false',UV_THREADPOOL_SIZE:'1',NODE_OPTIONS:'--max-old-space-size=96'};
   for(const key of new Set([...Object.keys(expected),...Object.keys(actual)]))
     if(actual[key]!==expected[key]&&!(Object.hasOwn(overrides,key)&&actual[key]===overrides[key]))fail('deployment_environment_mismatch');
+  if(settings.anchorProtocol!==undefined||settings.anchorDeploymentID!==undefined){
+    if(settings.anchorProtocol!==1||typeof settings.anchorDeploymentID!=='string')fail('deployment_anchor_configuration');
+    let anchor;try{anchor=loadFenceAnchorConfig(actual,actual.DATABASE_URL);}catch{fail('deployment_anchor_configuration');}
+    if(!anchor||anchor.deploymentID!==settings.anchorDeploymentID)fail('deployment_anchor_configuration');
+  }else if(Object.keys(actual).some(k=>k.startsWith('PUBLICATION_FENCE_ANCHOR_')))fail('deployment_anchor_configuration');
   if(Object.hasOwn(settings,'registrationMode')){
     if(settings.registrationMode!=='production-v1'||actual.NODE_ENV!=='production'||actual.PUBLICATION_ENVIRONMENT!=='production'
       ||actual.PUBLICATION_READER_ENABLED!=='false'||actual.WHOLE_PUBLICATION_ENABLED!=='false'
@@ -139,7 +148,7 @@ export async function verifyControllerFixture({candidate,runCommand,report=()=>{
   const step=async(stage,extra={})=>{report({stage});return runCommand({stage,candidate,...extra});};
   await step('attest');
   const metadata=await step('candidate-metadata');
-  validateCandidateCapabilities(metadata);
+  validateCandidateCapabilities(metadata,candidate);
   await step('storage');
   await step('assert-project');
   // Ordinary startup denies a restored old schema without even stopping the

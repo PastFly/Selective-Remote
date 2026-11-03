@@ -11,7 +11,9 @@ function requireCandidate(candidate) {
     && candidate.v1WriterProtocol === 1;
   const emptyCreateAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion'].sort().join(',')
     && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1;
-  if ((!legacy && !writerAware && !emptyCreateAware)
+  const anchorAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion','v1AnchorProtocol'].sort().join(',')
+    && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1 && candidate.v1AnchorProtocol === 1;
+  if ((!legacy && !writerAware && !emptyCreateAware && !anchorAware)
       || candidate.version !== 1 || candidate.fenceVersion !== 2 || candidate.maxSchemaVersion !== 22
       || candidate.readerProjectionVersion !== 1 || candidate.wholePublicationVersion !== 1)
     throw Error('deployment_code_floor');
@@ -80,6 +82,7 @@ export function createDeploymentGuard(check, {
 // image's metadata. The controller pins that image and this checker separately.
 export async function verifyDeploymentCompatibility({ query, fence, candidate, mode = 'traffic' }) {
   requireCandidate(candidate);
+  if(fence?.anchor&&candidate.v1AnchorProtocol!==1)throw Error('deployment_code_floor');
   if (!['traffic', 'maintenance-upgrade'].includes(mode)) throw Error('invalid_deployment_mode');
   const before = await fence.snapshot();
   requireResolved(before);

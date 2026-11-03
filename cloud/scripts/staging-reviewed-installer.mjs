@@ -11,7 +11,7 @@ const archiveSHA='c1bfeecf1d7404fa74728f9db72e697decbd8119ccc6f5a294d795756dfcfc
 const hash=value=>createHash('sha256').update(value).digest('hex'),hex=(value,n)=>typeof value==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(value);
 const fail=code=>{throw Error('staging_install_'+code);};
 export function validateInstallerCapabilities(capabilities){
- if(!capabilities||!(Object.keys(capabilities).length===6||(Object.keys(capabilities).length===7&&capabilities.emptyVaultCreationVersion===1))||capabilities.version!==1||capabilities.fenceVersion!==2
+ if(!capabilities||!(Object.keys(capabilities).length===6||(Object.keys(capabilities).length===7&&capabilities.emptyVaultCreationVersion===1)||(Object.keys(capabilities).length===8&&capabilities.emptyVaultCreationVersion===1&&capabilities.v1AnchorProtocol===1))||capabilities.version!==1||capabilities.fenceVersion!==2
   ||capabilities.maxSchemaVersion!==22||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
   ||capabilities.v1WriterProtocol!==1)fail('candidate_code');
  return true;

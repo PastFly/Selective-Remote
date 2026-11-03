@@ -250,7 +250,7 @@ test('additional env-file dependencies are rejected even when their present valu
 
 test('controller validates writer capability metadata without accepting unknown versions', () => {
   assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
-  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, ...oldCandidate}=currentCapabilities;
+  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, ...oldCandidate}=currentCapabilities;
   assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
   for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
@@ -258,11 +258,30 @@ test('controller validates writer capability metadata without accepting unknown 
 
 
 test('retained writer floor prevents old image startup before migration or traffic',async()=>{
- const {v1WriterProtocol:_,emptyVaultCreationVersion:__,...oldMetadata}=currentCapabilities;
+ const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,...oldMetadata}=currentCapabilities;
  const fence={snapshot:async()=>({schemaFloor:19,writerFloor:1,pending:[],committed:[],outcomes:[]})};
  const f=await fixtureController({query:emptyDB,fence,metadata:oldMetadata});
  await assert.rejects(f.promise,/deployment_writer_floor/);
  assert.ok(!f.stages.includes('migrate'));
  assert.ok(!f.stages.includes('open-traffic'));
  assert.deepEqual(f.queries,[]);
+});
+
+test('anchored controller refuses old candidates before any check or traffic transition',async()=>{
+ const s={...settings(),anchorProtocol:1,anchorDeploymentID:'11111111-1111-4111-8111-111111111111'},stages=[];
+ validateControllerSettings(s);
+ const old={...currentCapabilities};delete old.v1AnchorProtocol;
+ await assert.rejects(verifyControllerFixture({candidate:s,runCommand:async e=>{stages.push(e.stage);if(e.stage==='candidate-metadata')return old;}}),/deployment_code_floor/);
+ assert.deepEqual(stages,['attest','candidate-metadata']);
+});
+test('anchored controller refuses missing or changed anchor configuration',async()=>{
+ const {rootCertificates}=await import('node:tls');
+ const s={...settings(),anchorProtocol:1,anchorDeploymentID:'11111111-1111-4111-8111-111111111111'};
+ const m=compose(s),values={PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:synthetic@anchor.example/fence',
+  PUBLICATION_FENCE_ANCHOR_ID:s.anchorDeploymentID,PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64')};
+ const evidence={...environmentEvidence,dockerEnvironment:[...dockerEnvironment,...Object.entries(values).map(([k,v])=>k+'='+v)]};
+ Object.assign(m.services.cloud.environment,values);validateControllerSettings(s);validateControllerCompose(m,s,evidence);
+ for(const altered of [{anchorDeploymentID:'22222222-2222-4222-8222-222222222222'},{anchorProtocol:2},{anchorDeploymentID:null}])
+  assert.throws(()=>validateControllerCompose(m,{...s,...altered},evidence));
+ const absent=compose(s);assert.throws(()=>validateControllerCompose(absent,s,environmentEvidence));
 });
