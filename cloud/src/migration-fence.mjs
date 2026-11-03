@@ -5,6 +5,11 @@ import {createHash,randomUUID} from 'node:crypto';
 import {FENCE_MAX_BYTES,validateFenceEvent,reduceFenceEvents} from './migration-fence-journal.mjs';
 import {fenceHistoryHead,sameFenceHistoryHead} from './fence-history-head.mjs';
 
+// Bound replay BEFORE parsing archives. This is a fail-closed operational cap,
+// not unlimited retention; the controller must monitor capacity and preserve
+// the external anchor and archives when this cap is reached.
+export const FENCE_MAX_REPLAY_BYTES=8*1024*1024;
+export const FENCE_MAX_REPLAY_RECORDS=25000;
 function verifySchemaFloor(schemaVersion,snapshot){
  if(!Number.isSafeInteger(schemaVersion)||schemaVersion<snapshot.schemaFloor)throw Error('deployment_schema_floor');
  return true;
@@ -22,17 +27,25 @@ export class MigrationFence{
   const current=await this.anchor.read();
   if(!sameFenceHistoryHead(current,fenceHistoryHead(records)))throw Error('deployment_anchor_mismatch');
  }
- async #segment(file){
+ async #segment(file,budget={bytes:0,records:0}){
   const stat=await file.stat();
   if(!stat.isFile()||stat.size>FENCE_MAX_BYTES)throw Error('corrupt_deployment_fence');
+  if(stat.size+budget.bytes>FENCE_MAX_REPLAY_BYTES)throw Error('deployment_fence_history_limit');
   const bytes=await file.readFile();
   if(bytes.length>FENCE_MAX_BYTES||(bytes.length&&bytes.at(-1)!==10))throw Error('corrupt_deployment_fence');
-  let parsed;try{parsed=bytes.length?bytes.toString('utf8').slice(0,-1).split('\n').map(line=>JSON.parse(line)):[];}
-  catch{throw Error('corrupt_deployment_fence');}
+  if(bytes.length+budget.bytes>FENCE_MAX_REPLAY_BYTES)throw Error('deployment_fence_history_limit');
+  budget.bytes+=bytes.length;
+  const content=bytes.toString('utf8'),parsed=[];let at=0;
+  while(at<content.length){
+   const end=content.indexOf('\n',at);if(end<0)throw Error('corrupt_deployment_fence');
+   if(++budget.records>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
+   let value;try{value=JSON.parse(content.slice(at,end));}catch{throw Error('corrupt_deployment_fence');}
+   parsed.push(parsed.length===0&&value?.version===3?value:validateFenceEvent(value));at=end+1;
+  }
   return {bytes,parsed};
  }
- async records(file,{validateHistory=true}={}){
-  let {parsed}=await this.#segment(file);
+ async records(file,{validateHistory=true,withBudget=false}={}){
+  const budget={bytes:0,records:0};let {parsed}=await this.#segment(file,budget);
   const segments=[],seen=new Set();
   while(parsed[0]?.version===3){
    const marker=parsed[0];
@@ -42,11 +55,11 @@ export class MigrationFence{
    const directory=this.path+'.archives',stat=await lstat(directory).catch(()=>null);
    if(!stat?.isDirectory()||stat.isSymbolicLink())throw Error('corrupt_deployment_fence');
    const archive=await this.openFile(directory+'/'+marker.archiveDigest,constants.O_RDONLY|constants.O_NOFOLLOW).catch(()=>{throw Error('corrupt_deployment_fence');});
-   try{const segment=await this.#segment(archive);if(createHash('sha256').update(segment.bytes).digest('hex')!==marker.archiveDigest)throw Error('corrupt_deployment_fence');parsed=segment.parsed;}
+   try{const segment=await this.#segment(archive,budget);if(createHash('sha256').update(segment.bytes).digest('hex')!==marker.archiveDigest)throw Error('corrupt_deployment_fence');parsed=segment.parsed;}
    finally{await archive.close();}
   }
   segments.push(parsed);const records=segments.reverse().flat().map(validateFenceEvent);
-  if(validateHistory)reduceFenceEvents(records);return records;
+  if(validateHistory)reduceFenceEvents(records);return withBudget?{records,budget}:records;
  }
  // No production cutover may call this until the independent high-water anchor
  // validates the complete logical history before and after checkpoint recovery.
@@ -61,13 +74,15 @@ export class MigrationFence{
   if(!acquired)throw Error('deployment_fence_locked');
   try{
    file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
-   const events=await this.records(file),state=reduceFenceEvents(events);
+   const {records:events,budget}=await this.records(file,{withBudget:true}),state=reduceFenceEvents(events);
    if(state.pending.length||state.v1Pending?.length)throw Error('deployment_fence_pending');
    await file.sync();
    await file.close();file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
    const {bytes,parsed}=await this.#segment(file);
    if(!bytes.length||(parsed.length===1&&parsed[0]?.version===3))throw Error('deployment_fence_empty');
    const digest=createHash('sha256').update(bytes).digest('hex'),archiveDir=this.path+'.archives';
+   const marker=Buffer.from(JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n');
+   if(budget.bytes+marker.length>FENCE_MAX_REPLAY_BYTES||budget.records+1>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
    try{await mkdir(archiveDir,{mode:0o700});retain=true;const parent=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);try{await parent.sync();}finally{await parent.close();}}
    catch(e){if(e.code!=='EEXIST')throw e;}
    const aStat=await lstat(archiveDir);if(!aStat.isDirectory()||aStat.isSymbolicLink())throw Error('invalid_deployment_fence_directory');
@@ -79,7 +94,6 @@ export class MigrationFence{
     await archive.sync();
    }finally{await archive?.close();}
    const archives=await this.openFile(archiveDir,constants.O_RDONLY|constants.O_NOFOLLOW);try{await archives.sync();}finally{await archives.close();}
-   const marker=Buffer.from(JSON.stringify({version:3,type:'ARCHIVE_CHECKPOINT',archiveDigest:digest})+'\n');
    const temp=this.path+'.checkpoint-'+randomUUID();let staged;
    try{staged=await this.openFile(temp,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);retain=true;
     for(let at=0;at<marker.length;){const {bytesWritten}=await staged.write(marker,at,marker.length-at,at);if(!Number.isSafeInteger(bytesWritten)||bytesWritten<=0)throw Error('deployment_fence_short_write');at+=bytesWritten;}
@@ -142,7 +156,7 @@ export class MigrationFence{
    // Provisioning is an explicit operator step. Missing retained history must
    // never be replaced with an empty journal after a successful earlier check.
    file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
-   const records=await this.records(file);
+   const {records,budget}=await this.records(file,{withBudget:true});
    if(this.anchor){
     const local=fenceHistoryHead(records),remote=await this.anchor.read();
     if(!sameFenceHistoryHead(remote,local)){
@@ -155,6 +169,7 @@ export class MigrationFence{
     const snapshot=reduceFenceEvents([...records,record]);
     const line=Buffer.from(key+'\n'),size=(await file.stat()).size;
     if(size+line.length>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
+    if(budget.bytes+line.length>FENCE_MAX_REPLAY_BYTES||budget.records+1>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
     if(!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'){
      // Reserve the larger terminal outcome for every pending intent, including
      // legacy IDs. New work must not consume another intent's resolution space.
@@ -164,6 +179,8 @@ export class MigrationFence{
       version:2,type:'V1_CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
      })+'\n'),0);
      if(size+line.length+reserved>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
+     const terminalCount=snapshot.pending.length+(snapshot.v1Pending??[]).length;
+     if(budget.bytes+line.length+reserved>FENCE_MAX_REPLAY_BYTES||budget.records+1+terminalCount>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
     }
     // A failed write or barrier leaves the lock. Only this instance's exact
     // replay can re-confirm durability; restart requires deliberate recovery.
