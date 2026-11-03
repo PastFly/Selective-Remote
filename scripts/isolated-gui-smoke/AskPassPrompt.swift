@@ -35,38 +35,54 @@ func snapshot(_ root: AXUIElement) -> [AXUIElement] {
     }
     return result
 }
+let system = AXUIElementCreateSystemWide()
+func focusedPID() -> pid_t? {
+    guard let focused = attribute(system, "AXFocusedUIElement"), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+    var pid: pid_t = 0
+    return AXUIElementGetPid(unsafeBitCast(focused, to: AXUIElement.self), &pid) == .success ? pid : nil
+}
 let deadline = Date(timeIntervalSinceNow: 35)
 while Date() < deadline {
     guard kill(appPID, 0) == 0 else { fail("target app terminated") }
-    for app in NSWorkspace.shared.runningApplications {
-        var buffer = [CChar](repeating: 0, count: 4096)
-        guard buffer.withUnsafeMutableBytes({ pathFn(app.processIdentifier, $0.baseAddress!, UInt32($0.count)) }) > 0 else { continue }
-        let path = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
-        guard path == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path else { continue }
-        let nodes = snapshot(AXUIElementCreateApplication(app.processIdentifier))
-        let labels = nodes.flatMap { node -> [String] in
-            ["AXTitle", "AXDescription", "AXHelp"].compactMap { attribute(node, $0) as? String }
-            + (((attribute(node, "AXRole") as? String) == "AXStaticText") ? [attribute(node, "AXValue") as? String].compactMap { $0 } : [])
-        }.joined(separator: " ")
-        guard labels.contains("SSH Key Passphrase"), labels.contains(key) else { continue }
-        let fields = nodes.filter { (attribute($0, "AXRole") as? String) == "AXTextField" && (attribute($0, "AXPlaceholderValue") as? String) == "Passphrase" }
-        let buttons = nodes.filter { (attribute($0, "AXRole") as? String) == "AXButton" && ((attribute($0, "AXTitle") as? String) == "Continue" || (attribute($0, "AXDescription") as? String) == "Continue") }
-        guard fields.count == 1, buttons.count == 1 else { fail("ambiguous AskPass prompt") }
-        _ = app.activate(options: [])
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-              AXUIElementSetAttributeValue(fields[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { fail("AskPass focus") }
-        for character in "TESTONLYCODEXPASSPHRASE" {
-            guard let stroke = syntheticKeyStroke(character), NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-                  let down = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: false) else { fail("AskPass input") }
-            let flags: CGEventFlags = stroke.shift ? .maskShift : []
-            down.flags = flags; up.flags = flags; down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+    guard CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { fail("unexpected prompt geometry") }
+    var hit: AXUIElement?
+    if AXUIElementCopyElementAtPosition(system, 500, 317, &hit) == .success, let hit {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(hit, &pid) == .success, pid > 1 {
+            var buffer = [CChar](repeating: 0, count: 4096)
+            if buffer.withUnsafeMutableBytes({ pathFn(pid, $0.baseAddress!, UInt32($0.count)) }) > 0,
+               URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path == URL(fileURLWithPath: helper).resolvingSymlinksInPath().path,
+               (attribute(hit, "AXRole") as? String) == "AXTextField",
+               (attribute(hit, "AXPlaceholderValue") as? String) == "Passphrase" {
+                var ancestor: AXUIElement? = hit, window: AXUIElement?
+                for _ in 0..<12 {
+                    guard let element = ancestor else { break }
+                    if (attribute(element, "AXRole") as? String) == "AXWindow" { window = element; break }
+                    ancestor = attribute(element, "AXParent").map { unsafeBitCast($0, to: AXUIElement.self) }
+                }
+                guard let window else { fail("AskPass window unavailable") }
+                let nodes = snapshot(window)
+                let labels = nodes.flatMap { node -> [String] in
+                    ["AXTitle", "AXDescription", "AXHelp"].compactMap { attribute(node, $0) as? String }
+                    + (((attribute(node, "AXRole") as? String) == "AXStaticText") ? [attribute(node, "AXValue") as? String].compactMap { $0 } : [])
+                }.joined(separator: " ")
+                guard labels.contains("SSH Key Passphrase"), labels.contains(key) else { fail("AskPass prompt identity") }
+                let buttons = nodes.filter { (attribute($0, "AXRole") as? String) == "AXButton" && ((attribute($0, "AXTitle") as? String) == "Continue" || (attribute($0, "AXDescription") as? String) == "Continue") }
+                guard buttons.count == 1, AXUIElementSetAttributeValue(hit, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+                      focusedPID() == pid else { fail("AskPass focus or confirmation") }
+                for character in "TESTONLYCODEXPASSPHRASE" {
+                    guard let stroke = syntheticKeyStroke(character), focusedPID() == pid,
+                          let down = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: true),
+                          let up = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: false) else { fail("AskPass input") }
+                    let flags: CGEventFlags = stroke.shift ? .maskShift : []
+                    down.flags = flags; up.flags = flags; down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+                    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+                }
+                guard AXUIElementPerformAction(buttons[0], kAXPressAction as CFString) == .success else { fail("AskPass confirmation") }
+                print("SYNTHETIC_ASKPASS_ENTERED=YES")
+                exit(0)
+            }
         }
-        guard AXUIElementPerformAction(buttons[0], kAXPressAction as CFString) == .success else { fail("AskPass confirmation") }
-        print("SYNTHETIC_ASKPASS_ENTERED=YES")
-        exit(0)
     }
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
 }
