@@ -2,13 +2,13 @@
 set -Eeuo pipefail
 umask 022
 cd "$GITHUB_WORKSPACE"
-git merge-base --is-ancestor e5da570bf9befb4edd5efe1096ad9165ec74e315 HEAD
+git merge-base --is-ancestor e0c9dd7589a6e65f5b6f795519e865101e3ddbb0 HEAD
 source_head=$(git rev-parse HEAD)
 [[ "$source_head" == "$GITHUB_SHA" ]]
-git diff --exit-code e5da570bf9befb4edd5efe1096ad9165ec74e315 HEAD -- cloud
+git diff --exit-code e0c9dd7589a6e65f5b6f795519e865101e3ddbb0 HEAD -- cloud
 mkdir -p /tmp/sr-controller-acceptance/results
 exec > >(tee /tmp/sr-controller-acceptance/results/acceptance.log) 2>&1
-echo "TEST_HEAD=$source_head EXACT_CLOUD_SOURCE=e5da570bf9befb4edd5efe1096ad9165ec74e315"
+echo "TEST_HEAD=$source_head EXACT_CLOUD_SOURCE=e0c9dd7589a6e65f5b6f795519e865101e3ddbb0"
 echo 'ENVIRONMENT=EPHEMERAL_GITHUB_HOSTED_RUNNER'
 root=/opt/selective-remote-controller
 state=/var/lib/selective-remote-controller
