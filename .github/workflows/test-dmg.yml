@@ -106,7 +106,7 @@ jobs:
             sleep 1
             defaults export "$bundle" "$RUNNER_TEMP/second.plist"
             python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/second.plist" | tee "$RUNNER_TEMP/evidence/baseline-persistence.json"
-            "$RUNNER_TEMP/keychain-probe" 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/baseline-keychain.log"
+            python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/keychain-probe" 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/baseline-keychain.log"
             sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-restart.log" 2>&1 &
             app_pid=$!
             sleep 12
@@ -143,8 +143,8 @@ jobs:
               defaults export "$bundle" "$RUNNER_TEMP/upgraded.plist"
               python3 scripts/isolated-gui-smoke/compare-legacy.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/legacy-upgrade.json"
               python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/upgrade-persistence.json"
-              "$RUNNER_TEMP/keychain-probe" 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/legacy-keychain-after-upgrade.log"
-              "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/upgraded-keychain.log"
+              python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/keychain-probe" 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/legacy-keychain-after-upgrade.log"
+              python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/baseline-persistence.json" | tee "$RUNNER_TEMP/evidence/upgraded-keychain.log"
             fi
           fi
       - name: Upload synthetic evidence
