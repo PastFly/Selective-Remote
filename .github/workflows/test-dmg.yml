@@ -85,8 +85,14 @@ jobs:
           defaults export "$bundle" "$RUNNER_TEMP/reencoded.plist"
           python3 scripts/isolated-gui-smoke/reencode-legacy.py verify "$RUNNER_TEMP/migrated.plist" "$RUNNER_TEMP/reencoded.plist"
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent | tee "$RUNNER_TEMP/evidence/reencode-ui.log"
+          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
+          wait "$app_pid2" || true; app_pid2=""
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-late.log" 2>&1 & app_pid=$!
+          sleep 12; kill -0 "$app_pid"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-concurrent.log" 2>&1 & app_pid2=$!
           sleep 12; kill -0 "$app_pid" && kill -0 "$app_pid2"
+          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
+          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
           SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/late-ui.log"
           kill -0 "$app_pid" && kill -0 "$app_pid2"
           "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Changes in the previous version' visible | tee "$RUNNER_TEMP/evidence/warning.log"
