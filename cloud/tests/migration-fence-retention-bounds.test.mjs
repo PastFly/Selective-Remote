@@ -5,9 +5,13 @@ import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
-import {fenceIntentDigest} from '../src/migration-fence-journal.mjs';
+import {fenceIntentDigest,validateFenceEvent} from '../src/migration-fence-journal.mjs';
 
 const moduleURL=new URL('../src/migration-fence.mjs',import.meta.url).href;
+function head(events){let digest=createHash('sha256').update('selective-remote/fence-history/v1\0').digest();let i=0;
+ for(const event of events){const n=Buffer.alloc(8);n.writeBigUInt64BE(BigInt(++i));digest=createHash('sha256').update('selective-remote/fence-history/v1\0').update(digest).update(n).update(JSON.stringify(validateFenceEvent(event))+'\n').digest();}
+ return {position:i,digest:digest.toString('hex')};}
+
 async function isolatedSnapshot(path){
  const code=`import {MigrationFence} from ${JSON.stringify(moduleURL)};try{await new MigrationFence(process.argv[1]).snapshot();process.exit(9);}catch(e){if(e.message==='deployment_fence_history_limit'||e.message==='invalid_deployment_fence')process.exit(0);console.error(e.message);process.exit(10);}`;
  const child=spawn('/bin/sh',['-c','ulimit -c 0; exec "$@"','sr-retention-bound',process.execPath,'--max-old-space-size=96','--input-type=module','-e',code,path],{stdio:['ignore','ignore','pipe']});
@@ -46,6 +50,8 @@ test('checkpoint refuses before adding a marker which would exceed event replay 
  const dir=await mkdtemp(join(tmpdir(),'sr-checkpoint-bound-'));t.after(()=>rm(dir,{recursive:true,force:true}));const path=join(dir,'journal');
  const {MigrationFence,FENCE_MAX_REPLAY_RECORDS}=await import('../src/migration-fence.mjs');
  const floor={version:2,type:'V1_WRITER_FLOOR',writerProtocol:1},before=Buffer.from((JSON.stringify(floor)+'\n').repeat(FENCE_MAX_REPLAY_RECORDS));await writeFile(path,before);
- await assert.rejects(new MigrationFence(path).compact(),/deployment_fence_history_limit/);
+ const expected=head(Array(FENCE_MAX_REPLAY_RECORDS).fill(floor));
+ const anchor={read:async()=>expected,advance:async()=>{throw Error('unexpected_advance');}};
+ await assert.rejects(new MigrationFence(path,{anchor}).compact(),/deployment_fence_history_limit/);
  assert.deepEqual(await (await import('node:fs/promises')).readFile(path),before);
 });
