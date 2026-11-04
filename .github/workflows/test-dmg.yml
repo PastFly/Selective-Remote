@@ -1,4 +1,4 @@
-name: Exact DMG favorite acceptance macOS 14
+name: Exact DMG Host editing acceptance macOS 14
 on:
   workflow_dispatch:
 permissions:
@@ -63,23 +63,20 @@ jobs:
           sleep 12; kill -0 "$app_pid"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-current > "$RUNNER_TEMP/evidence/create.log"
           defaults export "$bundle" "$RUNNER_TEMP/before.plist"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid" --toggle-favorite > "$RUNNER_TEMP/evidence/favorite-on.log"
-          defaults export "$bundle" "$RUNNER_TEMP/on.plist"
-          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py on "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/on.plist" | tee "$RUNNER_TEMP/evidence/on.json"
-          screencapture -x "$RUNNER_TEMP/evidence/favorite-on.png"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid" --toggle-favorite > "$RUNNER_TEMP/evidence/favorite-off.log"
-          defaults export "$bundle" "$RUNNER_TEMP/off.plist"
-          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py off "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/off.plist" | tee "$RUNNER_TEMP/evidence/off.json"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 75 "$RUNNER_TEMP/gui-probe" "$app_pid" --edit-current-host > "$RUNNER_TEMP/evidence/edit.log"
+          defaults export "$bundle" "$RUNNER_TEMP/edited.plist"
+          python3 scripts/isolated-gui-smoke/verify-host-edit.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/edited.plist" | tee "$RUNNER_TEMP/evidence/edited.json"
+          screencapture -x "$RUNNER_TEMP/evidence/edited.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           defaults export "$bundle" "$RUNNER_TEMP/restart.plist"
-          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py restart "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/restart.plist" | tee "$RUNNER_TEMP/evidence/restart.json"
-          echo 'SYNTHETIC_FAVORITES_ON_OFF_AND_RESTART=PASS'
+          python3 scripts/isolated-gui-smoke/verify-host-edit.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/restart.plist" | tee "$RUNNER_TEMP/evidence/restart.json"
+          echo 'SYNTHETIC_HOST_EDIT_MOVE_AND_RESTART=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-favorites-macos14
+          name: synthetic-exact-host-edit-macos14
           path: ${{ runner.temp }}/evidence
           retention-days: 7

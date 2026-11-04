@@ -157,6 +157,13 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
+    setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
+    setUniqueField("For example: Work/Servers/Linux", "TEST-ONLY-CODEX-NEW-FOLDER")
+    print("QA_SYNTHETIC_HOST_EDIT_REQUESTED=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-selected", "--toggle-favorite"].contains(CommandLine.arguments[2]) {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host action requires candidate") }
     let deleting = CommandLine.arguments[2] == "--delete-selected"
