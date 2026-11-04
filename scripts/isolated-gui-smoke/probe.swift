@@ -474,7 +474,23 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--jump-host-
         setUniqueField("22", port)
     }
     pressUnique("AXButton", "Route")
-    pressUnique("AXPopUpButton", "Jump Host")
+    let selectors = snapshot(app).filter { element in
+        ["AXPopUpButton", "AXComboBox"].contains((attr(element, "AXRole") as? String) ?? "") &&
+        ["AXTitle", "AXDescription", "AXValue"].contains {
+            ["Jump Host", "Direct connection", "Прямое подключение"].contains((attr(element, $0) as? String) ?? "")
+        }
+    }
+    if selectors.count != 1 {
+        for element in snapshot(app) {
+            let role = attr(element, "AXRole") as? String ?? ""
+            if ["AXPopUpButton", "AXComboBox"].contains(role) {
+                print("QA_ROUTE_CONTROL role=\(role) title=\(attr(element, "AXTitle") as? String ?? "") description=\(attr(element, "AXDescription") as? String ?? "") value=\(attr(element, "AXValue") as? String ?? "")")
+            }
+        }
+        stop("jump selector unavailable count=\(selectors.count)")
+    }
+    guard AXUIElementPerformAction(selectors[0], kAXPressAction as CFString) == .success else { stop("jump selector action failed") }
+    Thread.sleep(forTimeInterval: 1)
     pressUnique("AXMenuItem", "TEST-ONLY-CODEX-JUMP")
     pressUnique("AXButton", "Open SSH")
     print("SYNTHETIC_JUMP_CONNECTION_REQUESTED=YES")
