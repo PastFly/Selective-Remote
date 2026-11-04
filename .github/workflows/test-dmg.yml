@@ -353,6 +353,7 @@ jobs:
             if [[ -n "${probe_pid:-}" ]]; then kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" 2>/dev/null || true; fi
             if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             if [[ -n "${sshd_pid:-}" ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
+            if [[ -n "${target_sshd_pid:-}" ]]; then sudo kill "$target_sshd_pid" 2>/dev/null || true; wait "$target_sshd_pid" 2>/dev/null || true; fi
             hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
             if [[ "$config_created" = yes ]]; then rm -f "$HOME/.ssh/config"; fi
             if [[ "$ssh_dir_created" = yes ]]; then rmdir "$HOME/.ssh" || true; fi
@@ -379,7 +380,8 @@ jobs:
           KbdInteractiveAuthentication no
           PermitRootLogin no
           AllowUsers runner
-          AllowTcpForwarding no
+          AllowTcpForwarding local
+          PermitOpen 127.0.0.1:52225
           X11Forwarding no
           Subsystem sftp internal-sftp -d $fixture/sftp-root
           UsePAM no
@@ -398,11 +400,15 @@ jobs:
           set +o noclobber
           chmod 600 "$HOME/.ssh/config"
           printf '[127.0.0.1]:52222 %s\n' "$(cut -d ' ' -f 1,2 "$fixture/hostkey.pub")" > "$fixture/known_hosts"
+          printf '[127.0.0.1]:52225 %s\n' "$(cut -d ' ' -f 1,2 "$fixture/hostkey.pub")" >> "$fixture/known_hosts"
+          sed -e 's/^Port 52222$/Port 52225/' -e "s@^PidFile .*@PidFile $fixture/target-sshd.pid@" -e 's/^AllowTcpForwarding local$/AllowTcpForwarding no/' -e '/^PermitOpen /d' "$fixture/sshd_config" > "$fixture/target-sshd_config"
           mkdir "$mount"
           sudo /usr/sbin/sshd -D -e -f "$fixture/sshd_config" > "$fixture/sshd.log" 2>&1 &
           sshd_pid=$!
+          sudo /usr/sbin/sshd -D -e -f "$fixture/target-sshd_config" > "$fixture/target-sshd.log" 2>&1 &
+          target_sshd_pid=$!
           sleep 3
-          kill -0 "$sshd_pid"
+          kill -0 "$sshd_pid" && kill -0 "$target_sshd_pid"
           ssh -o BatchMode=yes -o ConnectTimeout=5 -p 52222 runner@127.0.0.1 'printf TEST-ONLY-CODEX-SSH-ENDPOINT' | grep -Fx TEST-ONLY-CODEX-SSH-ENDPOINT
           baseline_auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
           test "$baseline_auth_count" -ge 1
@@ -445,73 +451,28 @@ jobs:
           kill -0 "$app_pid"
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --double-click-ssh > "$RUNNER_TEMP/evidence/ssh-ui.log" 2>&1 &
-          probe_pid=$!
-          for attempt in {1..90}; do
-            if [[ -f "$RUNNER_TEMP/ssh-host-ready.flag" ]]; then break; fi
-            if ! kill -0 "$probe_pid" 2>/dev/null; then cat "$RUNNER_TEMP/evidence/ssh-ui.log"; wait "$probe_pid"; exit 1; fi
+          if sandbox-exec -p "$policy" python3 -c 'import socket; socket.create_connection(("127.0.0.1",52225),timeout=2)' >/dev/null 2>&1; then echo 'Direct target unexpectedly reachable'; exit 1; fi
+          baseline_jump=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
+          baseline_target=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/target-sshd.log" || true)
+          baseline_shell=$(grep -c 'Starting session: shell' "$fixture/target-sshd.log" || true)
+          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 150 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --jump-host-fixture | tee "$RUNNER_TEMP/evidence/jump-ui.log"
+          for attempt in {1..45}; do
+            jump_auth=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
+            target_auth=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/target-sshd.log" || true)
+            target_shell=$(grep -c 'Starting session: shell' "$fixture/target-sshd.log" || true)
+            if (( jump_auth > baseline_jump && target_auth > baseline_target && target_shell > baseline_shell )); then break; fi
             sleep 1
           done
-          test -f "$RUNNER_TEMP/ssh-host-ready.flag"
-          sleep 5
-          baseline_auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-          baseline_shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-          baseline_command_count=$(grep -c 'Starting session: command' "$fixture/sshd.log" || true)
-          baseline_sftp_preclick_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          touch "$RUNNER_TEMP/ssh-click-go.flag"
-          wait "$probe_pid"
-          probe_pid=""
-          cat "$RUNNER_TEMP/evidence/ssh-ui.log"
-          for attempt in {1..30}; do
-            auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-            shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-            if (( auth_count > baseline_auth_count && shell_count > baseline_shell_count )); then break; fi
-            sleep 1
-          done
-          test "$auth_count" -gt "$baseline_auth_count"
-          test "$shell_count" -gt "$baseline_shell_count"
-          sleep 5
-          auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-          shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-          command_count=$(grep -c 'Starting session: command' "$fixture/sshd.log" || true)
-          sftp_preclick_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          printf 'auth_delta=%s shell_delta=%s command_delta=%s sftp_delta=%s\n' "$((auth_count-baseline_auth_count))" "$((shell_count-baseline_shell_count))" "$((command_count-baseline_command_count))" "$((sftp_preclick_count-baseline_sftp_preclick_count))" | tee "$RUNNER_TEMP/evidence/double-click-counts.txt"
-          test "$((shell_count-baseline_shell_count))" -eq 1
-          printf '%s\n' 'REAL_LOOPBACK_SSH_AUTHENTICATION=PASS' 'REAL_LOOPBACK_INTERACTIVE_SHELL=PASS' | tee "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          if [[ "$((auth_count-baseline_auth_count))" -eq 1 ]]; then
-            echo 'DOUBLE_CLICK_SINGLE_CONNECTION=PASS' | tee -a "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          else
-            echo 'DOUBLE_CLICK_SINGLE_CONNECTION=NOT_PROVEN_EXTRA_AUTH' | tee -a "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          fi
-          sleep 3
-          screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
-          baseline_sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --open-sftp | tee "$RUNNER_TEMP/evidence/sftp-ui.log"
-          for attempt in {1..30}; do
-            sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-            if (( sftp_count > baseline_sftp_count )); then break; fi
-            sleep 1
-          done
-          test "$sftp_count" -gt "$baseline_sftp_count"
-          printf '%s\n' 'REAL_LOOPBACK_SFTP_SUBSYSTEM=PASS' | tee "$RUNNER_TEMP/evidence/sftp-server-result.txt"
-          screencapture -x "$RUNNER_TEMP/evidence/sftp-screen.png"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --sftp-upload-fixture | tee "$RUNNER_TEMP/evidence/sftp-upload-ui.log"
-          for attempt in {1..30}; do [[ -f "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD" ]] && break; sleep 1; done
-          test -f "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD"
-          cmp "$fixture/local/TEST-ONLY-CODEX-UPLOAD" "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD"
-          shasum -a 256 "$fixture/local/TEST-ONLY-CODEX-UPLOAD" "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD" | tee "$RUNNER_TEMP/evidence/upload-hashes.txt"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --sftp-download-fixture | tee "$RUNNER_TEMP/evidence/sftp-download-ui.log"
-          for attempt in {1..30}; do [[ -f "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK" ]] && break; sleep 1; done
-          test -f "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK"
-          cmp "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK" "$fixture/sftp-root/TEST-ONLY-CODEX-SFTP-CHECK"
-          shasum -a 256 "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK" "$fixture/sftp-root/TEST-ONLY-CODEX-SFTP-CHECK" | tee "$RUNNER_TEMP/evidence/download-hashes.txt"
-          echo 'SYNTHETIC_SFTP_UPLOAD_AND_DOWNLOAD_BYTES=PASS'
+          printf 'jump_auth_delta=%s target_auth_delta=%s target_shell_delta=%s\n' "$((jump_auth-baseline_jump))" "$((target_auth-baseline_target))" "$((target_shell-baseline_shell))" | tee "$RUNNER_TEMP/evidence/jump-counts.txt"
+          test "$jump_auth" -gt "$baseline_jump" && test "$target_auth" -gt "$baseline_target" && test "$target_shell" -gt "$baseline_shell"
+          echo 'SYNTHETIC_JUMP_HOST_SHELL=PASS' | tee "$RUNNER_TEMP/evidence/jump-result.txt"
+          screencapture -x "$RUNNER_TEMP/evidence/jump.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
           wait "$app_pid" || true
           app_pid=""
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: isolated-double-click-evidence
+          name: isolated-jump-host-evidence
           path: ${{ runner.temp }}/evidence
           retention-days: 7

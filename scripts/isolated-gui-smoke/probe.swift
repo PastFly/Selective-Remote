@@ -459,6 +459,27 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     print("SYNTHETIC_RDP_HOST_DOUBLE_CLICK_POSTED=YES")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--jump-host-fixture" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("jump fixture runner identity") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    for (name, port) in [("TEST-ONLY-CODEX-JUMP", "52222"), ("TEST-ONLY-CODEX-TARGET", "52225")] {
+        pressUnique("AXPopUpButton", "Add")
+        pressUnique("AXMenuItem", "New SSH")
+        setUniqueField("SSH Server", name)
+        setUniqueField("server.example.com or a Host from ~/.ssh/config", "127.0.0.1")
+        setUniqueField("username", "runner")
+        setUniqueField("22", port)
+    }
+    pressUnique("AXButton", "Route")
+    pressUnique("AXPopUpButton", "Jump Host")
+    pressUnique("AXMenuItem", "TEST-ONLY-CODEX-JUMP")
+    pressUnique("AXButton", "Open SSH")
+    print("SYNTHETIC_JUMP_CONNECTION_REQUESTED=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-click-ssh" {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("network fixture runner identity") }
     let welcome = snapshot(app).filter {
