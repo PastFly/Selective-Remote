@@ -519,7 +519,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         print("SYNTHETIC_SFTP_CONTROL role=\(attr(element, "AXRole") as? String ?? "") x=\(point.x)")
     }
     let tabs = snapshot(app).filter {
-        guard ["AXButton", "AXRadioButton"].contains((attr($0, "AXRole") as? String) ?? ""),
+        guard (attr($0, "AXRole") as? String) == "AXRadioButton",
               ((attr($0, "AXDescription") as? String) == "SFTP" || (attr($0, "AXTitle") as? String) == "SFTP"),
               let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
         var point = CGPoint.zero
@@ -528,7 +528,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
     guard tabs.count == 1, AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP tab unavailable") }
     Thread.sleep(forTimeInterval: 2)
     let remoteSelectors = snapshot(app).filter {
-        guard ["AXButton", "AXRadioButton"].contains((attr($0, "AXRole") as? String) ?? ""),
+        guard (attr($0, "AXRole") as? String) == "AXRadioButton",
               ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK"),
               let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
         var point = CGPoint.zero
@@ -561,7 +561,7 @@ if CommandLine.arguments.count == 3 && ["--sftp-upload-fixture", "--sftp-downloa
     }
     let label = upload ? "This Mac" : "TEST-ONLY-CODEX-LOOPBACK"
     let selectors = snapshot(app).filter { element in
-        ["AXButton", "AXRadioButton"].contains((attr(element, "AXRole") as? String) ?? "") &&
+        (attr(element, "AXRole") as? String) == "AXRadioButton" &&
         ["AXTitle", "AXDescription"].contains { (attr(element, $0) as? String) == label }
     }
     guard selectors.count == 1, AXUIElementPerformAction(selectors[0], kAXPressAction as CFString) == .success else { stop("SFTP pane selector: \(label) count=\(selectors.count)") }
