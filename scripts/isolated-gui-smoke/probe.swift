@@ -117,6 +117,36 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
     }
     if verifyVisibleValue && !confirmed {
+        for _ in 0..<2 where !confirmed {
+            let retry = snapshot(app).filter {
+                (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+            }
+            guard retry.count == 1, running.activate(options: [.activateIgnoringOtherApps]) else { stop("retry input field") }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                  AXUIElementSetAttributeValue(retry[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { stop("retry input focus") }
+            key(0, down: true, flags: .maskCommand); key(0, down: false, flags: .maskCommand)
+            for character in value {
+                guard let stroke = syntheticKeyStroke(character), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("retry input focus changed") }
+                let flags: CGEventFlags = stroke.shift ? .maskShift : []
+                key(stroke.code, down: true, flags: flags); key(stroke.code, down: false, flags: flags)
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            }
+            let retryDeadline = Date(timeIntervalSinceNow: 5)
+            while Date() < retryDeadline {
+                let current = snapshot(app).filter {
+                    (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder
+                }
+                let fieldValue = current.count == 1 ? attr(current[0], "AXValue") : nil
+                if (fieldValue as? String) == value || (fieldValue as? NSNumber)?.stringValue == value ||
+                   (placeholder == "22" && (fieldValue as? String).map { syntheticPortMatches($0, value) } == true) {
+                    confirmed = true; break
+                }
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            }
+        }
+    }
+    if verifyVisibleValue && !confirmed {
         if placeholder == "22" {
             let current = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == placeholder }
             let originalValue = attr(matches[0], "AXValue")
