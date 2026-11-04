@@ -1,160 +1,85 @@
-name: Exact DMG Host actions acceptance
+name: Exact DMG favorite acceptance macOS 14
 on:
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 jobs:
-  warning:
-    runs-on: macos-15
+  favorites:
+    runs-on: macos-14
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Download verified images
+      - name: Download exact candidate DMG
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41737602354 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = db7c5920a85c74e2008166298d2ac80cab66f857
-          mkdir -p "$RUNNER_TEMP/old" "$RUNNER_TEMP/new" "$RUNNER_TEMP/evidence"
-          gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/old"
-          (cd "$RUNNER_TEMP/old"; echo '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f  SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -)
-          gh run download 41737602354 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/new"
-          (cd "$RUNNER_TEMP/new"; shasum -a 256 -c ./*.dmg.sha256; shasum -a 256 ./*.dmg | tee "$RUNNER_TEMP/evidence/exact-dmg-sha256.txt")
-      - name: Exercise real legacy edit and warning
+          expected=db7c5920a85c74e2008166298d2ac80cab66f857
+          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41737602354 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
+          mkdir -p "$RUNNER_TEMP/image" "$RUNNER_TEMP/evidence"
+          gh run download 41737602354 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/image"
+          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256; echo '500b6b4c6ba6f4c0e84444c6de7fb7f787999f50f5728d5e1158da75278fd37e  SelectiveRemote-0.32.0-arm64.dmg' | shasum -a 256 -c -)
+          printf 'candidate=%s\nrunner=%s\n' "$expected" "$RUNNER_OS" > "$RUNNER_TEMP/evidence/provenance.txt"
+      - name: Exercise favorite and restart with synthetic Host
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          shopt -s nullglob
           keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
           original_default=$(security default-keychain -d user | python3 -c 'import shlex,sys; a=shlex.split(sys.stdin.read()); print(a[0] if a else "")')
           original_keychains=()
           while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
           cleanup() {
             result=$?
-            python3 scripts/isolated-gui-smoke/save-synthetic-snapshots.py "$RUNNER_TEMP" "$RUNNER_TEMP/evidence" || true
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
-            for pid in "${app_pid:-}" "${app_pid2:-}"; do if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; done
-            hdiutil detach "$RUNNER_TEMP/candidate-mount2" >/dev/null 2>&1 || true
+            if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
             security delete-keychain "$keychain" || true
-            rm -f "$RUNNER_TEMP/synthetic-keychain-password"
           }
           trap cleanup EXIT
-          password=$(openssl rand -hex 24); umask 077; printf '%s' "$password" > "$RUNNER_TEMP/synthetic-keychain-password"
+          password=$(openssl rand -hex 24)
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 1800 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           security list-keychains -d user -s "$keychain"
           security default-keychain -d user -s "$keychain"
-          mkdir "$RUNNER_TEMP/candidate-mount" "$RUNNER_TEMP/candidate-mount2"
-          old=("$RUNNER_TEMP"/old/*.dmg); new=("$RUNNER_TEMP"/new/*.dmg)
-          test "${#old[@]}" -eq 1 && test "${#new[@]}" -eq 1
-          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount2" "${old[0]}" >/dev/null
-          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${new[0]}" >/dev/null
-          app="$RUNNER_TEMP/candidate-mount2/Selective Remote.app"; app2="$RUNNER_TEMP/candidate-mount/Selective Remote.app"
-          codesign --verify --deep --strict "$app" && codesign --verify --deep --strict "$app2"
+          mkdir "$RUNNER_TEMP/candidate-mount"
+          images=("$RUNNER_TEMP"/image/*.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${images[0]}" >/dev/null
+          app="$RUNNER_TEMP/candidate-mount/Selective Remote.app"
+          codesign --verify --deep --strict "$app"
           bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
-          test "$bundle" = "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app2/Contents/Info.plist")"
+          if defaults read "$bundle" >/dev/null 2>&1; then echo 'Synthetic defaults domain not empty'; exit 1; fi
           binary="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
-          binary2="$app2/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app2/Contents/Info.plist")"
-          hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1); hash2=$(shasum -a 256 "$binary2" | cut -d ' ' -f 1)
+          hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
-          cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
-          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          swiftc scripts/isolated-gui-smoke/warning-observe.swift -o "$RUNNER_TEMP/warning-observe"
-          swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-initial.log" 2>&1 & app_pid=$!
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
-          SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-probe" "$app_pid" > "$RUNNER_TEMP/evidence/old-create.log"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-current > "$RUNNER_TEMP/evidence/create.log"
+          defaults export "$bundle" "$RUNNER_TEMP/before.plist"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid" --toggle-favorite > "$RUNNER_TEMP/evidence/favorite-on.log"
+          defaults export "$bundle" "$RUNNER_TEMP/on.plist"
+          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py on "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/on.plist" | tee "$RUNNER_TEMP/evidence/on.json"
+          screencapture -x "$RUNNER_TEMP/evidence/favorite-on.png"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid" --toggle-favorite > "$RUNNER_TEMP/evidence/favorite-off.log"
+          defaults export "$bundle" "$RUNNER_TEMP/off.plist"
+          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py off "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/off.plist" | tee "$RUNNER_TEMP/evidence/off.json"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
-          defaults export "$bundle" "$RUNNER_TEMP/before-migration.plist"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new.log" 2>&1 & app_pid2=$!
-          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$app_pid2" 031 candidate > "$RUNNER_TEMP/evidence/migration-prompt.log"
-          sleep 12; kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          defaults export "$bundle" "$RUNNER_TEMP/migrated.plist"
-          python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/before-migration.plist" "$RUNNER_TEMP/migrated.plist" > "$RUNNER_TEMP/evidence/migration.json"
-          python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/before-migration.plist" "$RUNNER_TEMP/migrated.plist" > "$RUNNER_TEMP/evidence/baseline-persistence.json"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
-          python3 scripts/isolated-gui-smoke/reencode-legacy.py prepare "$RUNNER_TEMP/migrated.plist" "$RUNNER_TEMP/reencoded.hex"
-          defaults write "$bundle" SelectiveRemote.connectionProfiles.v2 -data "$(cat "$RUNNER_TEMP/reencoded.hex")"
-          defaults export "$bundle" "$RUNNER_TEMP/reencoded.plist"
-          python3 scripts/isolated-gui-smoke/reencode-legacy.py verify "$RUNNER_TEMP/migrated.plist" "$RUNNER_TEMP/reencoded.plist"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent | tee "$RUNNER_TEMP/evidence/reencode-ui.log"
-          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
-          wait "$app_pid2" || true; app_pid2=""
-          defaults export "$bundle" "$RUNNER_TEMP/after-new-termination.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/after-new-termination.plist" | tee "$RUNNER_TEMP/evidence/shutdown-current-diff.json"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-late.log" 2>&1 & app_pid=$!
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-concurrent.log" 2>&1 & app_pid2=$!
-          sleep 12; kill -0 "$app_pid" && kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
-          defaults export "$bundle" "$RUNNER_TEMP/before-late.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/after-new-termination.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/startup-current-diff.json"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/before-late-current-diff.json"
-          SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/late-ui.log"
-          kill -0 "$app_pid" && kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Changes in the previous version' visible | tee "$RUNNER_TEMP/evidence/warning.log"
-          screencapture -x "$RUNNER_TEMP/evidence/alert.png"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Open the previous version to view it.' dismiss | tee "$RUNNER_TEMP/evidence/alert.log"
-          screencapture -x "$RUNNER_TEMP/evidence/warning.png"
-          defaults export "$bundle" "$RUNNER_TEMP/after.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/late-current-diff.json"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" > "$RUNNER_TEMP/evidence/collections.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid2" --create-live-current > "$RUNNER_TEMP/evidence/current-ui.log"
-          kill -0 "$app_pid" && kill -0 "$app_pid2"
-          defaults export "$bundle" "$RUNNER_TEMP/after-both.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-both.plist" | tee "$RUNNER_TEMP/evidence/both-collections.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --toggle-favorite | tee "$RUNNER_TEMP/evidence/favorite-on-action.log"
-          defaults export "$bundle" "$RUNNER_TEMP/favorite-on.plist"
-          python3 scripts/isolated-gui-smoke/verify-host-favorite.py on "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/favorite-on.plist" | tee "$RUNNER_TEMP/evidence/favorite-on-result.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --toggle-favorite | tee "$RUNNER_TEMP/evidence/favorite-off-action.log"
-          defaults export "$bundle" "$RUNNER_TEMP/favorite-off.plist"
-          python3 scripts/isolated-gui-smoke/verify-host-favorite.py off "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/favorite-off.plist" | tee "$RUNNER_TEMP/evidence/favorite-off-result.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --duplicate-selected | tee "$RUNNER_TEMP/evidence/duplicate-action.log"
-          defaults export "$bundle" "$RUNNER_TEMP/after-duplicate.plist"
-          python3 scripts/isolated-gui-smoke/verify-host-crud.py duplicate "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/after-duplicate.plist" | tee "$RUNNER_TEMP/evidence/duplicate-result.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --delete-selected | tee "$RUNNER_TEMP/evidence/delete-action.log"
-          defaults export "$bundle" "$RUNNER_TEMP/after-delete.plist"
-          python3 scripts/isolated-gui-smoke/verify-host-crud.py delete "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/after-duplicate.plist" "$RUNNER_TEMP/after-delete.plist" | tee "$RUNNER_TEMP/evidence/delete-result.json"
-          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
-          wait "$app_pid2" || true; app_pid2=""
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
-          wait "$app_pid" || true; app_pid=""
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-restart.log" 2>&1 & app_pid2=$!
-          sleep 12; kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restarted-collections.json"
-          inspect_synthetic_keychain() {
-            local version="$1" report="$2" output="$3"
-            python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$report" > "$output" 2>&1 &
-            local probe_pid=$!
-            if ! python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe; then
-              kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" || true; return 1
-            fi
-            wait "$probe_pid"
-            cat "$output"
-          }
-          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" "$RUNNER_TEMP/evidence/baseline-old-keychain.log"
-          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/baseline-persistence.json" "$RUNNER_TEMP/evidence/baseline-new-keychain.log"
-          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/collections.json" "$RUNNER_TEMP/evidence/live-old-keychain.log"
-          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/both-collections.json" "$RUNNER_TEMP/evidence/live-new-keychain.log"
-          echo 'SYNTHETIC_MIXED_VERSION_KEYCHAIN_FOUR_CHECKS=PASS'
-          echo 'ACTUAL_031_AND_032_SEPARATE_WRITES_PERSISTED=PASS'
-          echo 'MIXED_VERSION_RECONCILIATION=NOT_PROVEN'
+          defaults export "$bundle" "$RUNNER_TEMP/restart.plist"
+          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py restart "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/restart.plist" | tee "$RUNNER_TEMP/evidence/restart.json"
+          echo 'SYNTHETIC_FAVORITES_ON_OFF_AND_RESTART=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-host-crud-evidence
+          name: synthetic-exact-favorites-macos14
           path: ${{ runner.temp }}/evidence
           retention-days: 7
