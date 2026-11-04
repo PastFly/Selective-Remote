@@ -150,7 +150,34 @@ if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-select
     if let enabled = attr(controls[0], "AXEnabled") as? Bool, !enabled { stop("host control disabled: \(wanted)") }
     guard AXUIElementPerformAction(controls[0], kAXPressAction as CFString) == .success else { stop("host control action failed: \(wanted)") }
     Thread.sleep(forTimeInterval: 2)
-    if deleting { pressUnique("AXButton", "Delete") }
+    if deleting {
+        let nodes = snapshot(app)
+        let prompt = nodes.contains { element in
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "Delete Host?" }
+        }
+        let target = nodes.contains { element in
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "TEST-ONLY-CODEX-LIVE-NEW — копия" }
+        }
+        let buttons = nodes.filter { element in
+            (attr(element, "AXRole") as? String) == "AXButton" &&
+            ["AXTitle", "AXDescription"].contains { (attr(element, $0) as? String) == "Delete" }
+        }
+        guard prompt, target, buttons.count == 1, CGPreflightPostEventAccess(),
+              let position = attr(buttons[0], "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID(),
+              let size = attr(buttons[0], "AXSize"), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic delete confirmation unavailable") }
+        var point = CGPoint.zero; var extent = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent),
+              extent.width > 0, extent.height > 0,
+              running.activate(options: [.activateIgnoringOtherApps]) else { stop("delete confirmation geometry") }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("delete confirmation focus") }
+        let center = CGPoint(x: point.x + extent.width / 2, y: point.y + extent.height / 2)
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) else { stop("delete mouse event") }
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 2)
+    }
     print("QA_HOST_ACTION_REQUESTED=\(deleting ? "DELETE" : "DUPLICATE")")
     exit(0)
 }
