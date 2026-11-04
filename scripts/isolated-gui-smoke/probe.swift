@@ -171,7 +171,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--unavailabl
     setUniqueField("22", "52226")
     pressUnique("AXButton", "Open SSH")
     let deadline = Date(timeIntervalSinceNow: 35)
-    let patterns = ["connection refused", "connection failed", "could not connect", "connection error", "отказано в соединении", "не удалось подключиться"]
+    let patterns = ["server temporarily refused the connection", "connection refused", "connection failed", "could not connect", "connection error", "отказано в соединении", "не удалось подключиться"]
     while Date() < deadline {
         let values = snapshot(app).flatMap { element in
             ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }
