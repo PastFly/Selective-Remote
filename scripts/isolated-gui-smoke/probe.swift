@@ -471,7 +471,17 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--port-forwa
     setUniqueField("server.example.com or a Host from ~/.ssh/config", "127.0.0.1")
     setUniqueField("username", "runner")
     setUniqueField("22", "52222")
-    pressUnique("AXRadioButton", "Forwarding")
+    let forwardingTabs = snapshot(app).compactMap { element -> (AXUIElement, CGFloat)? in
+        guard ["AXButton", "AXRadioButton"].contains((attr(element, "AXRole") as? String) ?? ""),
+              ["AXTitle", "AXDescription"].contains(where: { (attr(element, $0) as? String) == "Forwarding" }),
+              let raw = attr(element, "AXPosition"), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue(unsafeBitCast(raw, to: AXValue.self), .cgPoint, &point) else { return nil }
+        return (element, point.x)
+    }.sorted { $0.1 > $1.1 }
+    guard let tab = forwardingTabs.first, (forwardingTabs.count == 1 || tab.1 > forwardingTabs[1].1 + 10),
+          AXUIElementPerformAction(tab.0, kAXPressAction as CFString) == .success else { stop("profile Forwarding tab unavailable") }
+    Thread.sleep(forTimeInterval: 2)
     pressUnique("AXPopUpButton", "New Tunnel")
     pressUnique("AXMenuItem", "Local")
     setUniqueField("8080", "52223")
