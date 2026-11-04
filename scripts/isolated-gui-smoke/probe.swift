@@ -157,10 +157,11 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
-if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-selected"].contains(CommandLine.arguments[2]) {
+if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-selected", "--toggle-favorite"].contains(CommandLine.arguments[2]) {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host action requires candidate") }
     let deleting = CommandLine.arguments[2] == "--delete-selected"
-    let wanted = deleting ? "Delete Host" : "Duplicate Host"
+    let favorite = CommandLine.arguments[2] == "--toggle-favorite"
+    let wanted = deleting ? "Delete Host" : favorite ? "Favorite" : "Duplicate Host"
     let controls = snapshot(app).filter { element in
         (attr(element, "AXRole") as? String) == "AXButton" &&
         ["AXHelp", "AXDescription", "AXTitle"].contains { (attr(element, $0) as? String) == wanted }
@@ -208,7 +209,7 @@ if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-select
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 2)
     }
-    print("QA_HOST_ACTION_REQUESTED=\(deleting ? "DELETE" : "DUPLICATE")")
+    print("QA_HOST_ACTION_REQUESTED=\(deleting ? "DELETE" : favorite ? "FAVORITE" : "DUPLICATE")")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host", "--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2]) {

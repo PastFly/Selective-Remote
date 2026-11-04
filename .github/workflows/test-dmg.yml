@@ -1,4 +1,4 @@
-name: Exact DMG Host copy and delete acceptance
+name: Exact DMG Host actions acceptance
 on:
   workflow_dispatch:
 permissions:
@@ -114,6 +114,12 @@ jobs:
           kill -0 "$app_pid" && kill -0 "$app_pid2"
           defaults export "$bundle" "$RUNNER_TEMP/after-both.plist"
           python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-both.plist" | tee "$RUNNER_TEMP/evidence/both-collections.json"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --toggle-favorite | tee "$RUNNER_TEMP/evidence/favorite-on-action.log"
+          defaults export "$bundle" "$RUNNER_TEMP/favorite-on.plist"
+          python3 scripts/isolated-gui-smoke/verify-host-favorite.py on "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/favorite-on.plist" | tee "$RUNNER_TEMP/evidence/favorite-on-result.json"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --toggle-favorite | tee "$RUNNER_TEMP/evidence/favorite-off-action.log"
+          defaults export "$bundle" "$RUNNER_TEMP/favorite-off.plist"
+          python3 scripts/isolated-gui-smoke/verify-host-favorite.py off "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/favorite-off.plist" | tee "$RUNNER_TEMP/evidence/favorite-off-result.json"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --duplicate-selected | tee "$RUNNER_TEMP/evidence/duplicate-action.log"
           defaults export "$bundle" "$RUNNER_TEMP/after-duplicate.plist"
           python3 scripts/isolated-gui-smoke/verify-host-crud.py duplicate "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/after-duplicate.plist" | tee "$RUNNER_TEMP/evidence/duplicate-result.json"
