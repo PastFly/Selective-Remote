@@ -550,9 +550,15 @@ if CommandLine.arguments.count == 3 && ["--sftp-upload-fixture", "--sftp-downloa
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP transfer fixture runner identity") }
     let upload = CommandLine.arguments[2] == "--sftp-upload-fixture"
     func pressHelp(_ label: String) {
+        let alternatives: [String]
+        switch label {
+        case "Перейти по указанному пути": alternatives = [label, "Go to the Entered Path"]
+        case "Скопировать выбранное в соседнюю панель": alternatives = [label, "Copy Selection to the Other Pane"]
+        default: alternatives = [label]
+        }
         let items = snapshot(app).filter { element in
             (attr(element, "AXRole") as? String) == "AXButton" &&
-            ["AXHelp", "AXTitle", "AXDescription"].contains { (attr(element, $0) as? String) == label }
+            ["AXHelp", "AXTitle", "AXDescription"].contains { alternatives.contains((attr(element, $0) as? String) ?? "") }
         }
         guard items.count == 1 else { stop("SFTP control unavailable: \(label), count=\(items.count)") }
         if let enabled = attr(items[0], "AXEnabled") as? Bool, !enabled { stop("SFTP control disabled: \(label)") }
