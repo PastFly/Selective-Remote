@@ -1,4 +1,4 @@
-name: Exact DMG favorite acceptance macOS 14
+name: Exact DMG unavailable SSH acceptance macOS 14
 on:
   workflow_dispatch:
 permissions:
@@ -35,6 +35,7 @@ jobs:
             result=$?
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
             if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            if [[ -n "${reserve_pid:-}" ]]; then kill "$reserve_pid" 2>/dev/null || true; wait "$reserve_pid" 2>/dev/null || true; fi
             hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
@@ -59,27 +60,16 @@ jobs:
           hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
+          python3 -c 'import socket,time; s=socket.socket(); s.bind(("127.0.0.1",52226)); time.sleep(300)' > "$RUNNER_TEMP/evidence/reserve.log" 2>&1 & reserve_pid=$!
+          sleep 1; kill -0 "$reserve_pid"
+          sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:52226"))' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-current > "$RUNNER_TEMP/evidence/create.log"
-          defaults export "$bundle" "$RUNNER_TEMP/before.plist"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid" --toggle-favorite > "$RUNNER_TEMP/evidence/favorite-on.log"
-          defaults export "$bundle" "$RUNNER_TEMP/on.plist"
-          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py on "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/on.plist" | tee "$RUNNER_TEMP/evidence/on.json"
-          screencapture -x "$RUNNER_TEMP/evidence/favorite-on.png"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid" --toggle-favorite > "$RUNNER_TEMP/evidence/favorite-off.log"
-          defaults export "$bundle" "$RUNNER_TEMP/off.plist"
-          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py off "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/off.plist" | tee "$RUNNER_TEMP/evidence/off.json"
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
-          wait "$app_pid" || true; app_pid=""
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
-          sleep 12; kill -0 "$app_pid"
-          defaults export "$bundle" "$RUNNER_TEMP/restart.plist"
-          python3 scripts/isolated-gui-smoke/verify-favorite-alone.py restart "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/restart.plist" | tee "$RUNNER_TEMP/evidence/restart.json"
-          echo 'SYNTHETIC_FAVORITES_ON_OFF_AND_RESTART=PASS'
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --unavailable-host | tee "$RUNNER_TEMP/evidence/unavailable.log"
+          screencapture -x "$RUNNER_TEMP/evidence/unavailable.png"
+          echo 'SYNTHETIC_UNAVAILABLE_SSH=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-favorites-macos14
+          name: synthetic-exact-unavailable-ssh-macos14
           path: ${{ runner.temp }}/evidence
           retention-days: 7

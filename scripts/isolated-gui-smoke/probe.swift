@@ -157,6 +157,33 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--unavailable-host" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("unavailable server requires candidate") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXPopUpButton", "Add")
+    pressUnique("AXMenuItem", "New SSH")
+    setUniqueField("SSH Server", "TEST-ONLY-CODEX-UNAVAILABLE")
+    setUniqueField("server.example.com or a Host from ~/.ssh/config", "127.0.0.1")
+    setUniqueField("username", "runner")
+    setUniqueField("22", "52226")
+    pressUnique("AXButton", "Open SSH")
+    let deadline = Date(timeIntervalSinceNow: 35)
+    let patterns = ["connection refused", "connection failed", "could not connect", "connection error", "отказано в соединении", "не удалось подключиться"]
+    while Date() < deadline {
+        let values = snapshot(app).flatMap { element in
+            ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }
+        }
+        if values.contains(where: { value in patterns.contains(where: { value.localizedCaseInsensitiveContains($0) }) }) {
+            print("SYNTHETIC_UNAVAILABLE_SERVER_ERROR_VISIBLE=YES")
+            exit(0)
+        }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    }
+    stop("unavailable server error not visible in accessibility tree")
+}
 if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-selected", "--toggle-favorite"].contains(CommandLine.arguments[2]) {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host action requires candidate") }
     let deleting = CommandLine.arguments[2] == "--delete-selected"
