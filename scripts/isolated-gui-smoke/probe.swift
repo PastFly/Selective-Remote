@@ -127,6 +127,33 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-selected"].contains(CommandLine.arguments[2]) {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("host action requires candidate") }
+    let deleting = CommandLine.arguments[2] == "--delete-selected"
+    let wanted = deleting ? "Delete Host" : "Duplicate Host"
+    let controls = snapshot(app).filter { element in
+        (attr(element, "AXRole") as? String) == "AXButton" &&
+        ["AXHelp", "AXDescription", "AXTitle"].contains { (attr(element, $0) as? String) == wanted }
+    }
+    if controls.count != 1 {
+        for element in snapshot(app) {
+            let role = attr(element, "AXRole") as? String ?? ""
+            let title = attr(element, "AXTitle") as? String ?? ""
+            let description = attr(element, "AXDescription") as? String ?? ""
+            let help = attr(element, "AXHelp") as? String ?? ""
+            if role == "AXButton" && (!title.isEmpty || !description.isEmpty || !help.isEmpty) {
+                print("QA_BUTTON title=\(title) description=\(description) help=\(help)")
+            }
+        }
+        stop("host control unavailable: \(wanted)")
+    }
+    if let enabled = attr(controls[0], "AXEnabled") as? Bool, !enabled { stop("host control disabled: \(wanted)") }
+    guard AXUIElementPerformAction(controls[0], kAXPressAction as CFString) == .success else { stop("host control action failed: \(wanted)") }
+    Thread.sleep(forTimeInterval: 2)
+    if deleting { pressUnique("AXButton", "Delete") }
+    print("QA_HOST_ACTION_REQUESTED=\(deleting ? "DELETE" : "DUPLICATE")")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host", "--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2]) {
     let late = ["--create-late-host", "--create-live-old"].contains(CommandLine.arguments[2])
     let live = ["--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2])

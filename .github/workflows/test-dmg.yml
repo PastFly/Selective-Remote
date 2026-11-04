@@ -1,4 +1,4 @@
-name: Exact DMG mixed-version Keychain acceptance
+name: Exact DMG Host copy and delete acceptance
 on:
   workflow_dispatch:
 permissions:
@@ -114,6 +114,12 @@ jobs:
           kill -0 "$app_pid" && kill -0 "$app_pid2"
           defaults export "$bundle" "$RUNNER_TEMP/after-both.plist"
           python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-both.plist" | tee "$RUNNER_TEMP/evidence/both-collections.json"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --duplicate-selected | tee "$RUNNER_TEMP/evidence/duplicate-action.log"
+          defaults export "$bundle" "$RUNNER_TEMP/after-duplicate.plist"
+          python3 scripts/isolated-gui-smoke/verify-host-crud.py duplicate "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/after-duplicate.plist" | tee "$RUNNER_TEMP/evidence/duplicate-result.json"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/gui-probe" "$app_pid2" --delete-selected | tee "$RUNNER_TEMP/evidence/delete-action.log"
+          defaults export "$bundle" "$RUNNER_TEMP/after-delete.plist"
+          python3 scripts/isolated-gui-smoke/verify-host-crud.py delete "$RUNNER_TEMP/after-both.plist" "$RUNNER_TEMP/after-duplicate.plist" "$RUNNER_TEMP/after-delete.plist" | tee "$RUNNER_TEMP/evidence/delete-result.json"
           SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
           wait "$app_pid2" || true; app_pid2=""
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
@@ -143,6 +149,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-mixed-keychain-evidence
+          name: synthetic-exact-host-crud-evidence
           path: ${{ runner.temp }}/evidence
           retention-days: 7
