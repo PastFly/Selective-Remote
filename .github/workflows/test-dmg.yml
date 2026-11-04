@@ -1,4 +1,4 @@
-name: Exact DMG legacy warning acceptance
+name: Exact DMG mixed-version write acceptance
 on:
   workflow_dispatch:
 permissions:
@@ -108,10 +108,24 @@ jobs:
           defaults export "$bundle" "$RUNNER_TEMP/after.plist"
           python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/late-current-diff.json"
           python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" > "$RUNNER_TEMP/evidence/collections.json"
-          echo 'ACTUAL_031_LATE_UI_WRITE_AND_032_WARNING=PASS'
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid2" --create-live-current > "$RUNNER_TEMP/evidence/current-ui.log"
+          kill -0 "$app_pid" && kill -0 "$app_pid2"
+          defaults export "$bundle" "$RUNNER_TEMP/after-both.plist"
+          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-both.plist" | tee "$RUNNER_TEMP/evidence/both-collections.json"
+          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
+          wait "$app_pid2" || true; app_pid2=""
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
+          wait "$app_pid" || true; app_pid=""
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-restart.log" 2>&1 & app_pid2=$!
+          sleep 12; kill -0 "$app_pid2"
+          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
+          defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
+          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restarted-collections.json"
+          echo 'ACTUAL_031_AND_032_SEPARATE_WRITES_PERSISTED=PASS'
+          echo 'MIXED_VERSION_RECONCILIATION=NOT_PROVEN'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-warning-evidence
+          name: synthetic-exact-mixed-writes-evidence
           path: ${{ runner.temp }}/evidence
           retention-days: 7
