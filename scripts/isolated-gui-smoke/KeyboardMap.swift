@@ -27,5 +27,7 @@ func syntheticKeyStroke(_ character: Character) -> SyntheticKeyStroke? {
     if (48...57).contains(value) { return .init(code: digits[Int(value - 48)], shift: false) }
     if value == 45 { return .init(code: UInt16(kVK_ANSI_Minus), shift: false) }
     if value == 46 { return .init(code: UInt16(kVK_ANSI_Period), shift: false) }
+    if value == 47 { return .init(code: UInt16(kVK_ANSI_Slash), shift: false) }
+    if value == 95 { return .init(code: UInt16(kVK_ANSI_Minus), shift: true) }
     return nil
 }

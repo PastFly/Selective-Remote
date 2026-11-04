@@ -546,6 +546,59 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
     }
     stop("synthetic SFTP file not visible")
 }
+if CommandLine.arguments.count == 3 && ["--sftp-upload-fixture", "--sftp-download-fixture"].contains(CommandLine.arguments[2]) {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP transfer fixture runner identity") }
+    let upload = CommandLine.arguments[2] == "--sftp-upload-fixture"
+    func pressHelp(_ label: String) {
+        let items = snapshot(app).filter { element in
+            (attr(element, "AXRole") as? String) == "AXButton" &&
+            ["AXHelp", "AXTitle", "AXDescription"].contains { (attr(element, $0) as? String) == label }
+        }
+        guard items.count == 1 else { stop("SFTP control unavailable: \(label), count=\(items.count)") }
+        if let enabled = attr(items[0], "AXEnabled") as? Bool, !enabled { stop("SFTP control disabled: \(label)") }
+        guard AXUIElementPerformAction(items[0], kAXPressAction as CFString) == .success else { stop("SFTP control action failed: \(label)") }
+        Thread.sleep(forTimeInterval: 1)
+    }
+    let label = upload ? "This Mac" : "TEST-ONLY-CODEX-LOOPBACK"
+    let selectors = snapshot(app).filter { element in
+        ["AXButton", "AXRadioButton"].contains((attr(element, "AXRole") as? String) ?? "") &&
+        ["AXTitle", "AXDescription"].contains { (attr(element, $0) as? String) == label }
+    }
+    guard selectors.count == 1, AXUIElementPerformAction(selectors[0], kAXPressAction as CFString) == .success else { stop("SFTP pane selector: \(label) count=\(selectors.count)") }
+    Thread.sleep(forTimeInterval: 2)
+    if upload {
+        setUniqueField("Локальный путь", temp + "/ssh-fixture/local")
+        pressHelp("Перейти по указанному пути")
+    }
+    let filename = upload ? "TEST-ONLY-CODEX-UPLOAD" : "TEST-ONLY-CODEX-SFTP-CHECK"
+    let deadline = Date(timeIntervalSinceNow: 25)
+    var target: AXUIElement?
+    while Date() < deadline {
+        let matches = snapshot(app).filter { element in
+            (attr(element, "AXRole") as? String) == "AXStaticText" &&
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == filename }
+        }
+        if matches.count == 1 { target = matches[0]; break }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    }
+    guard let target, let position = attr(target, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID(),
+          let size = attr(target, "AXSize"), CFGetTypeID(size) == AXValueGetTypeID() else { stop("SFTP synthetic file unavailable: \(filename)") }
+    var point = CGPoint.zero; var extent = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent),
+          extent.width > 0, extent.height > 0,
+          running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP synthetic file geometry") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("SFTP file focus") }
+    let center = CGPoint(x: point.x + extent.width / 2, y: point.y + extent.height / 2)
+    guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) else { stop("SFTP file click") }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 1)
+    pressHelp("Скопировать выбранное в соседнюю панель")
+    print("SYNTHETIC_SFTP_TRANSFER_REQUESTED=\(upload ? "UPLOAD" : "DOWNLOAD")")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 {
     guard CommandLine.arguments[2] == "--verify-baseline", env["SR_BUILD_KIND"] == "baseline" else { stop("unknown verification mode") }
     let welcome = snapshot(app).filter {
