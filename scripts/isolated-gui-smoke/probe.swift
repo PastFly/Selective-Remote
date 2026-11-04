@@ -157,6 +157,31 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && ["--grid", "--list", "--search-match", "--search-miss"].contains(CommandLine.arguments[2]) {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("Host display test requires candidate") }
+    let mode = CommandLine.arguments[2]
+    if mode == "--grid" || mode == "--list" {
+        let wanted = mode == "--grid" ? "Grid" : "List"
+        let choices = snapshot(app).filter { element in
+            ["AXRadioButton", "AXButton"].contains((attr(element, "AXRole") as? String) ?? "") &&
+            ["AXTitle", "AXDescription", "AXHelp"].contains { (attr(element, $0) as? String) == wanted }
+        }
+        guard choices.count == 1, AXUIElementPerformAction(choices[0], kAXPressAction as CFString) == .success else { stop("display mode unavailable: \(wanted), count=\(choices.count)") }
+        Thread.sleep(forTimeInterval: 2)
+        print("QA_HOST_VIEW_REQUESTED=\(wanted)")
+    } else {
+        let matching = mode == "--search-match"
+        setUniqueField("Search Personal Hosts", matching ? "TEST-ONLY-CODEX-LIVE-NEW" : "TEST-ONLY-CODEX-NOMATCH")
+        Thread.sleep(forTimeInterval: 2)
+        let groups = snapshot(app).filter { element in
+            ["AXStaticText", "AXRow", "AXButton"].contains((attr(element, "AXRole") as? String) ?? "") &&
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "TEST-ONLY-CODEX-MIXED-FOLDER" }
+        }
+        guard matching ? !groups.isEmpty : groups.isEmpty else { stop("search did not filter synthetic Host group; match=\(matching) count=\(groups.count)") }
+        print("QA_HOST_SEARCH_MATCH=\(matching ? "YES" : "NO")")
+    }
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
