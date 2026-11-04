@@ -1,9 +1,11 @@
 import json
 import sys
-from importlib.machinery import SourceFileLoader
+import importlib.util
 from pathlib import Path
 
-crud = SourceFileLoader('crud', str(Path(__file__).with_name('verify-host-crud.py'))).load_module()
+spec = importlib.util.spec_from_file_location('crud', Path(__file__).with_name('verify-host-crud.py'))
+crud = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(crud)
 if len(sys.argv) != 4 or sys.argv[1] not in ('on', 'off'):
     raise SystemExit('usage: on|off BEFORE AFTER')
 before, after = crud.read(sys.argv[2]), crud.read(sys.argv[3])
