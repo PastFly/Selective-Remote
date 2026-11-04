@@ -62,8 +62,6 @@ jobs:
           hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
-          python3 -c 'import socket,time; s=socket.socket(); s.bind(("127.0.0.1",52226)); time.sleep(300)' > "$RUNNER_TEMP/evidence/reserve.log" 2>&1 & reserve_pid=$!
-          sleep 1; kill -0 "$reserve_pid"
           set +e
           ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=yes -p 52226 runner@127.0.0.1 > "$RUNNER_TEMP/evidence/direct-ssh.txt" 2>&1
           ssh_result=$?
