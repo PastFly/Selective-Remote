@@ -33,6 +33,8 @@ jobs:
           while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
           cleanup() {
             result=$?
+            ps -axo pid,ppid,state,comm > "$RUNNER_TEMP/evidence/processes.txt" || true
+            lsof -nP -iTCP:52226 > "$RUNNER_TEMP/evidence/socket.txt" 2>&1 || true
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
             if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             if [[ -n "${reserve_pid:-}" ]]; then kill "$reserve_pid" 2>/dev/null || true; wait "$reserve_pid" 2>/dev/null || true; fi
@@ -62,6 +64,12 @@ jobs:
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
           python3 -c 'import socket,time; s=socket.socket(); s.bind(("127.0.0.1",52226)); time.sleep(300)' > "$RUNNER_TEMP/evidence/reserve.log" 2>&1 & reserve_pid=$!
           sleep 1; kill -0 "$reserve_pid"
+          set +e
+          ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=yes -p 52226 runner@127.0.0.1 > "$RUNNER_TEMP/evidence/direct-ssh.txt" 2>&1
+          ssh_result=$?
+          set -e
+          test "$ssh_result" -ne 0
+          grep -i 'connection refused' "$RUNNER_TEMP/evidence/direct-ssh.txt"
           sandbox-exec -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:52226"))' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --unavailable-host | tee "$RUNNER_TEMP/evidence/unavailable.log"
