@@ -109,7 +109,7 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
             if (fieldValue as? String) == value || (fieldValue as? NSNumber)?.stringValue == value {
                 confirmed = true; break
             }
-            if placeholder == "22", let formatted = fieldValue as? String,
+            if ["22", "8080", "80"].contains(placeholder), let formatted = fieldValue as? String,
                syntheticPortMatches(formatted, value) {
                 confirmed = true; break
             }
@@ -139,7 +139,7 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
                 }
                 let fieldValue = current.count == 1 ? attr(current[0], "AXValue") : nil
                 if (fieldValue as? String) == value || (fieldValue as? NSNumber)?.stringValue == value ||
-                   (placeholder == "22" && (fieldValue as? String).map { syntheticPortMatches($0, value) } == true) {
+                   (["22", "8080", "80"].contains(placeholder) && (fieldValue as? String).map { syntheticPortMatches($0, value) } == true) {
                     confirmed = true; break
                 }
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
@@ -457,6 +457,27 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
     }
     print("SYNTHETIC_RDP_HOST_DOUBLE_CLICK_POSTED=YES")
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--port-forward-fixture" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("forward fixture runner identity") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXPopUpButton", "Add")
+    pressUnique("AXMenuItem", "New SSH")
+    setUniqueField("SSH Server", "TEST-ONLY-CODEX-FORWARD")
+    setUniqueField("server.example.com or a Host from ~/.ssh/config", "127.0.0.1")
+    setUniqueField("username", "runner")
+    setUniqueField("22", "52222")
+    pressUnique("AXRadioButton", "Forwarding")
+    pressUnique("AXPopUpButton", "New Tunnel")
+    pressUnique("AXMenuItem", "Local")
+    setUniqueField("8080", "52223")
+    setUniqueField("80", "52224")
+    pressUnique("AXButton", "Start")
+    print("SYNTHETIC_LOCAL_FORWARD_REQUESTED=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-click-ssh" {
