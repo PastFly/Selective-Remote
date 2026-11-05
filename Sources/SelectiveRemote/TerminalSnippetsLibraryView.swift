@@ -1222,16 +1222,16 @@ private struct TerminalSnippetGroupEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(group == nil ? "Новая группа" : "Переименовать группу")
+            Text(group == nil ? UpdateLocalization.text(ru: "Новая группа", en: "New Group") : UpdateLocalization.text(ru: "Переименовать группу", en: "Rename Group"))
                 .font(.title2.bold())
-            TextField("Путь группы", text: $name)
-            Text("Используйте / для вложенности, например Production/Deploy.")
+            TextField(UpdateLocalization.text(ru: "Путь группы", en: "Group Path"), text: $name)
+            Text(UpdateLocalization.text(ru: "Используйте / для вложенности, например Production/Deploy.", en: "Use / for nesting, for example Production/Deploy."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Отмена") { dismiss() }
-                Button("Сохранить") {
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { dismiss() }
+                Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
                     onSave(name)
                     dismiss()
                 }
