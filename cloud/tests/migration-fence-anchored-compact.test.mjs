@@ -50,3 +50,28 @@ test('checkpoint files remain readable only to their service group even with res
  assert.equal((await lstat(join(path+'.archives',checkpoint.archiveDigest))).mode&0o777,0o640);
  assert.equal((await lstat(path)).mode&0o777,0o640);
 });
+
+for (const boundary of ['archive-sync','staged-checkpoint-sync']) test(`checkpoint ${boundary} failure retains lock and original committed history`,async t=>{
+ const {open}=await import('node:fs/promises');
+ const {path,events,bytes}=await fixture(t),expected=head(events);
+ const anchor={read:async()=>expected,advance:async()=>{throw Error('must_not_advance');}};
+ let injected=false;
+ const openFile=async(...args)=>{
+  const handle=await open(...args),name=String(args[0]);
+  return new Proxy(handle,{get(target,key){
+   if(key==='sync')return async()=>{
+    const hit=boundary==='archive-sync' ? name.startsWith(path+'.archives/') : name.startsWith(path+'.checkpoint-');
+    if(hit&&!injected){injected=true;throw Error('synthetic_checkpoint_sync_failure');}
+    return target.sync();
+   };
+   const value=target[key];return typeof value==='function'?value.bind(target):value;
+  }});
+ };
+ const fence=new MigrationFence(path,{anchor,openFile});
+ await assert.rejects(fence.compact(),/synthetic_checkpoint_sync_failure/);
+ assert.equal(injected,true);
+ assert.deepEqual(await readFile(path),bytes);
+ assert.equal((await lstat(path+'.lock')).isDirectory(),true);
+ await assert.rejects(new MigrationFence(path,{anchor}).snapshot(),/deployment_fence_locked/);
+ assert.deepEqual(await anchor.read(),expected);
+});
