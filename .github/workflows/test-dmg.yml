@@ -70,6 +70,7 @@ jobs:
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           swiftc scripts/isolated-gui-smoke/CancelSyntheticKeychain.swift -o "$RUNNER_TEMP/cancel-keychain"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/gui-probe" "$app_pid" --keychain-open-auth > "$RUNNER_TEMP/evidence/auth-tab.log"
           security lock-keychain "$keychain"
           "$RUNNER_TEMP/cancel-keychain" > "$RUNNER_TEMP/evidence/cancel-read-prompt.log" 2>&1 & cancel_read_pid=$!
           set +e
@@ -88,6 +89,7 @@ jobs:
           set -e
           test "$write_result" -eq 0
           test "$cancel_result" -eq 0
+          screencapture -x "$RUNNER_TEMP/evidence/locked-write.png"
           security unlock-keychain -p "$password" "$keychain"
           python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/unlocked-read.log" 2>&1 & probe_pid=$!
           python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" 032 probe > "$RUNNER_TEMP/evidence/read-prompt.log"
