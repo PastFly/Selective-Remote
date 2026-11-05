@@ -47,7 +47,6 @@ jobs:
         phase: [after-journal, after-groups, after-clear]
     env:
       SR_GUI_FAULT_PHASE: ${{ matrix.phase }}
-      SR_GUI_FAULT_ROOT: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
@@ -55,6 +54,8 @@ jobs:
           name: synthetic-instrumented-snippet-app
           path: ${{ runner.temp }}/image
       - name: Kill actual app during controlled Snippet transaction
+        env:
+          SR_GUI_FAULT_ROOT: ${{ runner.temp }}
         shell: bash
         run: |
           set -euo pipefail
