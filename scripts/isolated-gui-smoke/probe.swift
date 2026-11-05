@@ -261,6 +261,20 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-cu
     print("CURRENT_HOST_VISIBLE_IN_DOWNGRADE_UI=\(visible)")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--create-crash-group" {
+    guard env["SR_BUILD_KIND"] == "candidate", env["SR_GUI_FAULT_ROOT"] == temp else { stop("snippet fault runner") }
+    let buttons = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        ((attr($0, "AXTitle") as? String) == "New Group" || (attr($0, "AXDescription") as? String) == "New Group")
+    }
+    guard let button = buttons.first, AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {stop("crash group control")}
+    Thread.sleep(forTimeInterval: 1)
+    setUniqueField("Group Path", "TEST-ONLY-CODEX-CRASH-GROUP")
+    do {try Data("armed".utf8).write(to:URL(fileURLWithPath:temp+"/gui-fault-arm"),options:.withoutOverwriting)} catch {stop("fault arm")}
+    print("SYNTHETIC_SNIPPET_FAULT_ARMED=YES")
+    pressUnique("AXButton", "Save")
+    stop("fault boundary not reached")
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
     guard ["snippets", "snippets-current", "snippetfix"].contains(env["SR_BUILD_KIND"] ?? "") else { stop("snippet inspection requires isolated baseline") }
     let welcome = snapshot(app).filter {
