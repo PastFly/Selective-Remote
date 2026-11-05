@@ -1,51 +1,41 @@
-name: Test DMG
-
+name: Isolated host write crash boundaries
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+  host-fault:
+    runs-on: macos-14
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
+      - uses: actions/checkout@v6
+      - name: Compile exact Host save method with isolated preferences
         run: |
-          xcodebuild -version
-          swift --version
-          swift --version | grep -E 'Swift version 6\.'
-
-      - name: Install build dependencies
-        run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
-        run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
-        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          shasum -a 256 Sources/SelectiveRemote/AppModel.swift Sources/SelectiveRemote/NativeStorageLease.swift > "$RUNNER_TEMP/evidence/source-sha256.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,re
+          source=Path('Sources/SelectiveRemote/AppModel.swift').read_text()
+          match=re.search(r'    private func saveProfiles\(\) \{\n(.*?)\n    \}',source,re.S)
+          assert match and match.group(1).count('UserDefaults.standard')==1
+          body=match.group(1).replace('UserDefaults.standard','defaults')
+          template=Path('scripts/isolated-host-boundaries/main.swift').read_text()
+          assert template.count(' // HOST_SAVE_BODY')==1
+          Path(os.environ['RUNNER_TEMP']+'/main.swift').write_text(template.replace(' // HOST_SAVE_BODY',' func saveProfiles() {\n'+body+'\n }'))
+          PY
+          swiftc Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift "$RUNNER_TEMP/main.swift" -o "$RUNNER_TEMP/host-fault"
+      - name: Kill before, after and following flush of Host save
+        env:
+          SR_HOST_FAULT_ROOT: ${{ runner.temp }}/host-write-boundaries
+        run: |
+          set -o pipefail
+          python3 scripts/isolated-host-boundaries/supervise.py "$RUNNER_TEMP/host-fault" "$RUNNER_TEMP/evidence" | tee "$RUNNER_TEMP/evidence/host-fault.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
-          path: |
-            dist/*.dmg
-            dist/*.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
+          name: synthetic-host-save-crash-boundaries
+          path: ${{ runner.temp }}/evidence
+          retention-days: 14
