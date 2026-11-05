@@ -542,41 +542,31 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
     }
     guard sideButtons.count == 1, AXUIElementPerformAction(sideButtons[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP navigation unavailable") }
     Thread.sleep(forTimeInterval: 2)
-    for e in snapshot(app) {
-        let role = attr(e, "AXRole") as? String ?? ""
-        let name = (attr(e, "AXDescription") as? String) ?? (attr(e, "AXTitle") as? String) ?? ""
-        if !name.isEmpty { print("SFTP_TREE role=\(role) name=\(name)") }
-    }
+    pressUnique("AXRadioButton", "Connect")
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+    pressUnique("AXPopUpButton", "Connect")
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
     let remoteSelectors = snapshot(app).filter {
-        guard (attr($0, "AXRole") as? String) == "AXRadioButton",
-              ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK"),
-              let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
-        var point = CGPoint.zero
-        return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
+        (attr($0, "AXRole") as? String) == "AXMenuItem" &&
+        ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK")
     }
     guard remoteSelectors.count == 1,
           let position = attr(remoteSelectors[0], "AXPosition"), let size = attr(remoteSelectors[0], "AXSize"),
-          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic SFTP remote selector") }
+          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic SFTP host menu item") }
     var point = CGPoint.zero, dimensions = CGSize.zero
     guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
           AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions),
-          dimensions.width > 0, dimensions.height > 0, running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP selector frame") }
+          dimensions.width > 0, dimensions.height > 0 else { stop("SFTP host menu frame") }
     point.x += dimensions.width / 2; point.y += dimensions.height / 2
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    var hit: AXUIElement?
-    var hitPID: pid_t = 0
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
-          AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
-          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid else { stop("SFTP selector hit test") }
     for clicks in [1, 2] {
         guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP selector double click") }
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP host double click") }
         down.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
         up.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
     }
-    print("SFTP_SELECTOR_DOUBLE_CLICK_POSTED=YES")
+    print("SFTP_HOST_MENU_DOUBLE_CLICK_POSTED=YES")
     let deadline = Date(timeIntervalSinceNow: 35)
     while Date() < deadline {
         let rows = snapshot(app).filter { element in
