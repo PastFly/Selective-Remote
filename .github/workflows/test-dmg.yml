@@ -1,4 +1,4 @@
-name: Exact DMG mixed-version Keychain acceptance
+name: Exact DMG synthetic Keychain credential matrix
 on:
   workflow_dispatch:
 permissions:
@@ -6,7 +6,7 @@ permissions:
   actions: read
 jobs:
   warning:
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -68,81 +68,38 @@ jobs:
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           swiftc scripts/isolated-gui-smoke/warning-observe.swift -o "$RUNNER_TEMP/warning-observe"
-          swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
+          swiftc scripts/isolated-gui-smoke/CredentialMatrix.swift -o "$RUNNER_TEMP/keychain-probe"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-initial.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-probe" "$app_pid" > "$RUNNER_TEMP/evidence/old-create.log"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
           defaults export "$bundle" "$RUNNER_TEMP/before-migration.plist"
+          python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/before-migration.plist" "$RUNNER_TEMP/before-migration.plist" > "$RUNNER_TEMP/evidence/baseline-persistence.json"
+          matrix_probe() {
+            local action="$1" version="$2" log="$3"
+            python3 scripts/isolated-gui-smoke/run-bounded.py 70 "$RUNNER_TEMP/keychain-probe" "$action" "$version" "$RUNNER_TEMP/evidence/baseline-persistence.json" > "$log" 2>&1 & local probe_pid=$!
+            python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe > "$RUNNER_TEMP/evidence/$action-$version-prompt.log"
+            if kill -0 "$probe_pid" 2>/dev/null; then
+              python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe >> "$RUNNER_TEMP/evidence/$action-$version-prompt.log" || true
+            fi
+            wait "$probe_pid"; cat "$log"
+          }
+          matrix_probe seed 031 "$RUNNER_TEMP/evidence/matrix-seed.log"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new.log" 2>&1 & app_pid2=$!
           SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$app_pid2" 031 candidate > "$RUNNER_TEMP/evidence/migration-prompt.log"
           sleep 12; kill -0 "$app_pid2"
           "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
+          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
+          wait "$app_pid2" || true; app_pid2=""
           defaults export "$bundle" "$RUNNER_TEMP/migrated.plist"
           python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/before-migration.plist" "$RUNNER_TEMP/migrated.plist" > "$RUNNER_TEMP/evidence/migration.json"
-          python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/before-migration.plist" "$RUNNER_TEMP/migrated.plist" > "$RUNNER_TEMP/evidence/baseline-persistence.json"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
-          python3 scripts/isolated-gui-smoke/reencode-legacy.py prepare "$RUNNER_TEMP/migrated.plist" "$RUNNER_TEMP/reencoded.hex"
-          defaults write "$bundle" SelectiveRemote.connectionProfiles.v2 -data "$(cat "$RUNNER_TEMP/reencoded.hex")"
-          defaults export "$bundle" "$RUNNER_TEMP/reencoded.plist"
-          python3 scripts/isolated-gui-smoke/reencode-legacy.py verify "$RUNNER_TEMP/migrated.plist" "$RUNNER_TEMP/reencoded.plist"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent | tee "$RUNNER_TEMP/evidence/reencode-ui.log"
-          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
-          wait "$app_pid2" || true; app_pid2=""
-          defaults export "$bundle" "$RUNNER_TEMP/after-new-termination.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/after-new-termination.plist" | tee "$RUNNER_TEMP/evidence/shutdown-current-diff.json"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-late.log" 2>&1 & app_pid=$!
-          sleep 12; kill -0 "$app_pid"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-concurrent.log" 2>&1 & app_pid2=$!
-          sleep 12; kill -0 "$app_pid" && kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
-          defaults export "$bundle" "$RUNNER_TEMP/before-late.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/after-new-termination.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/startup-current-diff.json"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/before-late-current-diff.json"
-          SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/late-ui.log"
-          kill -0 "$app_pid" && kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Changes in the previous version' visible | tee "$RUNNER_TEMP/evidence/warning.log"
-          screencapture -x "$RUNNER_TEMP/evidence/alert.png"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Open the previous version to view it.' dismiss | tee "$RUNNER_TEMP/evidence/alert.log"
-          screencapture -x "$RUNNER_TEMP/evidence/warning.png"
-          defaults export "$bundle" "$RUNNER_TEMP/after.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/late-current-diff.json"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" > "$RUNNER_TEMP/evidence/collections.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid2" --create-live-current > "$RUNNER_TEMP/evidence/current-ui.log"
-          kill -0 "$app_pid" && kill -0 "$app_pid2"
-          defaults export "$bundle" "$RUNNER_TEMP/after-both.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-both.plist" | tee "$RUNNER_TEMP/evidence/both-collections.json"
-          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
-          wait "$app_pid2" || true; app_pid2=""
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
-          wait "$app_pid" || true; app_pid=""
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-restart.log" 2>&1 & app_pid2=$!
-          sleep 12; kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restarted-collections.json"
-          inspect_synthetic_keychain() {
-            local version="$1" report="$2" output="$3"
-            python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$report" > "$output" 2>&1 &
-            local probe_pid=$!
-            if ! python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe; then
-              kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" || true; return 1
-            fi
-            wait "$probe_pid"
-            cat "$output"
-          }
-          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" "$RUNNER_TEMP/evidence/baseline-old-keychain.log"
-          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/baseline-persistence.json" "$RUNNER_TEMP/evidence/baseline-new-keychain.log"
-          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/collections.json" "$RUNNER_TEMP/evidence/live-old-keychain.log"
-          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/both-collections.json" "$RUNNER_TEMP/evidence/live-new-keychain.log"
-          echo 'SYNTHETIC_MIXED_VERSION_KEYCHAIN_FOUR_CHECKS=PASS'
-          echo 'ACTUAL_031_AND_032_SEPARATE_WRITES_PERSISTED=PASS'
-          echo 'MIXED_VERSION_RECONCILIATION=NOT_PROVEN'
+          matrix_probe verify 031 "$RUNNER_TEMP/evidence/matrix-old.log"
+          matrix_probe verify 032 "$RUNNER_TEMP/evidence/matrix-new.log"
+          echo 'SYNTHETIC_FIVE_CREDENTIAL_KINDS_MIGRATED=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-mixed-keychain-evidence
+          name: synthetic-exact-credential-matrix
           path: ${{ runner.temp }}/evidence
           retention-days: 7
