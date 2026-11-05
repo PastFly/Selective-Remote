@@ -6,6 +6,16 @@ enum KeychainError:Error {case invalidData, unifiedVaultDisappeared, concurrentV
 let env=ProcessInfo.processInfo.environment,args=CommandLine.arguments
 func fail(_ m:String)->Never {fputs("KEYCHAIN_MATRIX_ERROR: \(m)\n",stderr);exit(2)}
 guard env["GITHUB_ACTIONS"]=="true",env["RUNNER_ENVIRONMENT"]=="github-hosted",env["USER"]=="runner",let temp=env["RUNNER_TEMP"],let run=env["GITHUB_RUN_ID"],let root=env["SR_KEYCHAIN_FAULT_ROOT"],root==temp+"/keychain-write-boundaries",args.count==2 else {fail("runner identity")}
+func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+ let service=(query as NSDictionary)[kSecAttrService as String] as? String
+ if args[1]=="reject-read" && service=="local.selectiveremote.credentials.unified.v2" {return errSecInteractionNotAllowed}
+ return Security.SecItemCopyMatching(query,result)
+}
+func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {
+ let service=(query as NSDictionary)[kSecAttrService as String] as? String
+ if args[1]=="reject-write" && service=="local.selectiveremote.credentials.unified.v2" {return errSecInteractionNotAllowed}
+ return Security.SecItemUpdate(query,attributes)
+}
 let oldService="local.selectiveremote.credentials",newService="local.selectiveremote.credentials.v2",base="11111111-1111-4111-8111-111111111111"
 let references=[KeychainCredentialReference(service:oldService,account:base),KeychainCredentialReference(service:oldService,account:base+".gateway"),KeychainCredentialReference(service:newService,account:base+".ssh"),KeychainCredentialReference(service:newService,account:base+".forwarding"),KeychainCredentialReference(service:newService,account:base+".ssh-key-authorization"),KeychainCredentialReference(service:newService,account:base+".proxy")]
 let kinds=["rdp","gateway","ssh","forwarding","ssh-key-authorization","proxy"]
@@ -27,6 +37,17 @@ if mode=="seed" {
 } else if mode=="migrate" || mode=="restart" {
  let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
  for (ref,kind) in zip(references,kinds) {guard try vault.read(reference:ref)=="TEST-ONLY-SECRET-"+kind else {fail("read \(kind)")}}
+ try inspectLegacy();print("SIX_TYPE_\(mode.uppercased())=PASS legacy_unchanged=YES")
+} else if mode=="reject-read" || mode=="reject-write" {
+ let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
+ for (ref,kind) in zip(references,kinds) {
+  var rejected=false
+  do {
+   if mode=="reject-read" {_ = try vault.read(reference:ref)}
+   else {try vault.save("TEST-ONLY-REJECTED",reference:ref)}
+  } catch {rejected=true}
+  guard rejected else {fail("access unexpectedly succeeded for \(kind)")}
+ }
  try inspectLegacy();print("SIX_TYPE_\(mode.uppercased())=PASS legacy_unchanged=YES")
 } else if mode=="delete" {
  let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)

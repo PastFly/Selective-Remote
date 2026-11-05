@@ -10,7 +10,7 @@ def sec(*args):
 original_default=shlex.split(sec('default-keychain','-d','user'));original_keychains=shlex.split(sec('list-keychains','-d','user'));path=root/'synthetic-matrix.keychain-db';password=secrets.token_hex(24);results=[]
 try:
  sec('create-keychain','-p',password,str(path));sec('set-keychain-settings','-lut','1800',str(path));sec('unlock-keychain','-p',password,str(path));sec('list-keychains','-d','user','-s',str(path));sec('default-keychain','-d','user','-s',str(path))
- for mode in ('seed','migrate','restart','delete','verify-delete'):
+ for mode in ('seed','migrate','restart','reject-read','restart','reject-write','restart','delete','verify-delete'):
   p=subprocess.run([str(exe),mode],capture_output=True,text=True,timeout=40)
   if p.returncode:raise RuntimeError(f'{mode}: {p.stderr}')
   results.append({'phase':mode,'result':p.stdout.strip()});print(p.stdout.strip(),flush=True)
