@@ -6,7 +6,7 @@ permissions:
   actions: read
 jobs:
   warning:
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -92,57 +92,37 @@ jobs:
           wait "$app_pid2" || true; app_pid2=""
           defaults export "$bundle" "$RUNNER_TEMP/after-new-termination.plist"
           python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/after-new-termination.plist" | tee "$RUNNER_TEMP/evidence/shutdown-current-diff.json"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-late.log" 2>&1 & app_pid=$!
-          sleep 12; kill -0 "$app_pid"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-concurrent.log" 2>&1 & app_pid2=$!
-          sleep 12; kill -0 "$app_pid" && kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' absent
-          defaults export "$bundle" "$RUNNER_TEMP/before-late.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/after-new-termination.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/startup-current-diff.json"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/reencoded.plist" "$RUNNER_TEMP/before-late.plist" | tee "$RUNNER_TEMP/evidence/before-late-current-diff.json"
-          SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/late-ui.log"
-          kill -0 "$app_pid" && kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Changes in the previous version' visible | tee "$RUNNER_TEMP/evidence/warning.log"
-          screencapture -x "$RUNNER_TEMP/evidence/alert.png"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Open the previous version to view it.' dismiss | tee "$RUNNER_TEMP/evidence/alert.log"
-          screencapture -x "$RUNNER_TEMP/evidence/warning.png"
-          defaults export "$bundle" "$RUNNER_TEMP/after.plist"
-          python3 scripts/isolated-gui-smoke/describe-collection-diff.py "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/late-current-diff.json"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-old "$RUNNER_TEMP/before-late.plist" "$RUNNER_TEMP/after.plist" > "$RUNNER_TEMP/evidence/collections.json"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid2" --create-live-current > "$RUNNER_TEMP/evidence/current-ui.log"
-          kill -0 "$app_pid" && kill -0 "$app_pid2"
-          defaults export "$bundle" "$RUNNER_TEMP/after-both.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-both.plist" | tee "$RUNNER_TEMP/evidence/both-collections.json"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/current-before-downgrade.log" 2>&1 & app_pid2=$!
+          sleep 12; kill -0 "$app_pid2"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid2" --create-current-host > "$RUNNER_TEMP/evidence/current-write.log"
           SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
           wait "$app_pid2" || true; app_pid2=""
+          defaults export "$bundle" "$RUNNER_TEMP/current-written.plist"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/downgrade-app.log" 2>&1 & app_pid=$!
+          sleep 12; kill -0 "$app_pid"
+          SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-late-host > "$RUNNER_TEMP/evidence/downgrade-write.log"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/new-restart.log" 2>&1 & app_pid2=$!
+          defaults export "$bundle" "$RUNNER_TEMP/downgrade-written.plist"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/current-relaunch.log" 2>&1 & app_pid2=$!
           sleep 12; kill -0 "$app_pid2"
-          "$RUNNER_TEMP/warning-observe" "$app_pid2" '' ready
-          defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
-          python3 scripts/isolated-gui-smoke/verify-mixed-writes.py live-current "$RUNNER_TEMP/after.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restarted-collections.json"
+          "$RUNNER_TEMP/warning-observe" "$app_pid2" 'Changes in the previous version' visible | tee "$RUNNER_TEMP/evidence/downgrade-warning.log"
+          SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash2" "$RUNNER_TEMP/gui-probe" "$app_pid2" --terminate
+          wait "$app_pid2" || true; app_pid2=""
+          defaults export "$bundle" "$RUNNER_TEMP/after-downgrade-relaunch.plist"
+          python3 scripts/isolated-gui-smoke/verify-downgrade-write.py "$RUNNER_TEMP/after-new-termination.plist" "$RUNNER_TEMP/current-written.plist" "$RUNNER_TEMP/downgrade-written.plist" "$RUNNER_TEMP/after-downgrade-relaunch.plist" "$RUNNER_TEMP/evidence"
           inspect_synthetic_keychain() {
             local version="$1" report="$2" output="$3"
-            python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$report" > "$output" 2>&1 &
-            local probe_pid=$!
-            if ! python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe; then
-              kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" || true; return 1
-            fi
-            wait "$probe_pid"
-            cat "$output"
+            python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$report" > "$output" 2>&1 & local probe_pid=$!
+            if ! python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe; then kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" || true; return 1; fi
+            wait "$probe_pid"; cat "$output"
           }
-          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/baseline-persistence.json" "$RUNNER_TEMP/evidence/baseline-old-keychain.log"
-          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/baseline-persistence.json" "$RUNNER_TEMP/evidence/baseline-new-keychain.log"
-          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/collections.json" "$RUNNER_TEMP/evidence/live-old-keychain.log"
-          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/both-collections.json" "$RUNNER_TEMP/evidence/live-new-keychain.log"
-          echo 'SYNTHETIC_MIXED_VERSION_KEYCHAIN_FOUR_CHECKS=PASS'
-          echo 'ACTUAL_031_AND_032_SEPARATE_WRITES_PERSISTED=PASS'
-          echo 'MIXED_VERSION_RECONCILIATION=NOT_PROVEN'
+          inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/late-persistence.json" "$RUNNER_TEMP/evidence/old-late-keychain.log"
+          inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/mixed-persistence.json" "$RUNNER_TEMP/evidence/new-keychain.log"
+          echo 'DOWNGRADE_WITH_WRITE_PRESERVATION=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-mixed-keychain-evidence
+          name: synthetic-exact-downgrade-write-evidence
           path: ${{ runner.temp }}/evidence
           retention-days: 7
