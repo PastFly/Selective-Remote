@@ -542,6 +542,11 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
     }
     guard sideButtons.count == 1, AXUIElementPerformAction(sideButtons[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP navigation unavailable") }
     Thread.sleep(forTimeInterval: 2)
+    for e in snapshot(app) {
+        let role = attr(e, "AXRole") as? String ?? ""
+        let name = (attr(e, "AXDescription") as? String) ?? (attr(e, "AXTitle") as? String) ?? ""
+        if !name.isEmpty { print("SFTP_TREE role=\(role) name=\(name)") }
+    }
     let remoteSelectors = snapshot(app).filter {
         guard (attr($0, "AXRole") as? String) == "AXRadioButton",
               ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK"),
