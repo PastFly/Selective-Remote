@@ -13,7 +13,7 @@ if len(a)==len(b)==1:
  diagnostic['addedValues']={k:b[0][k] for k in diagnostic['addedKeys'] if not any(t in k.lower() for t in ('password','secret','token','passphrase'))}
  diagnostic['changedValues']={k:{'old':a[0][k],'new':b[0][k]} for k in diagnostic['changedKeys'] if not any(t in k.lower() for t in ('password','secret','token','passphrase'))}
 Path(sys.argv[3]).joinpath('synthetic-host-schema-diff.json').write_text(json.dumps(diagnostic,indent=2)+'\n');print(json.dumps(diagnostic))
-assert len(a)==len(b)==1 and a[0]==b[0], 'migrated Host identity or contents changed'
+assert len(a)==len(b)==1 and diagnostic['oldId']==diagnostic['newId'] and not diagnostic['missingKeys'] and not diagnostic['changedKeys'] and diagnostic['addedValues']=={'folderOrderPath': [], 'sortIndex': 0} and set(diagnostic['addedKeys'])=={'folderOrderPath','sortIndex'}, 'migrated Host identity or contents changed unexpectedly'
 snapshot=after[snapkey];digest=hashlib.sha256(snapshot).hexdigest();assert after[markerkey]=='complete:'+digest, 'inconsistent migration checkpoint'
-result={'phase':os.environ['SR_GUI_FAULT_PHASE'],'actualAppSIGKILL':True,'legacyUnchanged':True,'migratedHostIDAndContentPreserved':True,'checkpointHashValid':True,'legacyHostSHA256':hashlib.sha256(before[oldkey]).hexdigest(),'checkpointSHA256':digest}
+result={'phase':os.environ['SR_GUI_FAULT_PHASE'],'actualAppSIGKILL':True,'legacyUnchanged':True,'migratedHostIDAndContentPreserved':True,'expectedNewSchemaDefaults':True,'checkpointHashValid':True,'legacyHostSHA256':hashlib.sha256(before[oldkey]).hexdigest(),'checkpointSHA256':digest}
 Path(sys.argv[3]).joinpath('real-migration-crash.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
