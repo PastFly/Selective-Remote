@@ -462,8 +462,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--proxy-ui" 
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
           let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
           let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("HTTP proxy mouse event") }
-    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+    down.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    up.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
     setUniqueField("proxy.example.com", "192.0.2.23")
     setUniqueField("Пароль прокси (необязательно)", "TEST-ONLY-CODEX-PROXY-SECRET", verifyVisibleValue: false)
     pressUnique("AXButton", "Save")
