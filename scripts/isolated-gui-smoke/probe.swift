@@ -573,8 +573,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP host double click") }
         down.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
         up.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
-        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        down.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        up.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.08))
     }
     print("SFTP_HOST_MENU_DOUBLE_CLICK_POSTED=YES")
     func fileVisible() -> Bool {
