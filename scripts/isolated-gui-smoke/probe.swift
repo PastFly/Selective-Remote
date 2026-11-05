@@ -158,7 +158,7 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--interrupt-save" {
-    guard env["SR_BUILD_KIND"] == "candidate", let delayText=env["SR_DELAY_MS"], let delay=UInt32(delayText), [295,310].contains(delay), CGPreflightPostEventAccess(), running.activate(options:[.activateIgnoringOtherApps]) else { stop("interrupted save fixture") }
+    guard env["SR_BUILD_KIND"] == "candidate", env["SR_GUI_FAULT_ROOT"] == temp, CGPreflightPostEventAccess(), running.activate(options:[.activateIgnoringOtherApps]) else { stop("interrupted save fixture") }
     let fields=snapshot(app).filter { (attr($0,"AXRole") as? String)=="AXTextField" && (attr($0,"AXPlaceholderValue") as? String)=="SSH Server" }
     guard fields.count==1 else { stop("interrupted save field") }
     RunLoop.current.run(until:Date(timeIntervalSinceNow:0.3))
@@ -178,9 +178,8 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--interrupt-
     }
     guard (attr(fields[0], "AXValue") as? String) == expected else { stop("edited value was not accepted before interruption") }
     print("SYNTHETIC_EDIT_VALUE_ACCEPTED=YES")
-    usleep(delay * 1000)
-    guard kill(pid,SIGKILL)==0 else {stop("synthetic kill")}
-    print("SYNTHETIC_EDIT_INTERRUPTED_AFTER_POST_MS=\(delay)")
+    do {try Data("armed".utf8).write(to:URL(fileURLWithPath:temp+"/gui-fault-arm"),options:.withoutOverwriting)} catch {stop("fault arm")}
+    print("SYNTHETIC_FAULT_ARMED=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {

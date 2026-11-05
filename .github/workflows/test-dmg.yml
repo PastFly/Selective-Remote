@@ -1,35 +1,47 @@
-name: Exact DMG interrupted save acceptance
+name: Real GUI Host save crash boundaries
 on:
   workflow_dispatch:
-    inputs:
-      delay_ms:
-        required: true
-        type: choice
-        options: ["295", "310"]
 permissions:
   contents: read
-  actions: read
 jobs:
-  favorites:
+  gui-host-crash:
     runs-on: macos-14
-    timeout-minutes: 15
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [before, after]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+      SELECTIVEREMOTE_RELEASE_MODE: community
     steps:
       - uses: actions/checkout@v6
-      - name: Download exact candidate DMG
-        env:
-          GH_TOKEN: ${{ github.token }}
+        with:
+          path: harness
+      - uses: actions/checkout@v6
+        with:
+          path: candidate
+          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+      - name: Build instrumented exact candidate source
         shell: bash
         run: |
           set -euo pipefail
-          expected=db7c5920a85c74e2008166298d2ac80cab66f857
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41737602354 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
           mkdir -p "$RUNNER_TEMP/image" "$RUNNER_TEMP/evidence"
-          gh run download 41737602354 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/image"
-          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256; echo '500b6b4c6ba6f4c0e84444c6de7fb7f787999f50f5728d5e1158da75278fd37e  SelectiveRemote-0.32.0-arm64.dmg' | shasum -a 256 -c -)
-          printf 'candidate=%s\nrunner=%s\n' "$expected" "$RUNNER_OS" > "$RUNNER_TEMP/evidence/provenance.txt"
-      - name: Exercise favorite and restart with synthetic Host
+          cd candidate
+          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+          shasum -a 256 Sources/SelectiveRemote/AppModel.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
+          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-host-gui-crash/instrument.py"
+          git diff -- Sources/SelectiveRemote/AppModel.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
+          brew install freerdp sdl3
+          ./scripts/build_app.sh
+          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/image/"
+      - name: Kill actual app at controlled Host save boundary
+        working-directory: harness
         env:
-          SR_DELAY_MS: ${{ inputs.delay_ms }}
+          SR_GUI_FAULT_PHASE: ${{ matrix.phase }}
+          SR_GUI_FAULT_ROOT: ${{ runner.temp }}
         shell: bash
         run: |
           set -euo pipefail
@@ -73,26 +85,26 @@ jobs:
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-current > "$RUNNER_TEMP/evidence/create.log"
           defaults export "$bundle" "$RUNNER_TEMP/before.plist"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-probe" "$app_pid" --interrupt-save | tee "$RUNNER_TEMP/evidence/interrupt.log"
+          for attempt in {1..100}; do
+            test -f "$RUNNER_TEMP/gui-fault-reached" && break
+            kill -0 "$app_pid" || { echo 'app exited before fault boundary'; exit 1; }
+            sleep 0.1
+          done
+          test "$(cat "$RUNNER_TEMP/gui-fault-reached")" = "$SR_GUI_FAULT_PHASE"
+          ps -o state= -p "$app_pid" | grep -q T
+          kill -KILL "$app_pid"
           wait "$app_pid" 2>/dev/null || true; app_pid=""
+          rm -f "$RUNNER_TEMP/gui-fault-arm"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
           defaults export "$bundle" "$RUNNER_TEMP/recovered.plist"
           python3 scripts/isolated-gui-smoke/verify-interrupted-save.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/recovered.plist" "$RUNNER_TEMP/evidence"
-          swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
-          cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
-          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          python3 scripts/isolated-gui-smoke/run-bounded.py 110 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/recovered-keychain.log" 2>&1 & keyprobe=$!
-          for attempt in 1 2 3; do
-            if ! kill -0 "$keyprobe" 2>/dev/null; then break; fi
-            python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$keyprobe" 032 probe >> "$RUNNER_TEMP/evidence/security-prompt.log" || true
-          done
-          wait "$keyprobe"; cat "$RUNNER_TEMP/evidence/recovered-keychain.log"
           echo 'SYNTHETIC_INTERRUPTED_EDIT_RESTART=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-interrupted-save-${{ inputs.delay_ms }}
+          name: synthetic-real-app-host-crash-${{ matrix.phase }}
           path: ${{ runner.temp }}/evidence
           retention-days: 7
