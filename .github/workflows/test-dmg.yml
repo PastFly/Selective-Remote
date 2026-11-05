@@ -3,39 +3,23 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   build:
-    runs-on: macos-14
-    timeout-minutes: 35
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-        with:
-          path: harness
-      - uses: actions/checkout@v6
-        with:
-          path: candidate
-          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-      - name: Build instrumented candidate
+      - name: Reuse verified test-only instrumented application
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          mkdir -p "$RUNNER_TEMP/evidence"
-          cd candidate
-          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-          shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
-          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-migration-gui-crash/instrument.py"
-          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
-          brew install freerdp sdl3
-          ./scripts/build_app.sh
-          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
+          mkdir -p "$RUNNER_TEMP/image"
+          gh run download 42005463911 --repo PastFly/Selective-Remote --name synthetic-instrumented-migration-app --dir "$RUNNER_TEMP/image"
+          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256)
       - uses: actions/upload-artifact@v4
         with:
           name: synthetic-instrumented-migration-app
-          path: ${{ runner.temp }}/evidence
+          path: ${{ runner.temp }}/image
           retention-days: 7
   crash:
     needs: build
@@ -77,6 +61,8 @@ jobs:
           }
           trap cleanup EXIT
           password=$(openssl rand -hex 24)
+          umask 077
+          printf %s "$password" > "$RUNNER_TEMP/synthetic-keychain-password"
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 1800 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
@@ -94,6 +80,8 @@ jobs:
           hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
+          cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
+          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-app.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/old-create.log"
@@ -119,7 +107,8 @@ jobs:
           kill -KILL "$app_pid"; wait "$app_pid" 2>/dev/null || true; app_pid=""
           rm -f "$RUNNER_TEMP/gui-fault-arm"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
-          sleep 12; kill -0 "$app_pid"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$app_pid" 031 candidate > "$RUNNER_TEMP/evidence/security-prompt.log"
+          sleep 3; kill -0 "$app_pid"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
           defaults export "$bundle" "$RUNNER_TEMP/recovered.plist"
