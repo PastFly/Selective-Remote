@@ -157,6 +157,24 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--keychain-open-auth" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("keychain fixture identity") }
+    pressUnique("AXButton", "Authentication"); print("SYNTHETIC_AUTH_TAB_READY=YES"); exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--keychain-locked-save" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("keychain fixture identity") }
+    setUniqueField("Сохранён — введите новый для замены", "TEST-ONLY-CODEX-REPLACEMENT", verifyVisibleValue: false)
+    pressUnique("AXButton", "Save")
+    print("SYNTHETIC_LOCKED_KEYCHAIN_SAVE_REQUESTED=YES")
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
+    setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
+    setUniqueField("For example: Work/Servers/Linux", "TEST-ONLY-CODEX-NEW-FOLDER")
+    print("QA_SYNTHETIC_HOST_EDIT_REQUESTED=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-selected", "--toggle-favorite"].contains(CommandLine.arguments[2]) {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host action requires candidate") }
     let deleting = CommandLine.arguments[2] == "--delete-selected"
@@ -268,21 +286,11 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Snippets")
-    let groupButtons = snapshot(app).filter {
-        (attr($0, "AXRole") as? String) == "AXButton" &&
-        ((attr($0, "AXTitle") as? String) == "New Group" || (attr($0, "AXDescription") as? String) == "New Group")
-    }
-    guard let groupButton = groupButtons.first, AXUIElementPerformAction(groupButton, kAXPressAction as CFString) == .success else { stop("new group control") }
-    Thread.sleep(forTimeInterval: 1)
-    setUniqueField("Group Path", "TEST-ONLY-CODEX-SNIPPET-GROUP")
+    pressUnique("AXButton", "New Group")
+    setUniqueField("Название группы", "TEST-ONLY-CODEX-SNIPPET-GROUP")
     pressUnique("AXButton", "Save")
     print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
-    let savedGroups = snapshot(app).filter { element in
-        (attr(element, "AXRole") as? String) == "AXButton" &&
-        ["AXTitle", "AXDescription"].compactMap { attr(element, $0) as? String }.contains { $0.contains("TEST-ONLY-CODEX-SNIPPET-GROUP") }
-    }
-    guard savedGroups.count == 1, AXUIElementPerformAction(savedGroups[0], kAXPressAction as CFString) == .success else { stop("saved group control") }
-    Thread.sleep(forTimeInterval: 1)
+    pressUnique("AXButton", "TEST-ONLY-CODEX-SNIPPET-GROUP, 0 сниппетов")
     for element in snapshot(app) {
         let role = attr(element, "AXRole") as? String ?? ""
         let description = attr(element, "AXDescription") as? String ?? ""
@@ -294,7 +302,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     let createButtons = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "New Snippet"
     }
-    guard !createButtons.isEmpty, AXUIElementPerformAction(createButtons[0], kAXPressAction as CFString) == .success else { stop("snippet folder creation control") }
+    guard createButtons.count == 2, AXUIElementPerformAction(createButtons[0], kAXPressAction as CFString) == .success else { stop("snippet folder creation control") }
     Thread.sleep(forTimeInterval: 1)
     Thread.sleep(forTimeInterval: 3)
     let capture = Process()
@@ -302,29 +310,25 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     capture.arguments = ["-x", temp + "/evidence/snippet-editor-screen.png"]
     try? capture.run()
     capture.waitUntilExit()
-    let sheets = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXSheet" }
-    guard sheets.count == 1 else { stop("snippet editor sheet") }
-    let editorNodes = snapshot(sheets[0])
-    for element in editorNodes {
-        let role = attr(element, "AXRole") as? String ?? ""
-        let title = attr(element, "AXTitle") as? String ?? ""
-        let description = attr(element, "AXDescription") as? String ?? ""
-        let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
-        if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty || role == "AXTextArea" {print("SNIPPET_EDITOR role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")}
+    let system = AXUIElementCreateSystemWide()
+    var hitFields = [AXUIElement]()
+    for (x, y) in [(450.0, 153.0), (450.0, 300.0), (250.0, 508.0)] {
+        var hit: AXUIElement?
+        let status = AXUIElementCopyElementAtPosition(system, Float(x), Float(y), &hit)
+        if let hit {
+            var hitPID: pid_t = 0
+            _ = AXUIElementGetPid(hit, &hitPID)
+            print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) pidMatch=\(hitPID == pid) role=\(attr(hit, "AXRole") as? String ?? "") description=\(attr(hit, "AXDescription") as? String ?? "") placeholder=\(attr(hit, "AXPlaceholderValue") as? String ?? "")")
+            guard hitPID == pid else { stop("snippet hit outside app") }
+            hitFields.append(hit)
+        } else { print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) missing=YES") }
     }
-    let titles = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextField" }.compactMap { element -> (AXUIElement, CGFloat)? in
-        guard let position = attr(element, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return nil }
-        var point = CGPoint.zero
-        guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) else { return nil }
-        return (element, point.y)
-    }.sorted { $0.1 < $1.1 }
-    let commands = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextArea" }
-    let targets = editorNodes.filter { element in
-        (attr(element, "AXRole") as? String) == "AXCheckBox" &&
-        ["AXTitle", "AXDescription"].compactMap { attr(element, $0) as? String }.contains { ["Local Terminal", "Локальный терминал"].contains($0) }
-    }
-    guard !titles.isEmpty, (titles.count == 1 || titles[0].1 < titles[1].1), commands.count == 1, targets.count == 1 else { stop("snippet editor controls") }
-    let hitFields = [titles[0].0, commands[0], targets[0]]
+    guard hitFields.count == 3,
+          (attr(hitFields[0], "AXRole") as? String) == "AXTextField",
+          (attr(hitFields[1], "AXRole") as? String) == "AXTextArea",
+          (attr(hitFields[2], "AXRole") as? String) == "AXCheckBox",
+          (attr(hitFields[2], "AXDescription") as? String) == "Локальный терминал",
+          CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { stop("unexpected snippet dialog geometry") }
     func typeSynthetic(_ value: String, in element: AXUIElement) {
         guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("snippet input access") }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
@@ -424,6 +428,27 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--verify-sni
     }
     guard !items.isEmpty else { stop("migrated snippet not visible") }
     print("SYNTHETIC_SNIPPET_VISIBLE_IN_CANDIDATE=YES")
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--proxy-ui" {
+    guard env["SR_BUILD_KIND"] == "candidate", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("runner identity") }
+    let welcome = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote" }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXPopUpButton", "Add")
+    pressUnique("AXMenuItem", "New SSH")
+    setUniqueField("SSH Server", "TEST-ONLY-CODEX-PROXY-UI")
+    setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.22")
+    setUniqueField("username", "test")
+    pressUnique("AXButton", "Route")
+    let items = snapshot(app).filter { (attr($0, "AXTitle") as? String) == "HTTP CONNECT" || (attr($0, "AXDescription") as? String) == "HTTP CONNECT" }
+    guard items.count == 1, AXUIElementPerformAction(items[0], kAXPressAction as CFString) == .success else { stop("HTTP proxy selector unavailable") }
+    setUniqueField("proxy.example.com", "192.0.2.23")
+    setUniqueField("Пароль прокси (необязательно)", "TEST-ONLY-CODEX-PROXY-SECRET", verifyVisibleValue: false)
+    pressUnique("AXButton", "Save")
+    Thread.sleep(forTimeInterval: 2)
+    let saved = snapshot(app).contains { (attr($0, "AXPlaceholderValue") as? String) == "Сохранён в Keychain — введите новый для замены" }
+    guard saved else { stop("proxy secret saved indicator unavailable") }
+    print("SYNTHETIC_PROXY_SECRET_UI_SAVE=PASS")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-click-rdp" {
@@ -533,7 +558,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         print("SYNTHETIC_SFTP_CONTROL role=\(attr(element, "AXRole") as? String ?? "") x=\(point.x)")
     }
     let tabs = snapshot(app).filter {
-        guard (attr($0, "AXRole") as? String) == "AXRadioButton",
+        guard ["AXButton", "AXRadioButton"].contains((attr($0, "AXRole") as? String) ?? ""),
               ((attr($0, "AXDescription") as? String) == "SFTP" || (attr($0, "AXTitle") as? String) == "SFTP"),
               let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
         var point = CGPoint.zero
@@ -542,7 +567,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
     guard tabs.count == 1, AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP tab unavailable") }
     Thread.sleep(forTimeInterval: 2)
     let remoteSelectors = snapshot(app).filter {
-        guard (attr($0, "AXRole") as? String) == "AXRadioButton",
+        guard ["AXButton", "AXRadioButton"].contains((attr($0, "AXRole") as? String) ?? ""),
               ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK"),
               let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
         var point = CGPoint.zero
@@ -559,103 +584,6 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
     }
     stop("synthetic SFTP file not visible")
-}
-if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--sftp-double-click-dir" {
-    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP double click runner identity") }
-    let deadline = Date(timeIntervalSinceNow: 30)
-    var target: AXUIElement?
-    while Date() < deadline {
-        let found = snapshot(app).filter { element in
-            (attr(element, "AXRole") as? String) == "AXStaticText" &&
-            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "TEST-ONLY-CODEX-DIRECTORY" }
-        }
-        if found.count == 1 { target = found[0]; break }
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    }
-    guard let target, let position = attr(target, "AXPosition"), let size = attr(target, "AXSize"),
-          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("SFTP synthetic directory unavailable") }
-    var point = CGPoint.zero; var extent = CGSize.zero
-    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
-          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent),
-          extent.width > 0, extent.height > 0, running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP directory geometry") }
-    point.x += extent.width / 2; point.y += extent.height / 2
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("SFTP directory focus") }
-    for count in [1, 2] {
-        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP double click") }
-        down.setIntegerValueField(.mouseEventClickState, value: Int64(count)); up.setIntegerValueField(.mouseEventClickState, value: Int64(count))
-        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-    }
-    let nestedDeadline = Date(timeIntervalSinceNow: 30)
-    while Date() < nestedDeadline {
-        if snapshot(app).contains(where: { element in
-            (attr(element, "AXRole") as? String) == "AXStaticText" &&
-            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "TEST-ONLY-CODEX-NESTED" }
-        }) { print("SFTP_DOUBLE_CLICK_REMOTE_DIRECTORY=PASS"); exit(0) }
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    }
-    stop("nested SFTP entry not visible after double click")
-}
-if CommandLine.arguments.count == 3 && ["--sftp-upload-fixture", "--sftp-download-fixture"].contains(CommandLine.arguments[2]) {
-    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP transfer fixture runner identity") }
-    let upload = CommandLine.arguments[2] == "--sftp-upload-fixture"
-    func pressHelp(_ label: String) {
-        let alternatives: [String]
-        switch label {
-        case "Перейти по указанному пути": alternatives = [label, "Go to the Entered Path"]
-        case "Скопировать выбранное в соседнюю панель": alternatives = [label, "Copy Selection to the Other Pane"]
-        default: alternatives = [label]
-        }
-        let items = snapshot(app).filter { element in
-            (attr(element, "AXRole") as? String) == "AXButton" &&
-            ["AXHelp", "AXTitle", "AXDescription"].contains { alternatives.contains((attr(element, $0) as? String) ?? "") }
-        }
-        guard items.count == 1 else { stop("SFTP control unavailable: \(label), count=\(items.count)") }
-        if let enabled = attr(items[0], "AXEnabled") as? Bool, !enabled { stop("SFTP control disabled: \(label)") }
-        guard AXUIElementPerformAction(items[0], kAXPressAction as CFString) == .success else { stop("SFTP control action failed: \(label)") }
-        Thread.sleep(forTimeInterval: 1)
-    }
-    let label = upload ? "This Mac" : "TEST-ONLY-CODEX-LOOPBACK"
-    let selectors = snapshot(app).filter { element in
-        (attr(element, "AXRole") as? String) == "AXRadioButton" &&
-        ["AXTitle", "AXDescription"].contains { (attr(element, $0) as? String) == label }
-    }
-    guard selectors.count == 1, AXUIElementPerformAction(selectors[0], kAXPressAction as CFString) == .success else { stop("SFTP pane selector: \(label) count=\(selectors.count)") }
-    Thread.sleep(forTimeInterval: 2)
-    if upload {
-        setUniqueField("Локальный путь", temp + "/ssh-fixture/local")
-        pressHelp("Перейти по указанному пути")
-    }
-    let filename = upload ? "TEST-ONLY-CODEX-UPLOAD" : "TEST-ONLY-CODEX-SFTP-CHECK"
-    let deadline = Date(timeIntervalSinceNow: 25)
-    var target: AXUIElement?
-    while Date() < deadline {
-        let matches = snapshot(app).filter { element in
-            (attr(element, "AXRole") as? String) == "AXStaticText" &&
-            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == filename }
-        }
-        if matches.count == 1 { target = matches[0]; break }
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    }
-    guard let target, let position = attr(target, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID(),
-          let size = attr(target, "AXSize"), CFGetTypeID(size) == AXValueGetTypeID() else { stop("SFTP synthetic file unavailable: \(filename)") }
-    var point = CGPoint.zero; var extent = CGSize.zero
-    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
-          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent),
-          extent.width > 0, extent.height > 0,
-          running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP synthetic file geometry") }
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("SFTP file focus") }
-    let center = CGPoint(x: point.x + extent.width / 2, y: point.y + extent.height / 2)
-    guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
-          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) else { stop("SFTP file click") }
-    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-    Thread.sleep(forTimeInterval: 1)
-    pressHelp("Скопировать выбранное в соседнюю панель")
-    print("SYNTHETIC_SFTP_TRANSFER_REQUESTED=\(upload ? "UPLOAD" : "DOWNLOAD")")
-    exit(0)
 }
 if CommandLine.arguments.count == 3 {
     guard CommandLine.arguments[2] == "--verify-baseline", env["SR_BUILD_KIND"] == "baseline" else { stop("unknown verification mode") }
