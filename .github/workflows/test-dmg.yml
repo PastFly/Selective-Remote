@@ -67,9 +67,16 @@ jobs:
           defaults export "$bundle" "$RUNNER_TEMP/dragged.plist"
           python3 scripts/isolated-gui-smoke/verify-host-drag.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/dragged.plist" | tee "$RUNNER_TEMP/evidence/drag-result.json"
           screencapture -x "$RUNNER_TEMP/evidence/drag.png"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
+          wait "$app_pid" || true; app_pid=""
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
+          sleep 12; kill -0 "$app_pid"
+          defaults export "$bundle" "$RUNNER_TEMP/restarted.plist"
+          python3 scripts/isolated-gui-smoke/verify-host-drag.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/restarted.plist" | tee "$RUNNER_TEMP/evidence/drag-restart-result.json"
+          echo 'SYNTHETIC_DRAG_RESTART=PASS'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-exact-host-drag-evidence
+          name: synthetic-exact-host-drag-restart
           path: ${{ runner.temp }}/evidence
           retention-days: 7
