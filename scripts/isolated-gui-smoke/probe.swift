@@ -448,7 +448,22 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--proxy-ui" 
         if ["AXRadioButton", "AXRadioGroup", "AXGroup", "AXButton", "AXPopUpButton"].contains(role) && (!title.isEmpty || !desc.isEmpty || !value.isEmpty) { print("ROUTE_NODE role=\(role) title=\(title) description=\(desc) value=\(value)") }
     }
     let items = snapshot(app).filter { (attr($0, "AXTitle") as? String) == "HTTP CONNECT" || (attr($0, "AXDescription") as? String) == "HTTP CONNECT" }
-    guard items.count == 1, AXUIElementPerformAction(items[0], kAXPressAction as CFString) == .success else { stop("HTTP proxy selector unavailable") }
+    guard items.count == 1, let pos = attr(items[0], "AXPosition"), let size = attr(items[0], "AXSize"),
+          CFGetTypeID(pos) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("HTTP proxy selector unavailable") }
+    var point = CGPoint.zero, dim = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(pos, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dim), dim.width > 0, dim.height > 0 else { stop("HTTP proxy geometry") }
+    point.x += dim.width / 2; point.y += dim.height / 2
+    var hit: AXUIElement?, hitPID: pid_t = 0
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid,
+          running.activate(options: [.activateIgnoringOtherApps]) else { stop("HTTP proxy hit test") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("HTTP proxy mouse event") }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     setUniqueField("proxy.example.com", "192.0.2.23")
     setUniqueField("Пароль прокси (необязательно)", "TEST-ONLY-CODEX-PROXY-SECRET", verifyVisibleValue: false)
     pressUnique("AXButton", "Save")
