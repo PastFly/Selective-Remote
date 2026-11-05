@@ -1,49 +1,34 @@
-name: Test DMG
-
+name: Exact candidate macOS 14 Test DMG
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
-    runs-on: macos-15
-    timeout-minutes: 45
+  dmg14:
+    runs-on: macos-14
+    timeout-minutes: 35
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
       SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
       SELECTIVEREMOTE_RELEASE_MODE: community
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
+      - uses: actions/checkout@v6
+        with:
+          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+      - name: Verify source and build environment
         run: |
-          xcodebuild -version
+          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
           swift --version
           swift --version | grep -E 'Swift version 6\.'
-
       - name: Install build dependencies
         run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
+      - name: Build test DMG
         run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
+      - name: Verify packaged managed Jump Host transport
         run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
+          name: exact-f43-macos14-test-dmg
           path: |
             dist/*.dmg
             dist/*.dmg.sha256
