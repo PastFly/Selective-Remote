@@ -171,6 +171,13 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--interrupt-
         post(stroke.code,true,flags);post(stroke.code,false,flags)
         RunLoop.current.run(until:Date(timeIntervalSinceNow:0.025))
     }
+    let expected = "TEST-ONLY-CODEX-CRASH-REPLACEMENT"
+    let confirmDeadline = Date(timeIntervalSinceNow: 3)
+    while (attr(fields[0], "AXValue") as? String) != expected && Date() < confirmDeadline {
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    guard (attr(fields[0], "AXValue") as? String) == expected else { stop("edited value was not accepted before interruption") }
+    print("SYNTHETIC_EDIT_VALUE_ACCEPTED=YES")
     usleep(delay * 1000)
     guard kill(pid,SIGKILL)==0 else {stop("synthetic kill")}
     print("SYNTHETIC_EDIT_INTERRUPTED_AFTER_POST_MS=\(delay)")
