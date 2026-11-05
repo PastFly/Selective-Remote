@@ -1,51 +1,32 @@
-name: Test DMG
-
+name: Synthetic Snippet group transaction crash
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+  fault:
+    runs-on: macos-14
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
+      - uses: actions/checkout@v6
+      - name: Compile exact Snippet store source with isolated fault adapter
+        shell: bash
         run: |
-          xcodebuild -version
-          swift --version
-          swift --version | grep -E 'Swift version 6\.'
-
-      - name: Install build dependencies
-        run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
-        run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
-        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          shasum -a 256 Sources/SelectiveRemote/TerminalCommandHistory.swift Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift > "$RUNNER_TEMP/evidence/source-sha256.txt"
+          swiftc Sources/SelectiveRemote/TerminalCommandHistory.swift Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift scripts/isolated-snippet-boundaries/main.swift -o "$RUNNER_TEMP/snippet-fault"
+      - name: Kill between actual group and Snippet writes
+        env:
+          SR_SNIPPET_FAULT_ROOT: ${{ runner.temp }}/snippet-write-boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/isolated-snippet-boundaries/supervise.py "$RUNNER_TEMP/snippet-fault" "$RUNNER_TEMP/evidence" | tee "$RUNNER_TEMP/evidence/boundaries.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
-          path: |
-            dist/*.dmg
-            dist/*.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
+          name: synthetic-snippet-group-atomicity
+          path: ${{ runner.temp }}/evidence
+          retention-days: 14
