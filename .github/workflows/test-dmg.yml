@@ -1,30 +1,65 @@
-name: Exact DMG locked synthetic Keychain acceptance macOS 14
+name: Real app Keychain write crash boundaries
 on:
   workflow_dispatch:
 permissions:
   contents: read
-  actions: read
 jobs:
-  favorites:
+  build:
     runs-on: macos-14
-    timeout-minutes: 15
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+      SELECTIVEREMOTE_RELEASE_MODE: community
     steps:
       - uses: actions/checkout@v6
-      - name: Download exact candidate DMG
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+        with:
+          path: harness
+      - uses: actions/checkout@v6
+        with:
+          path: candidate
+          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+      - name: Build instrumented candidate
         run: |
           set -euo pipefail
-          expected=db7c5920a85c74e2008166298d2ac80cab66f857
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41737602354 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
-          mkdir -p "$RUNNER_TEMP/image" "$RUNNER_TEMP/evidence"
-          gh run download 41737602354 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/image"
-          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256; echo '500b6b4c6ba6f4c0e84444c6de7fb7f787999f50f5728d5e1158da75278fd37e  SelectiveRemote-0.32.0-arm64.dmg' | shasum -a 256 -c -)
-          printf 'candidate=%s\nrunner=%s\n' "$expected" "$RUNNER_OS" > "$RUNNER_TEMP/evidence/provenance.txt"
-      - name: Exercise favorite and restart with synthetic Host
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          cd candidate
+          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+          shasum -a 256 Sources/SelectiveRemote/UnifiedCredentialVault.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
+          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-keychain-gui-crash/instrument.py"
+          git diff -- Sources/SelectiveRemote/UnifiedCredentialVault.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
+          brew install freerdp sdl3
+          ./scripts/build_app.sh
+          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-instrumented-keychain-app
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+  crash:
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [before, after]
+    env:
+      SR_GUI_FAULT_PHASE: ${{ matrix.phase }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: synthetic-instrumented-keychain-app
+          path: ${{ runner.temp }}/image
+      - name: Kill actual app during Keychain update
+        env:
+          SR_GUI_FAULT_ROOT: ${{ runner.temp }}
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256)
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
           keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
@@ -34,7 +69,8 @@ jobs:
           cleanup() {
             result=$?
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
-            if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            if [[ -n "${driver_pid:-}" ]]; then kill -KILL "$driver_pid" 2>/dev/null || true; wait "$driver_pid" 2>/dev/null || true; fi
+            if [[ -n "${app_pid:-}" ]]; then kill -KILL "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
@@ -71,34 +107,31 @@ jobs:
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           swiftc scripts/isolated-gui-smoke/CancelSyntheticKeychain.swift -o "$RUNNER_TEMP/cancel-keychain"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/gui-probe" "$app_pid" --keychain-open-auth > "$RUNNER_TEMP/evidence/auth-tab.log"
-          security lock-keychain "$keychain"
-          "$RUNNER_TEMP/cancel-keychain" > "$RUNNER_TEMP/evidence/cancel-read-prompt.log" 2>&1 & cancel_read_pid=$!
-          set +e
-          python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/locked-read.log" 2>&1
-          read_result=$?
-          wait "$cancel_read_pid"; cancel_read_result=$?
-          set -e
-          test "$read_result" -ne 0
-          test "$cancel_read_result" -eq 0
-          grep -q 'credential missing or unavailable' "$RUNNER_TEMP/evidence/locked-read.log"
-          "$RUNNER_TEMP/cancel-keychain" > "$RUNNER_TEMP/evidence/cancel-prompt.log" 2>&1 & cancel_pid=$!
-          set +e
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 80 "$RUNNER_TEMP/gui-probe" "$app_pid" --keychain-locked-save > "$RUNNER_TEMP/evidence/locked-write-ui.log" 2>&1
-          write_result=$?
-          wait "$cancel_pid"; cancel_result=$?
-          set -e
-          test "$write_result" -eq 0
-          test "$cancel_result" -eq 0
-          screencapture -x "$RUNNER_TEMP/evidence/locked-write.png"
-          security unlock-keychain -p "$password" "$keychain"
-          python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/unlocked-read.log" 2>&1 & probe_pid=$!
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 80 "$RUNNER_TEMP/gui-probe" "$app_pid" --keychain-crash-save > "$RUNNER_TEMP/evidence/driver.log" 2>&1 & driver_pid=$!
+          for attempt in {1..300}; do
+            test -f "$RUNNER_TEMP/gui-fault-reached" && break
+            kill -0 "$app_pid" || { echo 'app exited before fault boundary'; exit 1; }
+            kill -0 "$driver_pid" || { cat "$RUNNER_TEMP/evidence/driver.log"; echo 'driver exited before fault boundary'; exit 1; }
+            sleep 0.1
+          done
+          test "$(cat "$RUNNER_TEMP/gui-fault-reached")" = "$SR_GUI_FAULT_PHASE"
+          ps -o state= -p "$app_pid" | grep -q T
+          kill -KILL "$app_pid"
+          wait "$app_pid" 2>/dev/null || true; app_pid=""
+          wait "$driver_pid" 2>/dev/null || true; driver_pid=""
+          rm -f "$RUNNER_TEMP/gui-fault-arm"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
+          sleep 12; kill -0 "$app_pid"
+          python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/recovered-keychain.log" 2>&1 & probe_pid=$!
           python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" 032 probe > "$RUNNER_TEMP/evidence/read-prompt.log"
           wait "$probe_pid"
-          cat "$RUNNER_TEMP/evidence/unlocked-read.log"
-          echo 'LOCKED_KEYCHAIN_READ_AND_REJECTED_WRITE_PRESERVATION=PASS'
+          cat "$RUNNER_TEMP/evidence/recovered-keychain.log"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
+          wait "$app_pid" || true; app_pid=""
+          echo "REAL_APP_KEYCHAIN_BOUNDARY_${SR_GUI_FAULT_PHASE}=PASS"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-locked-keychain-evidence
+          name: synthetic-real-app-keychain-crash-${{ matrix.phase }}
           path: ${{ runner.temp }}/evidence
           retention-days: 7

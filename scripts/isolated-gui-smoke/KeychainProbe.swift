@@ -31,7 +31,7 @@ var raw: CFTypeRef?
 let status = SecItemCopyMatching(query as CFDictionary, &raw)
 guard status == errSecSuccess, let payload = raw as? Data,
       let values = try? JSONSerialization.jsonObject(with: payload) as? [String: String],
-      values["local.selectiveremote.credentials.v2\u{1f}\(hostID).ssh"] == (liveOld ? "TEST-ONLY-CODEX-LIVE-OLD-SECRET" : liveCurrent ? "TEST-ONLY-CODEX-LIVE-NEW-SECRET" : current ? "TEST-ONLY-CODEX-CURRENT-SECRET" : late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-UPGRADE-SECRET") else {
+      values["local.selectiveremote.credentials.v2\u{1f}\(hostID).ssh"] == (liveOld ? "TEST-ONLY-CODEX-LIVE-OLD-SECRET" : liveCurrent ? (env["SR_GUI_FAULT_PHASE"] == "after" ? "TEST-ONLY-CODEX-REPLACEMENT" : "TEST-ONLY-CODEX-LIVE-NEW-SECRET") : current ? "TEST-ONLY-CODEX-CURRENT-SECRET" : late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-UPGRADE-SECRET") else {
     fail("credential missing or unavailable, status=\(status)")
 }
 print("SYNTHETIC_KEYCHAIN_\(version)=PASS")

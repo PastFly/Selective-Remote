@@ -157,6 +157,14 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--keychain-crash-save" {
+    guard env["SR_BUILD_KIND"] == "candidate", env["SR_GUI_FAULT_ROOT"] == temp else {stop("Keychain fault runner")}
+    setUniqueField("Сохранён — введите новый для замены", "TEST-ONLY-CODEX-REPLACEMENT", verifyVisibleValue: false)
+    do {try Data("armed".utf8).write(to:URL(fileURLWithPath:temp+"/gui-fault-arm"),options:.withoutOverwriting)} catch {stop("fault arm")}
+    print("SYNTHETIC_KEYCHAIN_FAULT_ARMED=YES")
+    pressUnique("AXButton", "Save")
+    stop("fault boundary not reached")
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--keychain-open-auth" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("keychain fixture identity") }
     pressUnique("AXButton", "Authentication"); print("SYNTHETIC_AUTH_TAB_READY=YES"); exit(0)
