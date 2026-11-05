@@ -157,6 +157,25 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--interrupt-save" {
+    guard env["SR_BUILD_KIND"] == "candidate", let delayText=env["SR_DELAY_MS"], let delay=UInt32(delayText), [295,310].contains(delay), CGPreflightPostEventAccess(), running.activate(options:[.activateIgnoringOtherApps]) else { stop("interrupted save fixture") }
+    let fields=snapshot(app).filter { (attr($0,"AXRole") as? String)=="AXTextField" && (attr($0,"AXPlaceholderValue") as? String)=="SSH Server" }
+    guard fields.count==1 else { stop("interrupted save field") }
+    RunLoop.current.run(until:Date(timeIntervalSinceNow:0.3))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier==pid, AXUIElementSetAttributeValue(fields[0],kAXFocusedAttribute as CFString,kCFBooleanTrue) == .success else {stop("interrupted save focus")}
+    func post(_ code:CGKeyCode,_ down:Bool,_ flags:CGEventFlags=[]) { guard let e=CGEvent(keyboardEventSource:nil,virtualKey:code,keyDown:down) else {stop("keyboard")};e.flags=flags;e.post(tap:.cghidEventTap) }
+    post(0,true,.maskCommand);post(0,false,.maskCommand)
+    for character in "TEST-ONLY-CODEX-CRASH-REPLACEMENT" {
+        guard let stroke=syntheticKeyStroke(character) else {stop("unsupported key")}
+        let flags:CGEventFlags=stroke.shift ? .maskShift : []
+        post(stroke.code,true,flags);post(stroke.code,false,flags)
+        RunLoop.current.run(until:Date(timeIntervalSinceNow:0.025))
+    }
+    usleep(delay * 1000)
+    guard kill(pid,SIGKILL)==0 else {stop("synthetic kill")}
+    print("SYNTHETIC_EDIT_INTERRUPTED_AFTER_POST_MS=\(delay)")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
