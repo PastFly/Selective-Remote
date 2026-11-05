@@ -484,7 +484,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--port-forwa
     Thread.sleep(forTimeInterval: 2)
     pressUnique("AXPopUpButton", "New Tunnel")
     guard let kind = env["SR_FORWARD_KIND"], ["Remote", "Dynamic"].contains(kind) else { stop("invalid forwarding kind") }
-    pressUnique("AXMenuItem", kind)
+    pressUnique("AXMenuItem", kind == "Dynamic" ? "SOCKS" : kind)
     setUniqueField("8080", "52223")
     if kind == "Remote" { setUniqueField("80", "52224") }
     pressUnique("AXButton", "Start")
