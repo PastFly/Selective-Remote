@@ -268,11 +268,21 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     }
     if !welcome.isEmpty { pressUnique("AXButton", "Done") }
     pressUnique("AXButton", "Snippets")
-    pressUnique("AXButton", "New Group")
-    setUniqueField("Название группы", "TEST-ONLY-CODEX-SNIPPET-GROUP")
-    pressUnique("AXButton", "Save")
+    let groupButtons = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        ((attr($0, "AXTitle") as? String) == "New Group" || (attr($0, "AXDescription") as? String) == "New Group")
+    }
+    guard let groupButton = groupButtons.first, AXUIElementPerformAction(groupButton, kAXPressAction as CFString) == .success else { stop("new group control") }
+    Thread.sleep(forTimeInterval: 1)
+    setUniqueField("Путь группы", "TEST-ONLY-CODEX-SNIPPET-GROUP")
+    pressUnique("AXButton", "Сохранить")
     print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
-    pressUnique("AXButton", "TEST-ONLY-CODEX-SNIPPET-GROUP, 0 сниппетов")
+    let savedGroups = snapshot(app).filter { element in
+        (attr(element, "AXRole") as? String) == "AXButton" &&
+        ["AXTitle", "AXDescription"].compactMap { attr(element, $0) as? String }.contains { $0.contains("TEST-ONLY-CODEX-SNIPPET-GROUP") }
+    }
+    guard savedGroups.count == 1, AXUIElementPerformAction(savedGroups[0], kAXPressAction as CFString) == .success else { stop("saved group control") }
+    Thread.sleep(forTimeInterval: 1)
     for element in snapshot(app) {
         let role = attr(element, "AXRole") as? String ?? ""
         let description = attr(element, "AXDescription") as? String ?? ""
@@ -284,7 +294,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     let createButtons = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" && (attr($0, "AXDescription") as? String) == "New Snippet"
     }
-    guard createButtons.count == 2, AXUIElementPerformAction(createButtons[0], kAXPressAction as CFString) == .success else { stop("snippet folder creation control") }
+    guard !createButtons.isEmpty, AXUIElementPerformAction(createButtons[0], kAXPressAction as CFString) == .success else { stop("snippet folder creation control") }
     Thread.sleep(forTimeInterval: 1)
     Thread.sleep(forTimeInterval: 3)
     let capture = Process()
@@ -292,25 +302,24 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     capture.arguments = ["-x", temp + "/evidence/snippet-editor-screen.png"]
     try? capture.run()
     capture.waitUntilExit()
-    let system = AXUIElementCreateSystemWide()
-    var hitFields = [AXUIElement]()
-    for (x, y) in [(450.0, 153.0), (450.0, 300.0), (250.0, 508.0)] {
-        var hit: AXUIElement?
-        let status = AXUIElementCopyElementAtPosition(system, Float(x), Float(y), &hit)
-        if let hit {
-            var hitPID: pid_t = 0
-            _ = AXUIElementGetPid(hit, &hitPID)
-            print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) pidMatch=\(hitPID == pid) role=\(attr(hit, "AXRole") as? String ?? "") description=\(attr(hit, "AXDescription") as? String ?? "") placeholder=\(attr(hit, "AXPlaceholderValue") as? String ?? "")")
-            guard hitPID == pid else { stop("snippet hit outside app") }
-            hitFields.append(hit)
-        } else { print("SNIPPET_HIT x=\(x) y=\(y) status=\(status.rawValue) missing=YES") }
+    let sheets = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXSheet" }
+    guard sheets.count == 1 else { stop("snippet editor sheet") }
+    let editorNodes = snapshot(sheets[0])
+    for element in editorNodes {
+        let role = attr(element, "AXRole") as? String ?? ""
+        let title = attr(element, "AXTitle") as? String ?? ""
+        let description = attr(element, "AXDescription") as? String ?? ""
+        let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
+        if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty || role == "AXTextArea" {print("SNIPPET_EDITOR role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")}
     }
-    guard hitFields.count == 3,
-          (attr(hitFields[0], "AXRole") as? String) == "AXTextField",
-          (attr(hitFields[1], "AXRole") as? String) == "AXTextArea",
-          (attr(hitFields[2], "AXRole") as? String) == "AXCheckBox",
-          (attr(hitFields[2], "AXDescription") as? String) == "Локальный терминал",
-          CGDisplayPixelsWide(CGMainDisplayID()) == 1024, CGDisplayPixelsHigh(CGMainDisplayID()) == 768 else { stop("unexpected snippet dialog geometry") }
+    let titles = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == "Название" }
+    let commands = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextArea" }
+    let targets = editorNodes.filter { element in
+        (attr(element, "AXRole") as? String) == "AXCheckBox" &&
+        ["AXTitle", "AXDescription"].compactMap { attr(element, $0) as? String }.contains { ["Local Terminal", "Локальный терминал"].contains($0) }
+    }
+    guard titles.count == 1, commands.count == 1, targets.count == 1 else { stop("snippet editor controls") }
+    let hitFields = [titles[0], commands[0], targets[0]]
     func typeSynthetic(_ value: String, in element: AXUIElement) {
         guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("snippet input access") }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
