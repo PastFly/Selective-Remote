@@ -1,39 +1,67 @@
-name: Exact DMG interrupted save acceptance
+name: Real app 0.31 migration crash boundaries
 on:
   workflow_dispatch:
-    inputs:
-      delay_ms:
-        required: true
-        type: choice
-        options: ["295", "310"]
 permissions:
   contents: read
-  actions: read
 jobs:
-  favorites:
+  build:
     runs-on: macos-14
-    timeout-minutes: 15
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+      SELECTIVEREMOTE_RELEASE_MODE: community
     steps:
       - uses: actions/checkout@v6
-      - name: Download exact candidate DMG
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+        with:
+          path: harness
+      - uses: actions/checkout@v6
+        with:
+          path: candidate
+          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+      - name: Build instrumented candidate
         run: |
           set -euo pipefail
-          expected=db7c5920a85c74e2008166298d2ac80cab66f857
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/41737602354 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
-          mkdir -p "$RUNNER_TEMP/image" "$RUNNER_TEMP/evidence"
-          gh run download 41737602354 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/image"
-          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256; echo '500b6b4c6ba6f4c0e84444c6de7fb7f787999f50f5728d5e1158da75278fd37e  SelectiveRemote-0.32.0-arm64.dmg' | shasum -a 256 -c -)
-          printf 'candidate=%s\nrunner=%s\n' "$expected" "$RUNNER_OS" > "$RUNNER_TEMP/evidence/provenance.txt"
-      - name: Exercise favorite and restart with synthetic Host
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          cd candidate
+          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+          shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
+          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-migration-gui-crash/instrument.py"
+          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
+          brew install freerdp sdl3
+          ./scripts/build_app.sh
+          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-instrumented-migration-app
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+  crash:
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [after-snapshot, after-marker]
+    env:
+      SR_GUI_FAULT_PHASE: ${{ matrix.phase }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: synthetic-instrumented-migration-app
+          path: ${{ runner.temp }}/image
+      - name: Crash during actual 0.31 migration checkpoint
         env:
-          SR_DELAY_MS: ${{ inputs.delay_ms }}
+          GH_TOKEN: ${{ github.token }}
+          SR_GUI_FAULT_ROOT: ${{ runner.temp }}
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/candidate-mount" "$RUNNER_TEMP/baseline"
           keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
           original_default=$(security default-keychain -d user | python3 -c 'import shlex,sys; a=shlex.split(sys.stdin.read()); print(a[0] if a else "")')
           original_keychains=()
@@ -41,7 +69,7 @@ jobs:
           cleanup() {
             result=$?
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
-            if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            if [[ -n "${app_pid:-}" ]]; then kill -KILL "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
             if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
@@ -49,17 +77,15 @@ jobs:
           }
           trap cleanup EXIT
           password=$(openssl rand -hex 24)
-          umask 077
-          printf %s "$password" > "$RUNNER_TEMP/synthetic-keychain-password"
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 1800 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           security list-keychains -d user -s "$keychain"
           security default-keychain -d user -s "$keychain"
-          mkdir "$RUNNER_TEMP/candidate-mount"
-          images=("$RUNNER_TEMP"/image/*.dmg)
-          test "${#images[@]}" -eq 1
-          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${images[0]}" >/dev/null
+          gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/baseline"
+          (cd "$RUNNER_TEMP/baseline"; echo '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f  SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -)
+          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256)
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "$RUNNER_TEMP/baseline/SelectiveRemote-0.31.0-arm64.dmg" >/dev/null
           app="$RUNNER_TEMP/candidate-mount/Selective Remote.app"
           codesign --verify --deep --strict "$app"
           bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
@@ -68,31 +94,39 @@ jobs:
           hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/old-app.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-current > "$RUNNER_TEMP/evidence/create.log"
+          SR_BUILD_KIND=baseline SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-old > "$RUNNER_TEMP/evidence/old-create.log"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
+          wait "$app_pid" || true; app_pid=""
           defaults export "$bundle" "$RUNNER_TEMP/before.plist"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-probe" "$app_pid" --interrupt-save | tee "$RUNNER_TEMP/evidence/interrupt.log"
-          wait "$app_pid" 2>/dev/null || true; app_pid=""
+          hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null
+          images=("$RUNNER_TEMP"/image/*.dmg); test "${#images[@]}" -eq 1
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${images[0]}" >/dev/null
+          codesign --verify --deep --strict "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "$bundle"
+          binary="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
+          printf armed > "$RUNNER_TEMP/gui-fault-arm"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/current-app.log" 2>&1 & app_pid=$!
+          for attempt in {1..300}; do
+            test -f "$RUNNER_TEMP/gui-fault-reached" && break
+            kill -0 "$app_pid" || { echo 'app exited before migration boundary'; exit 1; }
+            sleep 0.1
+          done
+          test "$(cat "$RUNNER_TEMP/gui-fault-reached")" = "$SR_GUI_FAULT_PHASE"
+          ps -o state= -p "$app_pid" | grep -q T
+          kill -KILL "$app_pid"; wait "$app_pid" 2>/dev/null || true; app_pid=""
+          rm -f "$RUNNER_TEMP/gui-fault-arm"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
           defaults export "$bundle" "$RUNNER_TEMP/recovered.plist"
-          python3 scripts/isolated-gui-smoke/verify-interrupted-save.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/recovered.plist" "$RUNNER_TEMP/evidence"
-          swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
-          cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
-          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          python3 scripts/isolated-gui-smoke/run-bounded.py 110 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/recovered-keychain.log" 2>&1 & keyprobe=$!
-          for attempt in 1 2 3; do
-            if ! kill -0 "$keyprobe" 2>/dev/null; then break; fi
-            python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$keyprobe" 032 probe >> "$RUNNER_TEMP/evidence/security-prompt.log" || true
-          done
-          wait "$keyprobe"; cat "$RUNNER_TEMP/evidence/recovered-keychain.log"
-          echo 'SYNTHETIC_INTERRUPTED_EDIT_RESTART=PASS'
+          python3 scripts/isolated-migration-gui-crash/verify.py "$RUNNER_TEMP/before.plist" "$RUNNER_TEMP/recovered.plist" "$RUNNER_TEMP/evidence"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-interrupted-save-${{ inputs.delay_ms }}
+          name: synthetic-real-app-migration-crash-${{ matrix.phase }}
           path: ${{ runner.temp }}/evidence
           retention-days: 7
