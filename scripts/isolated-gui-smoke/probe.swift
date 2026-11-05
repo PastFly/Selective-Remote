@@ -157,6 +157,33 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && ["--race-name", "--race-folder", "--race-favorite"].contains(CommandLine.arguments[2]) {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("race requires candidate") }
+    let mode = CommandLine.arguments[2]
+    if mode == "--race-name" {
+        setUniqueField("SSH Server", "TEST-ONLY-CODEX-RACE-NAME")
+        print("SYNTHETIC_RACE_NAME_REQUESTED=YES")
+    } else if mode == "--race-folder" {
+        setUniqueField("For example: Work/Servers/Linux", "TEST-ONLY-CODEX-RACE-FOLDER")
+        print("SYNTHETIC_RACE_FOLDER_REQUESTED=YES")
+    } else {
+        guard let ready = env["SR_RACE_READY"], let go = env["SR_RACE_GO"] else { stop("race barrier missing") }
+        let controls = snapshot(app).filter { element in
+            (attr(element, "AXRole") as? String) == "AXButton" &&
+            ["AXHelp", "AXDescription", "AXTitle"].contains { (attr(element, $0) as? String) == "Favorite" }
+        }
+        guard controls.count == 1 else { stop("race favorite not unique") }
+        do { try Data("ready".utf8).write(to: URL(fileURLWithPath: ready), options: .withoutOverwriting) } catch { stop("race ready flag") }
+        let deadline = Date(timeIntervalSinceNow: 30)
+        while !FileManager.default.fileExists(atPath: go) && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        guard FileManager.default.fileExists(atPath: go) else { stop("race barrier timeout") }
+        let start = ProcessInfo.processInfo.systemUptime
+        guard AXUIElementPerformAction(controls[0], kAXPressAction as CFString) == .success else { stop("race favorite action") }
+        print("SYNTHETIC_RACE_ACTION_UPTIME=\(start)")
+        Thread.sleep(forTimeInterval: 2)
+    }
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
