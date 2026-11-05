@@ -176,7 +176,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--drag-host-
     for element in snapshot(app) where ["TEST-ONLY-CODEX-MIXED-FOLDER", "No Folder", "TEST-ONLY-CODEX-LIVE-NEW"].contains((attr(element,"AXTitle") as? String) ?? (attr(element,"AXDescription") as? String) ?? (attr(element,"AXValue") as? String) ?? "") {
         print("DRAG_NODE role=\(attr(element,"AXRole") as? String ?? "") pos=\(String(describing:position(element)))")
     }
-    guard let group=folder.first, let groupPoint=position(group), running.activate(options: [.activateIgnoringOtherApps]) else { stop("source folder unavailable") }
+    guard let group=folder.first, let _=position(group), running.activate(options: [.activateIgnoringOtherApps]) else { stop("source folder unavailable") }
     RunLoop.current.run(until: Date(timeIntervalSinceNow:0.4))
     func click(_ p: CGPoint) {
         guard let d=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:p,mouseButton:.left), let u=CGEvent(mouseEventSource:nil,mouseType:.leftMouseUp,mouseCursorPosition:p,mouseButton:.left) else { stop("group click") }
@@ -184,9 +184,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--drag-host-
     }
     let targets=matches("No Folder")
     guard let firstTarget=targets.first, let targetPosition=position(firstTarget) else { stop("target folder unavailable") }
+    click(CGPoint(x:targetPosition.x-50,y:targetPosition.y)); Thread.sleep(forTimeInterval:1)
+    let refreshedGroup=matches("TEST-ONLY-CODEX-MIXED-FOLDER")
+    guard let groupElement=refreshedGroup.first, let refreshedGroupPosition=position(groupElement) else { stop("source folder vanished") }
     var hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
     if hosts.isEmpty {
-        click(CGPoint(x:targetPosition.x-50,y:groupPoint.y)); Thread.sleep(forTimeInterval:1)
+        click(CGPoint(x:targetPosition.x-50,y:refreshedGroupPosition.y)); Thread.sleep(forTimeInterval:1)
         hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
     }
     if let host=hosts.first { _ = AXUIElementPerformAction(host, "AXScrollToVisible" as CFString); Thread.sleep(forTimeInterval:1) }
