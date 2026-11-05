@@ -190,8 +190,16 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--drag-host-
         hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
     }
     if let host=hosts.first { _ = AXUIElementPerformAction(host, "AXScrollToVisible" as CFString); Thread.sleep(forTimeInterval:1) }
-    print("SYNTHETIC_DRAG_MATCHES hosts=\(hosts.count) targets=\(targets.count)")
-    guard hosts.count == 1, let target=targets.first, let from=position(hosts[0]), let to=position(target),
+    if let point=hosts.first.flatMap(position), point.y > 840 {
+        let inside=CGPoint(x:targetPosition.x,y:targetPosition.y+40)
+        if let move=CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:inside,mouseButton:.left) { move.post(tap:.cghidEventTap) }
+        if let scroll=CGEvent(scrollWheelEvent2Source:nil,units:.pixel,wheelCount:1,wheel1:-100,wheel2:0,wheel3:0) { scroll.post(tap:.cghidEventTap) }
+        Thread.sleep(forTimeInterval:1)
+        hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
+    }
+    let refreshedTargets=matches("No Folder")
+    print("SYNTHETIC_DRAG_MATCHES hosts=\(hosts.count) targets=\(refreshedTargets.count) from=\(String(describing:hosts.first.flatMap(position))) to=\(String(describing:refreshedTargets.first.flatMap(position)))")
+    guard hosts.count == 1, let target=refreshedTargets.first, let from=position(hosts[0]), let to=position(target), from.y < 850,
           NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("drag source or destination unavailable") }
     guard let down=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:from,mouseButton:.left) else { stop("drag down") }; down.post(tap:.cghidEventTap)
     RunLoop.current.run(until:Date(timeIntervalSinceNow:0.2))
