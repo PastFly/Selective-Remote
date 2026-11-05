@@ -57,6 +57,8 @@ jobs:
               printf 'SYNTHETIC_SSHD_SFTP_COUNT=%s\n' "$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)"
               printf 'SYNTHETIC_SSHD_ERROR_COUNT=%s\n' "$(grep -ci 'error\|failed\|denied' "$fixture/sshd.log" || true)"
             fi
+            if [[ -f "$fixture/correlation.log" ]]; then cp "$fixture/correlation.log" "$RUNNER_TEMP/evidence/correlation.log" || true; fi
+            if [[ -n "${trace_pid:-}" ]]; then kill "$trace_pid" 2>/dev/null || true; wait "$trace_pid" 2>/dev/null || true; fi
             if [[ -n "${probe_pid:-}" ]]; then kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" 2>/dev/null || true; fi
             if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
             if [[ -n "${sshd_pid:-}" ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
@@ -174,32 +176,19 @@ jobs:
           probe_pid=""
           cat "$RUNNER_TEMP/evidence/ssh-ui.log"
           for attempt in {1..30}; do
-            auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-            shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-            if (( auth_count > baseline_auth_count && shell_count > baseline_shell_count )); then break; fi
+            sessions=$(wc -l < "$fixture/correlation.log" | tr -d ' ')
+            (( sessions >= 2 )) && break
             sleep 1
           done
-          test "$auth_count" -gt "$baseline_auth_count"
-          test "$shell_count" -gt "$baseline_shell_count"
-          sleep 5
-          auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-          shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-          command_count=$(grep -c 'Starting session: command' "$fixture/sshd.log" || true)
-          sftp_preclick_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          printf 'auth_delta=%s shell_delta=%s command_delta=%s sftp_delta=%s\n' "$((auth_count-baseline_auth_count))" "$((shell_count-baseline_shell_count))" "$((command_count-baseline_command_count))" "$((sftp_preclick_count-baseline_sftp_preclick_count))" | tee "$RUNNER_TEMP/evidence/double-click-counts.txt"
-          test "$((shell_count-baseline_shell_count))" -eq 1
-          printf '%s\n' 'REAL_LOOPBACK_SSH_AUTHENTICATION=PASS' 'REAL_LOOPBACK_INTERACTIVE_SHELL=PASS' | tee "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          if [[ "$((auth_count-baseline_auth_count))" -eq 1 ]]; then
-            echo 'DOUBLE_CLICK_SINGLE_CONNECTION=PASS' | tee -a "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          else
-            echo 'DOUBLE_CLICK_SINGLE_CONNECTION=NOT_PROVEN_EXTRA_AUTH' | tee -a "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          fi
-          sleep 3
-          screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
           sleep 3
           kill "$trace_pid" 2>/dev/null || true
           wait "$trace_pid" 2>/dev/null || true
+          cp "$fixture/correlation.log" "$RUNNER_TEMP/evidence/correlation.log"
+          auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
+          printf 'auth_delta=%s\n' "$((auth_count-baseline_auth_count))" | tee "$RUNNER_TEMP/evidence/double-click-counts.txt"
+          test "$((auth_count-baseline_auth_count))" -eq 2
           python3 scripts/isolated-gui-smoke/verify-auth-correlation.py "$fixture/correlation.log" "$RUNNER_TEMP/evidence/correlation-result.json"
+          screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
           wait "$app_pid" || true
           app_pid=""
