@@ -271,6 +271,8 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--trigger-sn
     }
     if !welcome.isEmpty { pressUnique("AXButton", en ? "Done" : "Готово") }
     pressUnique("AXButton", en ? "Snippets" : "Сниппеты")
+    let emptyText = en ? "No snippets yet" : "Сниппетов пока нет"
+    guard snapshot(app).contains(where: { element in ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }.contains(emptyText) }) else { stop("localized empty Snippets state") }
     let groupLabel = en ? "New Group" : "Новая группа"
     let groupButtons = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXButton" &&

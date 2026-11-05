@@ -503,11 +503,19 @@ struct TerminalSnippetsLibraryView: View {
                     if visibleChildGroups.isEmpty && snippets.isEmpty {
                         VStack(spacing: 14) {
                             ContentUnavailableView(
-                                selectedGroup == nil ? "Сниппетов пока нет" : "Группа пуста",
+                                selectedGroup == nil
+                                    ? UpdateLocalization.text(ru: "Сниппетов пока нет", en: "No snippets yet")
+                                    : UpdateLocalization.text(ru: "Группа пуста", en: "Group is empty"),
                                 systemImage: "folder",
                                 description: Text(selectedGroup.map {
-                                    "Добавьте вложенную группу или первый сниппет в «\($0.name)»."
-                                } ?? "Создайте группу или добавьте первый сниппет.")
+                                    UpdateLocalization.text(
+                                        ru: "Добавьте вложенную группу или первый сниппет в «\($0.name)».",
+                                        en: "Add a subgroup or the first snippet to “\($0.name)”."
+                                    )
+                                } ?? UpdateLocalization.text(
+                                    ru: "Создайте группу или добавьте первый сниппет.",
+                                    en: "Create a group or add your first snippet."
+                                ))
                             )
                             HStack {
                                 Button("Новая группа", systemImage: "folder.badge.plus") {

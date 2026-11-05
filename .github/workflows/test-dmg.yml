@@ -18,14 +18,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: candidate
-          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+          ref: d9d756e8f0f2201aa201f2ef517ecad008775882
       - name: Build instrumented candidate
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
           mkdir -p "$RUNNER_TEMP/evidence"
           cd candidate
-          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+          test "$(git rev-parse HEAD)" = d9d756e8f0f2201aa201f2ef517ecad008775882
           shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
           cp "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/TerminalSnippetsLibraryView.swift" Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift
           python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/instrument.py"
