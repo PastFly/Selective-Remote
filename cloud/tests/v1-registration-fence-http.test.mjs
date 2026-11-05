@@ -1,5 +1,5 @@
 import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http-anchor-fixture.mjs';
-// Synthetic TLS SMTP endpoint: bind only loopback, accept only the test mailbox,
+// Synthetic TLS SMTP endpoint: bind only loopback, accept only two synthetic test mailboxes,
 // trust only the ephemeral self-signed certificate and never log its messages.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +32,7 @@ async function testMailServer(){
         if(verb==='EHLO')socket.write('250-localhost\r\n250-AUTH PLAIN\r\n250 SIZE 1048576\r\n');
         else if(verb==='AUTH')socket.write('235 authenticated\r\n');
         else if(verb==='MAIL')socket.write('250 ok\r\n');
-        else if(verb==='RCPT'){rcpt=/^RCPT TO:<synthetic-registration@example\.test>$/i.test(line);socket.write(rcpt?'250 ok\r\n':'550 synthetic recipient only\r\n');}
+        else if(verb==='RCPT'){rcpt=/^RCPT TO:<synthetic-registration-(?:a|b)@example\.test>$/i.test(line);socket.write(rcpt?'250 ok\r\n':'550 synthetic recipient only\r\n');}
         else if(verb==='DATA'&&rcpt){data=true;socket.write('354 end with dot\r\n');}
         else if(verb==='QUIT'){socket.write('221 bye\r\n');socket.end();}
         else socket.write('500 unsupported\r\n');
@@ -43,7 +43,7 @@ async function testMailServer(){
   return {port:server.address().port,cert,messages,async close(){for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}};
 }
 
-test('real registration, synthetic email verification and login preserve fenced Personal Vault', {skip:!process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable,timeout:60000}, async()=>{
+test('two real registrations, email verifications and logins preserve fenced Personal Vaults', {skip:!process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable,timeout:60000}, async()=>{
   const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let runtime,smtp,anchorFixture;
   try{
     const fixture=await publicationRuntimeFixture(db.databaseURL);anchorFixture=await syntheticHttpAnchor(fixture.path);const fence=anchorFixture.fence;
@@ -60,15 +60,24 @@ test('real registration, synthetic email verification and login preserve fenced 
       SMTP_USER:'synthetic',SMTP_PASSWORD:'test-only-password',SMTP_FROM:'sender@example.test',NODE_EXTRA_CA_CERTS:smtp.cert,NODE_OPTIONS:'--dns-result-order=ipv4first',
     }});runtime={child,cleanup:fixture.cleanup};
     let ready=false;for(let i=0;i<200;i++){if(child.exitCode!==null)throw Error('test_cloud_start_failed');try{if((await fetch(`${origin}/readyz`)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(ready,true);
-    const device={id:randomUUID(),name:'TEST-ONLY-CODEX',platform:'web',appVersion:'test'};
-    const registration={email:'synthetic-registration@example.test',username:'synthetic_register',displayName:'Synthetic',password:'TEST-ONLY-PASSWORD-123',device};
     const post=(path,body)=>fetch(origin+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const registered=await post('/v1/auth/register',registration);assert.equal(registered.status,201,await registered.clone().text());assert.deepEqual(await registered.json(),{verificationRequired:true});
-    for(let i=0;i<200&&smtp.messages.length===0;i++)await new Promise(resolve=>setTimeout(resolve,25));assert.equal(smtp.messages.length,1);
-    const normalized=smtp.messages[0].replace(/=\r\n/g,'').replace(/=3D/g,'=');const match=normalized.match(/verify-email\?token=([a-zA-Z0-9_-]+)/);assert.ok(match,'test verification link is present');
-    const verified=await post('/v1/auth/verify-email',{token:match[1]});assert.equal(verified.status,200,await verified.clone().text());assert.deepEqual(await verified.json(),{verified:true});
-    const login=await post('/v1/auth/login',{email:registration.email,password:registration.password,device});assert.equal(login.status,200,await login.clone().text());assert.ok((await login.json()).token);
-    const snapshot=await fence.snapshot();assert.equal(snapshot.v1Pending.length,0);assert.equal(snapshot.v1Committed.length,1);assert.equal(snapshot.v1Committed[0].vaultKind,'PERSONAL');
+    const tokens=[];
+    for (const [index,suffix] of ['a','b'].entries()) {
+      const device={id:randomUUID(),name:`TEST-ONLY-CODEX-${suffix}`,platform:'web',appVersion:'test'};
+      const registration={email:`synthetic-registration-${suffix}@example.test`,username:`synthetic_register_${suffix}`,displayName:`Synthetic ${suffix}`,password:`TEST-ONLY-PASSWORD-${suffix}-123`,device};
+      const registered=await post('/v1/auth/register',registration);
+      assert.equal(registered.status,201,'synthetic registration failed');assert.deepEqual(await registered.json(),{verificationRequired:true});
+      for(let i=0;i<200&&smtp.messages.length<=index;i++)await new Promise(resolve=>setTimeout(resolve,25));
+      assert.equal(smtp.messages.length,index+1,'one confirmation per synthetic user');
+      const normalized=smtp.messages[index].replace(/=\r\n/g,'').replace(/=3D/g,'=');
+      const match=normalized.match(/verify-email\?token=([a-zA-Z0-9_-]+)/);assert.ok(match,'synthetic verification link is present');
+      const verified=await post('/v1/auth/verify-email',{token:match[1]});assert.equal(verified.status,200,'synthetic verification failed');assert.deepEqual(await verified.json(),{verified:true});
+      const login=await post('/v1/auth/login',{email:registration.email,password:registration.password,device});assert.equal(login.status,200,'synthetic login failed');
+      const token=(await login.json()).token;assert.ok(token);assert.equal(tokens.includes(token),false,'different sessions required');tokens.push(token);
+    }
+    assert.equal(tokens.length,2);
+    const snapshot=await fence.snapshot();assert.equal(snapshot.v1Pending.length,0);assert.equal(snapshot.v1Committed.length,2);
+    assert.ok(snapshot.v1Committed.every(item=>item.vaultKind==='PERSONAL'));
     await assertV1DataFloor((sql,values)=>db.pool.query(sql,values),snapshot);
   }finally{await stopPublicationRuntime(runtime);await anchorFixture?.cleanup();await smtp?.close();await db.cleanup();}
 });

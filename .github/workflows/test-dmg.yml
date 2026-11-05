@@ -1,51 +1,75 @@
-name: Test DMG
-
+name: MVP two-user registration
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
-    runs-on: macos-15
-    timeout-minutes: 45
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+      NODE_OPTIONS: --dns-result-order=ipv4first
+      TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+      SR_TEST_ANCHOR_TLS_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
+      SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
+    services:
+      postgres:
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_USER: selective_remote_test
+          POSTGRES_PASSWORD: integration-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U selective_remote_test -d selective_remote_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-          swift --version | grep -E 'Swift version 6\.'
-
-      - name: Install build dependencies
-        run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
-        run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
-        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v6
         with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
-          path: |
-            dist/*.dmg
-            dist/*.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
+          fetch-depth: 2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+      - name: Prepare isolated dependencies
+        working-directory: cloud
+        run: npm ci
+      - name: Prepare isolated TLS anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+          test "$(git rev-parse HEAD^)" = 97e075529163c3dd701008b8f956b505ee9e3b7e
+          certdir="$RUNNER_TEMP/fence-anchor-test"
+          mkdir -m 755 "$certdir" "$RUNNER_TEMP/evidence"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout "$certdir/server.key" -out "$certdir/server.crt" >/dev/null 2>&1
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          uid=$(docker run --rm --entrypoint id "$image" -u postgres)
+          chmod 600 "$certdir/server.key"
+          sudo chown "$uid" "$certdir/server.key"
+          docker run -d --name sr-test-fence-anchor -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=sranchor -e POSTGRES_PASSWORD=integration-only-anchor -e POSTGRES_DB=postgres \
+            -v "$certdir:/certs:ro" "$image" -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key >/dev/null
+          for attempt in {1..30}; do
+            if docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null
+      - name: Two registrations and verifications with fences enabled
+        working-directory: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tests/v1-registration-fence-http.test.mjs 2>&1 | tee "$RUNNER_TEMP/evidence/results.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-mvp-two-user-registration
+          path: ${{ runner.temp }}/evidence
+          retention-days: 14
+      - name: Remove isolated anchor
+        if: always()
+        run: docker rm -f sr-test-fence-anchor >/dev/null 2>&1 || true
