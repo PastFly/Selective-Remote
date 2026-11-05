@@ -1,0 +1,32 @@
+name: Synthetic native migration crash boundaries
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fault:
+    runs-on: macos-14
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compile exact source with isolated fault adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift > "$RUNNER_TEMP/evidence/source-sha256.txt"
+          swiftc Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift scripts/isolated-write-boundaries/main.swift -o "$RUNNER_TEMP/native-write-fault"
+      - name: Stop and kill at migration boundaries
+        env:
+          SR_FAULT_ROOT: ${{ runner.temp }}/native-write-boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/isolated-write-boundaries/supervise.py "$RUNNER_TEMP/native-write-fault" "$RUNNER_TEMP/evidence" | tee "$RUNNER_TEMP/evidence/boundaries.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-native-migration-crash-boundaries
+          path: ${{ runner.temp }}/evidence
+          retention-days: 14
