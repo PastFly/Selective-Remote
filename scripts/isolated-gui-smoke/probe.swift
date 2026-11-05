@@ -157,6 +157,46 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--drag-host-no-folder" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("drag fixture identity") }
+    func position(_ element: AXUIElement) -> CGPoint? {
+        guard let raw = attr(element, "AXPosition"), let rawSize = attr(element, "AXSize"),
+              CFGetTypeID(raw) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() else { return nil }
+        var point=CGPoint.zero; var size=CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(raw,to:AXValue.self),.cgPoint,&point), AXValueGetValue(unsafeBitCast(rawSize,to:AXValue.self),.cgSize,&size), size.width>0, size.height>0 else { return nil }
+        return CGPoint(x:point.x+size.width/2,y:point.y+size.height/2)
+    }
+    func matches(_ label: String) -> [AXUIElement] {
+        snapshot(app).filter { e in
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(e,$0) as? String) == label } &&
+            (position(e)?.x ?? 10000) < 750
+        }
+    }
+    let folder=matches("TEST-ONLY-CODEX-MIXED-FOLDER")
+    for element in snapshot(app) where ["TEST-ONLY-CODEX-MIXED-FOLDER", "No Folder", "TEST-ONLY-CODEX-LIVE-NEW"].contains((attr(element,"AXTitle") as? String) ?? (attr(element,"AXDescription") as? String) ?? (attr(element,"AXValue") as? String) ?? "") {
+        print("DRAG_NODE role=\(attr(element,"AXRole") as? String ?? "") pos=\(String(describing:position(element)))")
+    }
+    guard let group=folder.first, let groupPoint=position(group), running.activate(options: [.activateIgnoringOtherApps]) else { stop("source folder unavailable") }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow:0.4))
+    func click(_ p: CGPoint) {
+        guard let d=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:p,mouseButton:.left), let u=CGEvent(mouseEventSource:nil,mouseType:.leftMouseUp,mouseCursorPosition:p,mouseButton:.left) else { stop("group click") }
+        d.post(tap:.cghidEventTap);u.post(tap:.cghidEventTap)
+    }
+    var hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
+    if hosts.isEmpty { click(groupPoint); Thread.sleep(forTimeInterval:1); hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" } }
+    let targets=matches("No Folder")
+    guard hosts.count == 1, let target=targets.first, let from=position(hosts[0]), let to=position(target),
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("drag source or destination unavailable") }
+    guard let down=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:from,mouseButton:.left) else { stop("drag down") }; down.post(tap:.cghidEventTap)
+    RunLoop.current.run(until:Date(timeIntervalSinceNow:0.2))
+    for i in 1...30 {
+        let f=CGFloat(i)/30; let point=CGPoint(x:from.x+(to.x-from.x)*f,y:from.y+(to.y-from.y)*f)
+        guard let drag=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDragged,mouseCursorPosition:point,mouseButton:.left) else { stop("drag movement") }
+        drag.post(tap:.cghidEventTap);RunLoop.current.run(until:Date(timeIntervalSinceNow:0.04))
+    }
+    guard let up=CGEvent(mouseEventSource:nil,mouseType:.leftMouseUp,mouseCursorPosition:to,mouseButton:.left) else { stop("drag up") };up.post(tap:.cghidEventTap)
+    Thread.sleep(forTimeInterval:3); print("SYNTHETIC_HOST_DRAG_REQUESTED=YES");exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
