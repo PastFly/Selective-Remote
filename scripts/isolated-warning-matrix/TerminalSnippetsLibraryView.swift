@@ -1,0 +1,1250 @@
+import AppKit
+import SwiftUI
+
+private enum SnippetLibraryViewMode: String, CaseIterable, Identifiable {
+    case list
+    case grid
+
+    var id: String { rawValue }
+    var systemImage: String { self == .list ? "list.bullet" : "square.grid.2x2" }
+}
+
+private enum SnippetLibrarySort: String, CaseIterable, Identifiable {
+    case name, modified
+    var id: String { rawValue }
+    var title: String { self == .name ? "Имя" : "Последнее изменение" }
+}
+
+enum TerminalSnippetRootGroupSorter {
+    static func sorted(
+        _ groups: [TerminalSnippetGroup],
+        templates: [TerminalCommandTemplate],
+        byModifiedDate: Bool,
+        ascending: Bool
+    ) -> [TerminalSnippetGroup] {
+        let templatesByGroup = Dictionary(grouping: templates, by: \.groupID)
+        return groups.sorted { lhs, rhs in
+            let comparison: ComparisonResult
+            if byModifiedDate {
+                let lhsDate = modifiedAt(lhs, templates: templatesByGroup[lhs.id] ?? [])
+                let rhsDate = modifiedAt(rhs, templates: templatesByGroup[rhs.id] ?? [])
+                comparison = lhsDate == rhsDate
+                    ? lhs.name.localizedStandardCompare(rhs.name)
+                    : (lhsDate < rhsDate ? .orderedAscending : .orderedDescending)
+            } else {
+                comparison = lhs.name.localizedStandardCompare(rhs.name)
+            }
+            if comparison == .orderedSame {
+                return ascending
+                    ? lhs.id.uuidString < rhs.id.uuidString
+                    : lhs.id.uuidString > rhs.id.uuidString
+            }
+            return ascending
+                ? comparison == .orderedAscending
+                : comparison == .orderedDescending
+        }
+    }
+
+    static func modifiedAt(
+        _ group: TerminalSnippetGroup,
+        templates: [TerminalCommandTemplate]
+    ) -> Date {
+        max(group.updatedAt, templates.map(\.updatedAt).max() ?? group.updatedAt)
+    }
+}
+
+struct TerminalSnippetsLibraryView: View {
+    @ObservedObject private var language = AppLanguageStore.shared
+    @ObservedObject var store: TerminalCommandHistoryStore
+    @ObservedObject var teamStore: SelectiveRemoteTeamSnippetStore
+    @ObservedObject var model: AppModel
+
+    @State private var query = ""
+    @State private var selectedSnippetID: UUID?
+    @State private var selectedGroupID: UUID?
+    @State private var editorRequest: TerminalSnippetEditorRequest?
+    @State private var groupEditor: TerminalSnippetGroup?
+    @State private var groupEditorSuggestedPath = ""
+    @State private var groupEditorPresented = false
+    @State private var deleteSnippet: TerminalCommandTemplate?
+    @State private var showsDisconnectConfirmation = false
+    @State private var teamCreateRequest = 0
+    @State private var teamCreateFolderRequest = 0
+    @AppStorage("SelectiveRemote.snippets.libraryViewMode.v1")
+    private var viewModeRaw = SnippetLibraryViewMode.list.rawValue
+    @AppStorage("SelectiveRemote.snippets.selectedGroupID.v1")
+    private var persistedGroupID = ""
+    @AppStorage("SelectiveRemote.snippets.selectedSnippetID.v1")
+    private var persistedSnippetID = ""
+    @AppStorage("SelectiveRemote.snippets.sort.v1") private var sortRaw = SnippetLibrarySort.name.rawValue
+    @AppStorage("SelectiveRemote.snippets.sortAscending.v1") private var sortAscending = true
+    @AppStorage("SelectiveRemote.snippets.scope.v1") private var scopeRaw = SelectiveRemoteSnippetScope.personal.rawValue
+
+    private var scope: SelectiveRemoteSnippetScope {
+        get { SelectiveRemoteSnippetScope(rawValue: scopeRaw) ?? .personal }
+        nonmutating set { scopeRaw = newValue.rawValue }
+    }
+
+    private var viewMode: SnippetLibraryViewMode {
+        get { SnippetLibraryViewMode(rawValue: viewModeRaw) ?? .list }
+        nonmutating set { viewModeRaw = newValue.rawValue }
+    }
+
+    private var selectedSnippet: TerminalCommandTemplate? {
+        guard let selectedSnippetID else { return nil }
+        return store.template(id: selectedSnippetID)
+    }
+
+    private var selectedGroup: TerminalSnippetGroup? {
+        guard let selectedGroupID else { return nil }
+        return store.snippetGroup(id: selectedGroupID)
+    }
+
+    private var sortedProfiles: [ConnectionProfile] {
+        model.profiles
+            .filter { $0.connectionType == .ssh }
+            .sorted {
+                $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                    == .orderedAscending
+            }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if scope == .personal {
+                if store.snippetPersistenceFailed {
+                    Label(
+                        UpdateLocalization.text(
+                            ru: "Не удалось безопасно сохранить сниппеты. Перезапустите приложение для восстановления.",
+                            en: "Could not save snippets safely. Restart the app to recover your data."
+                        ),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.red)
+                    .padding()
+                }
+                if let summary = model.latestSnippetRun {
+                    runStatus(summary)
+                }
+                Divider()
+                GeometryReader { proxy in
+                    HStack(spacing: 0) {
+                        libraryBrowser
+                            .frame(width: max(430, proxy.size.width * 0.56))
+                        Divider()
+                        inspector
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
+            } else {
+                Divider()
+                SelectiveRemoteTeamSnippetsView(
+                    store: teamStore,
+                    model: model,
+                    createFolderRequest: teamCreateFolderRequest,
+                    createRequest: teamCreateRequest
+                )
+            }
+        }
+        .sheet(item: $editorRequest) { request in
+            TerminalSnippetEditorView(
+                snippet: request.snippet,
+                preferredGroupID: request.preferredGroupID,
+                groups: store.snippetGroups(),
+                profiles: sortedProfiles
+            ) { draft in
+                let profileID = draft.firstSSHProfileID
+                    ?? TerminalCommandHistoryStore.globalSnippetLibraryID
+                let saved = store.saveTemplate(
+                    id: draft.id,
+                    title: draft.title,
+                    command: draft.command,
+                    category: draft.category,
+                    groupID: draft.groupID,
+                    profileID: profileID,
+                    targets: draft.targets
+                )
+                if saved {
+                    let resolved = draft.id ?? store.templates().first?.id
+                    selectSnippet(resolved)
+                }
+                return saved
+            }
+        }
+        .sheet(isPresented: $groupEditorPresented) {
+            TerminalSnippetGroupEditorView(
+                group: groupEditor,
+                suggestedPath: groupEditorSuggestedPath
+            ) { name in
+                if let groupEditor {
+                    _ = store.renameSnippetGroup(
+                        id: groupEditor.id,
+                        name: name,
+                        profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
+                    )
+                } else {
+                    _ = store.createSnippetGroup(
+                        name: name,
+                        profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
+                    )
+                }
+            }
+        }
+        .alert(
+            "Удалить сниппет?",
+            isPresented: Binding(
+                get: { deleteSnippet != nil },
+                set: { if !$0 { deleteSnippet = nil } }
+            ),
+            presenting: deleteSnippet
+        ) { snippet in
+            Button("Удалить", role: .destructive) {
+                if store.removeTemplate(id: snippet.id), selectedSnippetID == snippet.id {
+                    selectSnippet(nil)
+                }
+                deleteSnippet = nil
+            }
+            Button("Отмена", role: .cancel) { deleteSnippet = nil }
+        } message: { snippet in
+            Text(UpdateLocalization.formatted("terminal.snippets.delete.confirm",
+                english: language.selection.usesEnglish, snippet.title))
+        }
+        .alert(UpdateLocalization.text(ru: "Отключить SSH-сессии хостов?", en: "Disconnect SSH Targets?"), isPresented: $showsDisconnectConfirmation) {
+            Button(UpdateLocalization.text(ru: "Отключить", en: "Disconnect"), role: .destructive) {
+                model.disconnectTerminalSnippetTargets(
+                    model.latestSnippetRun?.targets.map(\.profileID) ?? []
+                )
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        } message: {
+            Text(UpdateLocalization.text(
+                ru: "Активные SSH-сессии хостов последнего запуска будут завершены. Выполняющаяся команда может быть прервана.",
+                en: "Active SSH sessions for targets from the latest run will close. A running command may be interrupted."
+            ))
+        }
+        .onAppear {
+            restoreNavigation()
+        }
+        .onChange(of: store.snippetRevision) { _, _ in
+            if let selectedSnippetID, store.template(id: selectedSnippetID) == nil {
+                selectSnippet(nil)
+            }
+            if let selectedGroupID, store.snippetGroup(id: selectedGroupID) == nil {
+                openRoot()
+            }
+        }
+    }
+
+    private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 16) {
+                headerTitle
+                    .fixedSize(horizontal: true, vertical: false)
+                headerActions
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                headerTitle
+                headerActions
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 22)
+    }
+
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(UpdateLocalization.text(ru: "Сниппеты", en: "Snippets"))
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+            Text(scope == .personal
+                ? UpdateLocalization.text(
+                    ru: "Личная библиотека команд · SSH и Локальный терминал используют одни Snippets",
+                    en: "Personal command library shared by SSH and Local Terminal"
+                )
+                : UpdateLocalization.text(
+                    ru: "Зашифрованные Team Snippets · отдельно от личной библиотеки",
+                    en: "Encrypted Team Snippets, kept separate from your personal library"
+                )
+            )
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var headerActions: some View {
+        HStack(spacing: 9) {
+            Picker(
+                UpdateLocalization.text(ru: "Область", en: "Scope"),
+                selection: Binding(get: { scope }, set: { scope = $0 })
+            ) {
+                ForEach(SelectiveRemoteSnippetScope.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 220)
+
+            Group {
+                if scope == .personal {
+                    Button {
+                        groupEditor = nil
+                        groupEditorSuggestedPath = selectedGroup.map {
+                            "\($0.name)/"
+                        } ?? ""
+                        groupEditorPresented = true
+                    } label: {
+                        Label(UpdateLocalization.text(ru: "Новая группа", en: "New Group"), systemImage: "folder.badge.plus")
+                            .frame(width: 112)
+                    }
+                } else {
+                    Button {
+                        teamCreateFolderRequest += 1
+                    } label: {
+                        Label(UpdateLocalization.text(ru: "Новая группа", en: "New Group"), systemImage: "folder.badge.plus")
+                        .frame(width: 112)
+                    }
+                }
+            }
+
+            if scope == .team {
+                Button {
+                    NotificationCenter.default.post(
+                        name: .selectiveRemoteTeamVaultSyncNow,
+                        object: nil
+                    )
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .help(UpdateLocalization.text(ru: "Обновить", en: "Refresh"))
+            }
+
+            Button {
+                if scope == .personal {
+                    presentEditor(nil, preferredGroupID: selectedGroupID)
+                } else {
+                    teamCreateRequest += 1
+                }
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet"),
+                    systemImage: "plus"
+                )
+                .frame(width: 122)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var libraryBrowser: some View {
+        VStack(spacing: 0) {
+            SelectiveRemoteMeasuredPriorityToolbar {
+              HStack(spacing: 8) {
+                if selectedGroup != nil {
+                    Button {
+                        openRoot()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(UpdateLocalization.text(ru: "Вернуться ко всем группам", en: "Back to all groups"))
+                }
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(UpdateLocalization.text(ru: "Поиск сниппетов", en: "Search Snippets"), text: $query)
+                    .textFieldStyle(.plain)
+              }
+            } controls: {
+              HStack(spacing: 8) {
+                Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(
+                    get: { viewMode },
+                    set: { viewMode = $0 }
+                )) {
+                    ForEach(SnippetLibraryViewMode.allCases) { mode in
+                        Image(systemName: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 82)
+                Menu {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
+                        ForEach(SnippetLibrarySort.allCases) { option in
+                            Text(LocalizedStringKey(option.title)).tag(option.rawValue)
+                        }
+                    }
+                    Divider()
+                    Button(sortAscending
+                        ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                        : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) {
+                        sortAscending.toggle()
+                    }
+                } label: {
+                    Image(systemName: sortAscending ? "arrow.up.arrow.down.circle" : "arrow.down.arrow.up.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
+              }
+            } priority: {
+                HStack(spacing: 8) {
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(
+                        get: { viewMode }, set: { viewMode = $0 }
+                    )) {
+                        ForEach(SnippetLibraryViewMode.allCases) { mode in
+                            Image(systemName: mode.systemImage).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 82)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
+                            ForEach(SnippetLibrarySort.allCases) { option in
+                                Text(LocalizedStringKey(option.title)).tag(option.rawValue)
+                            }
+                        }
+                        Button(sortAscending
+                            ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                            : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) {
+                            sortAscending.toggle()
+                        }
+                        Divider()
+                        Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet")) {
+                            presentEditor(nil, preferredGroupID: selectedGroupID)
+                        }
+                        Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group")) {
+                            groupEditor = nil
+                            groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                            groupEditorPresented = true
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
+                }
+            } primary: {
+                Menu {
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {
+                        ForEach(SnippetLibraryViewMode.allCases) { mode in
+                            Text(mode == .list
+                                ? UpdateLocalization.text(ru: "Список", en: "List")
+                                : UpdateLocalization.text(ru: "Плитка", en: "Grid")).tag(mode)
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
+                        ForEach(SnippetLibrarySort.allCases) { option in Text(LocalizedStringKey(option.title)).tag(option.rawValue) }
+                    }
+                    Button(sortAscending
+                        ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                        : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) { sortAscending.toggle() }
+                    Divider()
+                    Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet")) {
+                        presentEditor(nil, preferredGroupID: selectedGroupID)
+                    }
+                    Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group")) {
+                        groupEditor = nil
+                        groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                        groupEditorPresented = true
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+            } overflow: {
+                Menu {
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {
+                        ForEach(SnippetLibraryViewMode.allCases) { mode in
+                            Text(mode == .list
+                                ? UpdateLocalization.text(ru: "Список", en: "List")
+                                : UpdateLocalization.text(ru: "Плитка", en: "Grid")).tag(mode)
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
+                        ForEach(SnippetLibrarySort.allCases) { option in
+                            Text(LocalizedStringKey(option.title)).tag(option.rawValue)
+                        }
+                    }
+                    Button(sortAscending
+                        ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                        : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) { sortAscending.toggle() }
+                    Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet")) { presentEditor(nil, preferredGroupID: selectedGroupID) }
+                    Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group")) {
+                        groupEditor = nil
+                        groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                        groupEditorPresented = true
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+            }
+            .padding(10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .padding(14)
+
+            HStack(spacing: 6) {
+                Button(UpdateLocalization.text(ru: "Все сниппеты", en: "All Snippets")) { openRoot() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedGroup == nil ? Color.primary : Color.accentColor)
+                if let selectedGroup {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(selectedGroup.name).fontWeight(.semibold)
+                }
+            }
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+
+            ScrollView {
+                if !normalizedQuery.isEmpty {
+                    snippetCollection(searchResults, showsGroup: true)
+                } else {
+                    let snippets = selectedGroup.map {
+                        sortedSnippets(store.templates(in: $0.id))
+                    } ?? sortedSnippets(ungroupedSnippets)
+                    if visibleChildGroups.isEmpty && snippets.isEmpty {
+                        VStack(spacing: 14) {
+                            ContentUnavailableView(
+                                selectedGroup == nil ? "Сниппетов пока нет" : "Группа пуста",
+                                systemImage: "folder",
+                                description: Text(selectedGroup.map {
+                                    "Добавьте вложенную группу или первый сниппет в «\($0.name)»."
+                                } ?? "Создайте группу или добавьте первый сниппет.")
+                            )
+                            HStack {
+                                Button("Новая группа", systemImage: "folder.badge.plus") {
+                                    groupEditor = nil
+                                    groupEditorSuggestedPath = selectedGroup.map {
+                                        "\($0.name)/"
+                                    } ?? ""
+                                    groupEditorPresented = true
+                                }
+                                Button("Новый сниппет", systemImage: "plus") {
+                                    presentEditor(nil, preferredGroupID: selectedGroup?.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 70)
+                    } else {
+                        groupCollection
+                    }
+                }
+            }
+            .background(Color.clear.contentShape(Rectangle()))
+            .contextMenu {
+                Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet"), systemImage: "plus") {
+                    presentEditor(nil, preferredGroupID: selectedGroupID)
+                }
+                Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group"), systemImage: "folder.badge.plus") {
+                    groupEditor = nil
+                    groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                    groupEditorPresented = true
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var groupCollection: some View {
+        if viewMode == .grid {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
+                ForEach(visibleChildGroups) { group in groupCard(group) }
+                ForEach(visibleGroupSnippets) { snippet in
+                    snippetCard(snippet, showsGroup: false)
+                }
+            }
+            .padding(14)
+        } else {
+            LazyVStack(spacing: 8) {
+                ForEach(visibleChildGroups) { group in groupRow(group) }
+                if !visibleGroupSnippets.isEmpty {
+                    Text(selectedGroup == nil ? "Без группы" : "Сниппеты")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 8)
+                    ForEach(visibleGroupSnippets) { snippet in
+                        snippetListButton(snippet, showsGroup: false)
+                    }
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    private func groupRow(_ group: TerminalSnippetGroup) -> some View {
+        Button { openGroup(group.id) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 38)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(groupDisplayName(group.name)).font(.headline)
+                    Text(UpdateLocalization.formatted("terminal.snippets.count",
+                        english: language.selection.usesEnglish, recursiveSnippetCount(in: group)))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .contextMenu { groupActions(group) }
+    }
+
+    private func groupCard(_ group: TerminalSnippetGroup) -> some View {
+        Button { openGroup(group.id) } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Spacer(minLength: 8)
+                Text(groupDisplayName(group.name)).font(.headline).lineLimit(2)
+                Text(UpdateLocalization.formatted("terminal.snippets.count",
+                    english: language.selection.usesEnglish, recursiveSnippetCount(in: group)))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+            .padding(16)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .contextMenu { groupActions(group) }
+    }
+
+    @ViewBuilder
+    private func groupActions(_ group: TerminalSnippetGroup) -> some View {
+        Button("Открыть", systemImage: "folder") { openGroup(group.id) }
+        Button("Новый сниппет", systemImage: "plus") {
+            presentEditor(nil, preferredGroupID: group.id)
+        }
+        Button("Новая вложенная группа", systemImage: "folder.badge.plus") {
+            groupEditor = nil
+            groupEditorSuggestedPath = "\(group.name)/"
+            groupEditorPresented = true
+        }
+        Divider()
+        Button("Переименовать", systemImage: "pencil") {
+            groupEditor = group
+            groupEditorSuggestedPath = group.name
+            groupEditorPresented = true
+        }
+        Button("Удалить группу", systemImage: "trash", role: .destructive) {
+            _ = store.removeSnippetGroup(
+                id: group.id,
+                profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func snippetCollection(
+        _ snippets: [TerminalCommandTemplate],
+        showsGroup: Bool
+    ) -> some View {
+        if snippets.isEmpty {
+            ContentUnavailableView.search(text: query)
+                .padding(.top, 70)
+        } else if viewMode == .grid {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
+                ForEach(snippets) { snippet in snippetCard(snippet, showsGroup: showsGroup) }
+            }
+            .padding(14)
+        } else {
+            LazyVStack(spacing: 7) {
+                ForEach(snippets) { snippet in snippetListButton(snippet, showsGroup: showsGroup) }
+            }
+            .padding(14)
+        }
+    }
+
+    private func snippetListButton(
+        _ snippet: TerminalCommandTemplate,
+        showsGroup: Bool
+    ) -> some View {
+        Button { selectSnippet(snippet.id) } label: {
+            VStack(alignment: .leading, spacing: showsGroup ? 5 : 0) {
+                snippetRow(snippet)
+                if showsGroup {
+                    Text(snippet.category).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .background(
+                selectedSnippetID == snippet.id
+                    ? Color.accentColor.opacity(0.15)
+                    : Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 11)
+            )
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { _ = model.runTerminalSnippet(snippet) })
+        .contextMenu { snippetActions(snippet) }
+    }
+
+    private func snippetCard(
+        _ snippet: TerminalCommandTemplate,
+        showsGroup: Bool
+    ) -> some View {
+        Button { selectSnippet(snippet.id) } label: {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack {
+                    Image(systemName: "curlybraces")
+                        .font(.title2.bold()).foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Label("\(snippet.targets.count)", systemImage: snippet.includesLocalTerminal ? "terminal" : "server.rack")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(snippet.title).font(.headline).lineLimit(2)
+                Text(snippet.command.replacingOccurrences(of: "\n", with: " ↵ "))
+                    .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                if showsGroup {
+                    Text(snippet.category).font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+            .padding(14)
+            .background(
+                selectedSnippetID == snippet.id
+                    ? Color.accentColor.opacity(0.15)
+                    : Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { _ = model.runTerminalSnippet(snippet) })
+        .contextMenu { snippetActions(snippet) }
+    }
+
+    @ViewBuilder
+    private func snippetActions(_ snippet: TerminalCommandTemplate) -> some View {
+        Button("Запустить", systemImage: "play.fill") { _ = model.runTerminalSnippet(snippet) }
+        Button("Скопировать команду", systemImage: "doc.on.doc") { copyCommand(snippet.command) }
+        Divider()
+        Button("Изменить", systemImage: "pencil") { presentEditor(snippet) }
+        Button("Дублировать", systemImage: "plus.square.on.square") {
+            _ = store.duplicateTemplate(
+                id: snippet.id,
+                profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
+            )
+        }
+        Button("Новый сниппет в этой группе", systemImage: "plus") {
+            presentEditor(nil, preferredGroupID: snippet.groupID)
+        }
+        Divider()
+        Button("Удалить", systemImage: "trash", role: .destructive) { deleteSnippet = snippet }
+    }
+
+    private func snippetRow(_ snippet: TerminalCommandTemplate) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "curlybraces")
+                .font(.title3.bold())
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(snippet.title)
+                    .font(.headline)
+                Text(snippet.command.replacingOccurrences(of: "\n", with: " ↵ "))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Label("\(snippet.targets.count)", systemImage: snippet.includesLocalTerminal ? "terminal" : "server.rack")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 5)
+    }
+
+    @ViewBuilder
+    private var inspector: some View {
+        if let snippet = selectedSnippet {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(snippet.title).font(.title2.bold())
+                        Text(snippet.category).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { presentEditor(snippet) } label: {
+                        Image(systemName: "pencil")
+                    }
+                    Button(role: .destructive) { deleteSnippet = snippet } label: {
+                        Image(systemName: "trash")
+                    }
+                }
+
+                GroupBox(UpdateLocalization.text(ru: "Команда", en: "Command")) {
+                    ScrollView {
+                        Text(snippet.command)
+                            .font(.body.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                    .frame(height: SelectiveRemoteSnippetCommandLayout.height(for: snippet.command))
+                }
+
+                GroupBox(UpdateLocalization.text(ru: "Хосты", en: "Targets")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(targetProfiles(for: snippet)) { profile in
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
+                                    Text(profile.host)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "server.rack")
+                            }
+                        }
+                        if snippet.includesLocalTerminal {
+                            Label(UpdateLocalization.text(ru: "Локальный терминал", en: "Local Terminal"), systemImage: "terminal")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+
+                if let summary = model.latestSnippetRun,
+                   summary.snippetID == snippet.id {
+                    GroupBox(UpdateLocalization.text(ru: "Последний запуск", en: "Latest Run")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(summary.targets) { target in
+                                targetRunStatusRow(target)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                    }
+                }
+
+                Button {
+                    _ = model.runTerminalSnippet(snippet)
+                } label: {
+                    Label(UpdateLocalization.formatted("terminal.snippets.run_targets",
+                        english: language.selection.usesEnglish, snippet.targets.count), systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(targetProfiles(for: snippet).isEmpty && !snippet.includesLocalTerminal)
+            }
+            .padding(22)
+        } else {
+            ContentUnavailableView(UpdateLocalization.text(ru: "Выберите сниппет", en: "Select a Snippet"), systemImage: "curlybraces")
+        }
+    }
+
+    private var normalizedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+    }
+
+    private var searchResults: [TerminalCommandTemplate] {
+        guard !normalizedQuery.isEmpty else { return [] }
+        return sortedSnippets(store.templates().filter { snippet in
+            snippet.title.localizedLowercase.contains(normalizedQuery)
+                || snippet.command.localizedLowercase.contains(normalizedQuery)
+                || snippet.category.localizedLowercase.contains(normalizedQuery)
+        })
+    }
+
+    private func targetProfiles(for snippet: TerminalCommandTemplate) -> [ConnectionProfile] {
+        let ids = Set(snippet.targetProfileIDs)
+        return sortedProfiles.filter { ids.contains($0.id) }
+    }
+
+    private func presentEditor(
+        _ snippet: TerminalCommandTemplate?,
+        preferredGroupID: UUID? = nil
+    ) {
+        editorRequest = TerminalSnippetEditorRequest(
+            snippet: snippet,
+            preferredGroupID: preferredGroupID
+        )
+    }
+
+    private var sortedGroups: [TerminalSnippetGroup] {
+        TerminalSnippetRootGroupSorter.sorted(
+            store.snippetGroups(),
+            templates: store.templates(),
+            byModifiedDate: SnippetLibrarySort(rawValue: sortRaw) == .modified,
+            ascending: sortAscending
+        )
+    }
+
+    private var visibleChildGroups: [TerminalSnippetGroup] {
+        let parent = selectedGroup?.name ?? ""
+        return sortedGroups.filter { groupParentPath($0.name) == parent }
+    }
+
+    private var visibleGroupSnippets: [TerminalCommandTemplate] {
+        if let selectedGroup {
+            return sortedSnippets(store.templates(in: selectedGroup.id))
+        }
+        return sortedSnippets(ungroupedSnippets)
+    }
+
+    private func groupParentPath(_ path: String) -> String {
+        guard let separator = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<separator])
+    }
+
+    private func groupDisplayName(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: true)
+            .last.map(String.init) ?? path
+    }
+
+    private func recursiveSnippetCount(in group: TerminalSnippetGroup) -> Int {
+        let prefix = "\(group.name)/"
+        let groupIDs = Set(store.snippetGroups().filter {
+            $0.id == group.id || $0.name.hasPrefix(prefix)
+        }.map(\.id))
+        return store.templates().filter { groupIDs.contains($0.groupID) }.count
+    }
+
+    private var ungroupedSnippets: [TerminalCommandTemplate] {
+        store.templates().filter { $0.groupID == TerminalCommandTemplate.legacyUnassignedGroupID }
+    }
+
+    private func sortedSnippets(_ snippets: [TerminalCommandTemplate]) -> [TerminalCommandTemplate] {
+        snippets.sorted { lhs, rhs in
+            let comparison: ComparisonResult
+            if SnippetLibrarySort(rawValue: sortRaw) == .modified {
+                comparison = lhs.updatedAt == rhs.updatedAt
+                    ? lhs.title.localizedStandardCompare(rhs.title)
+                    : (lhs.updatedAt < rhs.updatedAt ? .orderedAscending : .orderedDescending)
+            } else {
+                comparison = lhs.title.localizedStandardCompare(rhs.title)
+            }
+            return sortAscending ? comparison == .orderedAscending : comparison == .orderedDescending
+        }
+    }
+
+    private func openRoot() {
+        selectedGroupID = nil
+        persistedGroupID = ""
+    }
+
+    private func openGroup(_ id: UUID) {
+        selectedGroupID = id
+        persistedGroupID = id.uuidString
+    }
+
+    private func selectSnippet(_ id: UUID?) {
+        selectedSnippetID = id
+        persistedSnippetID = id?.uuidString ?? ""
+    }
+
+    private func restoreNavigation() {
+        if let id = UUID(uuidString: persistedGroupID), store.snippetGroup(id: id) != nil {
+            selectedGroupID = id
+        }
+        if let id = UUID(uuidString: persistedSnippetID), store.template(id: id) != nil {
+            selectedSnippetID = id
+        }
+    }
+
+    private func copyCommand(_ command: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+    }
+
+    private func runStatus(_ summary: TerminalSnippetRunSummary) -> some View {
+        let sent = summary.targets.filter { $0.state == .sent }.count
+        let connecting = summary.targets.filter { $0.state == .connecting }.count
+        let failed = summary.targets.filter {
+            if case .failed = $0.state { return true }
+            return false
+        }.count
+
+        return HStack(spacing: 14) {
+            Image(
+                systemName: failed > 0
+                    ? "exclamationmark.triangle.fill"
+                    : (connecting > 0 ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+            )
+            .foregroundStyle(failed > 0 ? Color.orange : (connecting > 0 ? Color.blue : Color.green))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(UpdateLocalization.formatted("terminal.snippets.last_run",
+                    english: language.selection.usesEnglish, summary.title))
+                    .font(.subheadline.weight(.semibold))
+                Text(summary.startedAt, style: .time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if sent > 0 {
+                Label(UpdateLocalization.formatted("terminal.snippets.sent",
+                    english: language.selection.usesEnglish, sent), systemImage: "paperplane.fill")
+                    .foregroundStyle(.green)
+            }
+            if connecting > 0 {
+                Label(UpdateLocalization.formatted("terminal.snippets.connecting",
+                    english: language.selection.usesEnglish, connecting), systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.blue)
+            }
+            if failed > 0 {
+                Label(UpdateLocalization.formatted("terminal.snippets.errors",
+                    english: language.selection.usesEnglish, failed), systemImage: "xmark.octagon.fill")
+                    .foregroundStyle(.orange)
+            }
+            Button(UpdateLocalization.text(ru: "Отключить SSH-сессии", en: "Disconnect SSH Targets")) {
+                showsDisconnectConfirmation = true
+            }
+            .disabled(summary.targets.isEmpty)
+        }
+        .font(.caption)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 10)
+        .background(Color.accentColor.opacity(0.07))
+    }
+
+    private func targetRunStatusRow(_ target: TerminalSnippetTargetRunStatus) -> some View {
+        let details: (text: String, icon: String, color: Color) = switch target.state {
+        case .connecting:
+            ("Подключение…", "arrow.triangle.2.circlepath", .blue)
+        case .sent:
+            ("Команда отправлена", "paperplane.fill", .green)
+        case .failed(let message):
+            ("Ошибка: \(message)", "xmark.octagon.fill", .orange)
+        }
+
+        return HStack(spacing: 8) {
+            Image(systemName: details.icon)
+                .foregroundStyle(details.color)
+            Text(target.name)
+                .lineLimit(1)
+            Spacer()
+            Text(details.text)
+                .font(.caption)
+                .foregroundStyle(details.color)
+                .lineLimit(2)
+        }
+    }
+}
+
+private struct TerminalSnippetEditorRequest: Identifiable {
+    let id = UUID()
+    let snippet: TerminalCommandTemplate?
+    let preferredGroupID: UUID?
+}
+
+private struct TerminalSnippetDraft {
+    let id: UUID?
+    let title: String
+    let command: String
+    let category: String
+    let groupID: UUID
+    let targets: [TerminalSnippetTarget]
+
+    var firstSSHProfileID: UUID? {
+        for target in targets {
+            if case .sshProfile(let id) = target { return id }
+        }
+        return nil
+    }
+}
+
+private struct TerminalSnippetEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    let snippet: TerminalCommandTemplate?
+    let preferredGroupID: UUID?
+    let groups: [TerminalSnippetGroup]
+    let profiles: [ConnectionProfile]
+    let onSave: (TerminalSnippetDraft) -> Bool
+
+    @State private var title: String
+    @State private var command: String
+    @State private var groupID: UUID
+    @State private var targets: Set<TerminalSnippetTarget>
+    @State private var saveError = ""
+
+    init(
+        snippet: TerminalCommandTemplate?,
+        preferredGroupID: UUID?,
+        groups: [TerminalSnippetGroup],
+        profiles: [ConnectionProfile],
+        onSave: @escaping (TerminalSnippetDraft) -> Bool
+    ) {
+        self.snippet = snippet
+        self.preferredGroupID = preferredGroupID
+        self.groups = groups
+        self.profiles = profiles
+        self.onSave = onSave
+        _title = State(initialValue: snippet?.title ?? "")
+        _command = State(initialValue: snippet?.command ?? "")
+        _groupID = State(
+            initialValue: snippet?.groupID
+                ?? preferredGroupID
+                ?? TerminalCommandTemplate.legacyUnassignedGroupID
+        )
+        let availableIDs = Set(profiles.map(\.id))
+        _targets = State(initialValue: Set((snippet?.targets ?? []).filter { target in
+            switch target {
+            case .localTerminal: return true
+            case let .sshProfile(id): return availableIDs.contains(id)
+            }
+        }))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Название", text: $title)
+                Picker("Группа", selection: $groupID) {
+                    Text("Без группы").tag(TerminalCommandTemplate.legacyUnassignedGroupID)
+                    ForEach(groups) { group in Text(group.name).tag(group.id) }
+                }
+                Section("Команда или скрипт") {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $command)
+                            .font(.body.monospaced())
+                            .frame(minHeight: 150)
+                        if command.isEmpty {
+                            Text("Введите команду или скрипт, например: docker ps")
+                                .font(.body.monospaced())
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 8)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
+
+                Section(UpdateLocalization.text(ru: "Хосты · до 8 целей", en: "Targets · up to 8")) {
+                    Toggle(isOn: targetBinding(.localTerminal)) {
+                        Label(UpdateLocalization.text(ru: "Локальный терминал", en: "Local Terminal"), systemImage: "terminal")
+                    }
+                    .disabled(!targets.contains(.localTerminal) && targets.count >= 8)
+                    SelectiveRemoteHostSelectionBrowser(
+                        items: profiles.map(SelectiveRemoteHostSelectionItem.init(profile:)),
+                        mode: .multi,
+                        scope: .personal,
+                        selection: Binding(
+                            get: {
+                                Set(targets.compactMap { target in
+                                    if case let .sshProfile(id) = target { return id }
+                                    return nil
+                                })
+                            },
+                            set: { ids in
+                                targets = Set(ids.map(TerminalSnippetTarget.sshProfile))
+                                    .union(targets.contains(.localTerminal) ? [.localTerminal] : [])
+                            }
+                        ),
+                        selectionLimit: targets.contains(.localTerminal) ? 7 : 8
+                    )
+                }
+
+                if !saveError.isEmpty {
+                    Text(saveError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(snippet == nil ? "Новый сниппет" : "Изменить сниппет")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Отмена") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Сохранить") {
+                        let draft = TerminalSnippetDraft(
+                            id: snippet?.id,
+                            title: title,
+                            command: command,
+                            category: groups.first(where: { $0.id == groupID })?.name ?? "",
+                            groupID: groupID,
+                            targets: orderedTargets
+                        )
+                        if onSave(draft) {
+                            dismiss()
+                        } else {
+                            saveError = "Не удалось сохранить. Проверьте длину и убедитесь, что команда не содержит секреты."
+                        }
+                    }
+                    .disabled(
+                        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || targets.isEmpty
+                    )
+                }
+            }
+        }
+        .frame(width: 620, height: 650)
+    }
+
+    private func targetBinding(_ target: TerminalSnippetTarget) -> Binding<Bool> {
+        Binding(
+            get: { targets.contains(target) },
+            set: { selected in
+                if selected { targets.insert(target) } else { targets.remove(target) }
+            }
+        )
+    }
+
+    private var orderedTargets: [TerminalSnippetTarget] {
+        var result: [TerminalSnippetTarget] = []
+        if targets.contains(.localTerminal) { result.append(.localTerminal) }
+        for profile in profiles {
+            let target = TerminalSnippetTarget.sshProfile(profile.id)
+            if targets.contains(target) { result.append(target) }
+        }
+        return result
+    }
+}
+
+private struct TerminalSnippetGroupEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    let group: TerminalSnippetGroup?
+    let suggestedPath: String
+    let onSave: (String) -> Void
+    @State private var name: String
+
+    init(
+        group: TerminalSnippetGroup?,
+        suggestedPath: String,
+        onSave: @escaping (String) -> Void
+    ) {
+        self.group = group
+        self.suggestedPath = suggestedPath
+        self.onSave = onSave
+        _name = State(initialValue: group?.name ?? suggestedPath)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(group == nil ? UpdateLocalization.text(ru: "Новая группа", en: "New Group") : UpdateLocalization.text(ru: "Переименовать группу", en: "Rename Group"))
+                .font(.title2.bold())
+            TextField(UpdateLocalization.text(ru: "Путь группы", en: "Group Path"), text: $name)
+            Text(UpdateLocalization.text(ru: "Используйте / для вложенности, например Production/Deploy.", en: "Use / for nesting, for example Production/Deploy."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { dismiss() }
+                Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
+                    onSave(name)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || name.count > 120
+                        || name.hasSuffix("/")
+                        || name.contains("//")
+                )
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+    }
+}

@@ -27,8 +27,9 @@ jobs:
           cd candidate
           test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
           shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
+          cp "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/TerminalSnippetsLibraryView.swift" Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift
           python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/instrument.py"
-          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
+          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
           brew install freerdp sdl3
           ./scripts/build_app.sh
           cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
