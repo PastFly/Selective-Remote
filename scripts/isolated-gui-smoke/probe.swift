@@ -533,14 +533,14 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         if let position, CFGetTypeID(position) == AXValueGetTypeID() { _ = AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) }
         print("SYNTHETIC_SFTP_CONTROL role=\(attr(element, "AXRole") as? String ?? "") x=\(point.x)")
     }
-    let tabs = snapshot(app).filter {
-        guard (attr($0, "AXRole") as? String) == "AXRadioButton",
+    let sideButtons = snapshot(app).filter {
+        guard (attr($0, "AXRole") as? String) == "AXButton",
               ((attr($0, "AXDescription") as? String) == "SFTP" || (attr($0, "AXTitle") as? String) == "SFTP"),
               let position = attr($0, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
         var point = CGPoint.zero
-        return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
+        return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x < 700
     }
-    guard tabs.count == 1, AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP tab unavailable") }
+    guard sideButtons.count == 1, AXUIElementPerformAction(sideButtons[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP navigation unavailable") }
     Thread.sleep(forTimeInterval: 2)
     let remoteSelectors = snapshot(app).filter {
         guard (attr($0, "AXRole") as? String) == "AXRadioButton",
