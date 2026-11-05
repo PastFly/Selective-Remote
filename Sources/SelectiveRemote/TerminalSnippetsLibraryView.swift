@@ -113,6 +113,17 @@ struct TerminalSnippetsLibraryView: View {
         VStack(spacing: 0) {
             header
             if scope == .personal {
+                if store.snippetPersistenceFailed {
+                    Label(
+                        UpdateLocalization.text(
+                            ru: "Не удалось безопасно сохранить сниппеты. Перезапустите приложение для восстановления.",
+                            en: "Could not save snippets safely. Restart the app to recover your data."
+                        ),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.red)
+                    .padding()
+                }
                 if let summary = model.latestSnippetRun {
                     runStatus(summary)
                 }
