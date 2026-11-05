@@ -80,13 +80,18 @@ while Date() < deadline {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == agent.processIdentifier,
                   AXUIElementSetAttributeValue(fields[0], kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { fail("security prompt focus") }
+            guard let clearDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let clearUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { fail("security prompt clear") }
+            clearDown.flags = .maskCommand; clearUp.flags = .maskCommand
+            clearDown.post(tap: .cghidEventTap); clearUp.post(tap: .cghidEventTap)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
             for character in secret {
                 guard let stroke = syntheticKeyStroke(character), !stroke.shift,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == agent.processIdentifier,
                       let down = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: true),
                       let up = CGEvent(keyboardEventSource: nil, virtualKey: stroke.code, keyDown: false) else { fail("security prompt input") }
                 down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
-                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
             }
             guard AXUIElementPerformAction(buttons[0], kAXPressAction as CFString) == .success else { fail("security prompt allow") }
             print("SYNTHETIC_KEYCHAIN_ALLOW=REQUESTED")
