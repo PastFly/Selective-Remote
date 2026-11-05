@@ -558,6 +558,16 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
           AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions),
           dimensions.width > 0, dimensions.height > 0 else { stop("SFTP host menu frame") }
     point.x += dimensions.width / 2; point.y += dimensions.height / 2
+    print("SFTP_MENU_GEOMETRY x=\(point.x) y=\(point.y) width=\(dimensions.width) height=\(dimensions.height)")
+    guard running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP menu activation") }
+    guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP menu mouse move") }
+    moved.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    var hit: AXUIElement?
+    var hitPID: pid_t = 0
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid else { stop("SFTP menu hit test") }
+    print("SFTP_MENU_HIT role=\(attr(hit, "AXRole") as? String ?? "") name=\(attr(hit, "AXTitle") as? String ?? "")")
     for clicks in [1, 2] {
         guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP host double click") }
