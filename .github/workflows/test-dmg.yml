@@ -57,6 +57,7 @@ jobs:
           sleep 12; kill -0 "$app_pid"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-probe" "$app_pid" --snippet-dialog-locale | tee "$RUNNER_TEMP/evidence/dialog.log"
           screencapture -x "$RUNNER_TEMP/evidence/warning.png"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --snippet-dialog-close | tee "$RUNNER_TEMP/evidence/dialog-close.log"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
       - uses: actions/upload-artifact@v4

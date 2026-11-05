@@ -261,6 +261,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-cu
     print("CURRENT_HOST_VISIBLE_IN_DOWNGRADE_UI=\(visible)")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--snippet-dialog-close" {
+    guard let lang = env["SR_VISUAL_LANGUAGE"], ["english", "russian"].contains(lang) else { stop("locale fixture identity") }
+    pressUnique("AXButton", lang == "english" ? "Cancel" : "Отмена")
+    print("SYNTHETIC_DIALOG_CANCELED=PASS")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--snippet-dialog-locale" {
     guard env["SR_BUILD_KIND"] == "candidate", let lang = env["SR_VISUAL_LANGUAGE"], ["english", "russian"].contains(lang) else { stop("locale fixture identity") }
     let en = lang == "english"
