@@ -18,6 +18,9 @@ enum NativeStorageMigration {
     private static let snapshotKey = versionPrefix + "migration.snapshot.v1"
     private static let markerKey = versionPrefix + "migration.complete.v1"
     private static let restoreJournalKey = versionPrefix + "restore.pending.v1"
+    private static let snippetJournalKey = versionPrefix + "snippets.pending.v1"
+    private static let snippetGroupsLegacyKey = "SelectiveRemote.terminal.snippetGroups.v1"
+    private static let snippetTemplatesLegacyKey = "SelectiveRemote.terminal.commandTemplates.v1"
     private static let workspacePrefix = prefix + "terminal.workspace.v1."
     private static let versionedWorkspacePrefix = versionPrefix + "terminal.workspace.v1."
     private static let workspaceSnapshotKey = versionPrefix + "workspace-migration.snapshot.v1"
@@ -169,14 +172,18 @@ enum NativeStorageMigration {
                   Set(current).isSubset(of: Set(after)) else { throw MigrationError.unsafeRestore }
         }
         for (key, value) in values where key.hasPrefix(prefix) {
-            if legacyKeys.contains(key) || targets.contains(key) || ignoredBackupMetadata.contains(key) || key == snapshotKey || key == markerKey || key == restoreJournalKey { continue }
+            if legacyKeys.contains(key) || targets.contains(key) || ignoredBackupMetadata.contains(key) || key == snapshotKey || key == markerKey || key == restoreJournalKey || key == snippetJournalKey { continue }
             guard let current = existing[key], equal(current, value) else { throw MigrationError.unsafeRestore }
         }
         return restored
     }
 
     static func prepare(_ defaults: any NativePreferencesAccess) throws {
+        guard defaults.object(forKey: restoreJournalKey) == nil || defaults.object(forKey: snippetJournalKey) == nil else {
+            throw MigrationError.inconsistentCheckpoint
+        }
         try recoverPendingRestore(defaults)
+        try recoverPendingSnippets(defaults)
         let marker = defaults.object(forKey: markerKey)
         let existingSnapshot = defaults.object(forKey: snapshotKey)
         if marker != nil {
@@ -268,6 +275,43 @@ enum NativeStorageMigration {
             try? recoverPendingRestore(defaults)
             throw error
         }
+    }
+
+    /// The journal is committed before either collection is changed. A restart
+    /// replays the complete pair while the application's exclusive lease is held.
+    static func commitSnippets(groups: Data, templates: Data, to defaults: any NativePreferencesAccess) throws {
+        try validate(groups, for: snippetGroupsLegacyKey)
+        try validate(templates, for: snippetTemplatesLegacyKey)
+        guard defaults.object(forKey: snippetJournalKey) == nil,
+              defaults.object(forKey: restoreJournalKey) == nil else { throw MigrationError.inconsistentCheckpoint }
+        let values: [String: Any] = [newKey(for: snippetGroupsLegacyKey)!: groups,
+                                     newKey(for: snippetTemplatesLegacyKey)!: templates]
+        let journal = try encodeEnvelope(values)
+        defaults.set(journal, forKey: snippetJournalKey)
+        guard defaults.synchronize(), defaults.object(forKey: snippetJournalKey) as? Data == journal else {
+            throw MigrationError.incompleteWrite
+        }
+        try recoverPendingSnippets(defaults)
+    }
+
+    static func recoverPendingSnippets(_ defaults: any NativePreferencesAccess) throws {
+        guard let entry = defaults.object(forKey: snippetJournalKey) else { return }
+        guard defaults.object(forKey: restoreJournalKey) == nil, let data = entry as? Data else {
+            throw MigrationError.inconsistentCheckpoint
+        }
+        let values = try decodeEnvelope(data)
+        let groupKey = newKey(for: snippetGroupsLegacyKey)!
+        let templateKey = newKey(for: snippetTemplatesLegacyKey)!
+        guard values.count == 2, let groups = values[groupKey] as? Data,
+              let templates = values[templateKey] as? Data else { throw MigrationError.inconsistentCheckpoint }
+        try validate(groups, for: snippetGroupsLegacyKey)
+        try validate(templates, for: snippetTemplatesLegacyKey)
+        defaults.set(groups, forKey: groupKey)
+        defaults.set(templates, forKey: templateKey)
+        guard defaults.synchronize(), defaults.object(forKey: groupKey) as? Data == groups,
+              defaults.object(forKey: templateKey) as? Data == templates else { throw MigrationError.incompleteWrite }
+        defaults.set(nil, forKey: snippetJournalKey)
+        guard defaults.synchronize(), defaults.object(forKey: snippetJournalKey) == nil else { throw MigrationError.incompleteWrite }
     }
 
     private static func recoverPendingRestore(_ defaults: any NativePreferencesAccess) throws {
