@@ -1,51 +1,35 @@
-name: Test DMG
-
+name: Synthetic Keychain crash boundaries
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+  fault:
+    runs-on: macos-14
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
+      - uses: actions/checkout@v6
+      - name: Compile exact vault source with isolated API hooks
+        shell: bash
         run: |
-          xcodebuild -version
-          swift --version
-          swift --version | grep -E 'Swift version 6\.'
-
-      - name: Install build dependencies
-        run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
-        run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
-        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          shasum -a 256 Sources/SelectiveRemote/UnifiedCredentialVault.swift > "$RUNNER_TEMP/evidence/source-sha256.txt"
+          swiftc Sources/SelectiveRemote/UnifiedCredentialVault.swift scripts/isolated-keychain-boundaries/main.swift -o "$RUNNER_TEMP/keychain-probe"
+      - name: Kill on actual synthetic Keychain call boundaries
+        env:
+          SR_KEYCHAIN_FAULT_ROOT: ${{ runner.temp }}/keychain-write-boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/isolated-keychain-boundaries/supervise.py "$RUNNER_TEMP/keychain-probe" "$RUNNER_TEMP/evidence" | tee "$RUNNER_TEMP/evidence/boundaries.log"
+      - name: Capture failure screenshot
+        if: failure()
+        run: screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
-          path: |
-            dist/*.dmg
-            dist/*.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
+          name: synthetic-keychain-crash-boundaries
+          path: ${{ runner.temp }}/evidence
+          retention-days: 14
