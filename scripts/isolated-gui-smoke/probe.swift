@@ -261,6 +261,29 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-cu
     print("CURRENT_HOST_VISIBLE_IN_DOWNGRADE_UI=\(visible)")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--snippet-dialog-locale" {
+    guard env["SR_BUILD_KIND"] == "candidate", let lang = env["SR_VISUAL_LANGUAGE"], ["english", "russian"].contains(lang) else { stop("locale fixture identity") }
+    let en = lang == "english"
+    let welcome = snapshot(app).filter { element in
+        guard (attr(element, "AXRole") as? String) == "AXWindow", let title = attr(element, "AXTitle") as? String else { return false }
+        return title.contains("What's New") || title.contains("Что нового")
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", en ? "Done" : "Готово") }
+    pressUnique("AXButton", en ? "Snippets" : "Сниппеты")
+    let label = en ? "New Group" : "Новая группа"
+    let candidates = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXButton" && ((attr($0, "AXTitle") as? String) == label || (attr($0, "AXDescription") as? String) == label) }
+    guard let button = candidates.first, AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { stop("group control") }
+    Thread.sleep(forTimeInterval: 1)
+    let title = snapshot(app).contains { (attr($0, "AXRole") as? String) == "AXStaticText" && ((attr($0, "AXValue") as? String) == label || (attr($0, "AXTitle") as? String) == label) }
+    guard title else { stop("localized group title") }
+    setUniqueField(en ? "Group Path" : "Путь группы", "TEST-ONLY-CODEX-LOCALE")
+    let cancel = en ? "Cancel" : "Отмена"; let save = en ? "Save" : "Сохранить"
+    for name in [cancel, save] {
+        guard snapshot(app).contains(where: { (attr($0, "AXRole") as? String) == "AXButton" && ((attr($0, "AXTitle") as? String) == name || (attr($0, "AXDescription") as? String) == name) }) else { stop("localized button: " + name) }
+    }
+    print("EXACT_DMG_GROUP_DIALOG_LOCALE=PASS language=\(lang)")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--trigger-snippet-warning" {
     guard env["SR_BUILD_KIND"] == "candidate", let lang = env["SR_VISUAL_LANGUAGE"], ["english", "russian"].contains(lang),
           env["SR_TEST_SNIPPET_FAILURE"] == "1" else { stop("warning fixture identity") }

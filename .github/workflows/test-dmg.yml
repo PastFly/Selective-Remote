@@ -1,45 +1,11 @@
-name: Snippet warning language and theme matrix
+name: Exact DMG Snippet group dialog locale matrix
 on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  build:
-    runs-on: macos-14
-    timeout-minutes: 35
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: harness
-      - uses: actions/checkout@v6
-        with:
-          path: candidate
-          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-      - name: Build instrumented candidate
-        run: |
-          set -euo pipefail
-          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          mkdir -p "$RUNNER_TEMP/evidence"
-          cd candidate
-          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-          shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
-          cp "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/TerminalSnippetsLibraryView.swift" Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift
-          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/instrument.py"
-          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
-          brew install freerdp sdl3
-          ./scripts/build_app.sh
-          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: synthetic-snippet-warning-app
-          path: ${{ runner.temp }}/evidence
-          retention-days: 7
   visual:
-    needs: build
     runs-on: macos-14
     timeout-minutes: 12
     strategy:
@@ -50,18 +16,22 @@ jobs:
     env:
       SR_VISUAL_LANGUAGE: ${{ matrix.language }}
       SR_VISUAL_THEME: ${{ matrix.theme }}
-      SR_TEST_SNIPPET_FAILURE: '1'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
         with:
-          name: synthetic-snippet-warning-app
+          name: SelectiveRemote-test-229-arm64
+          run-id: 42052055785
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/image
-      - name: Verify warning and recovery in real rendered app
+      - name: Verify exact candidate dialog
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/42052055785 --jq .head_sha)" = d9d756e8f0f2201aa201f2ef517ecad008775882
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/candidate-mount"
           cleanup() {
             result=$?
@@ -85,20 +55,13 @@ jobs:
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
           sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
           sleep 12; kill -0 "$app_pid"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-probe" "$app_pid" --trigger-snippet-warning | tee "$RUNNER_TEMP/evidence/warning.log"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-probe" "$app_pid" --snippet-dialog-locale | tee "$RUNNER_TEMP/evidence/dialog.log"
           screencapture -x "$RUNNER_TEMP/evidence/warning.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
           wait "$app_pid" || true; app_pid=""
-          rm -f "$RUNNER_TEMP/snippet-failure-arm"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
-          sleep 12; kill -0 "$app_pid"
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
-          wait "$app_pid" || true; app_pid=""
-          defaults export "$bundle" "$RUNNER_TEMP/after.plist"
-          python3 scripts/isolated-warning-matrix/verify.py "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/recovery.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: snippet-warning-${{ matrix.language }}-${{ matrix.theme }}
+          name: snippet-dialog-${{ matrix.language }}-${{ matrix.theme }}
           path: ${{ runner.temp }}/evidence
           retention-days: 14
