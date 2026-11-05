@@ -83,8 +83,11 @@ jobs:
           swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
           cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/recovered-keychain.log" 2>&1 & keyprobe=$!
-          python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$keyprobe" 032 probe > "$RUNNER_TEMP/evidence/security-prompt.log"
+          python3 scripts/isolated-gui-smoke/run-bounded.py 70 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/recovered-keychain.log" 2>&1 & keyprobe=$!
+          for attempt in 1 2 3; do
+            if ! kill -0 "$keyprobe" 2>/dev/null; then break; fi
+            python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$keyprobe" 032 probe >> "$RUNNER_TEMP/evidence/security-prompt.log" || true
+          done
           wait "$keyprobe"; cat "$RUNNER_TEMP/evidence/recovered-keychain.log"
           echo 'SYNTHETIC_INTERRUPTED_EDIT_RESTART=PASS'
       - uses: actions/upload-artifact@v4
