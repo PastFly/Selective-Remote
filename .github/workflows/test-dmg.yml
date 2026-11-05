@@ -26,7 +26,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          if [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix ]]; then
+          if [[ "$BUILD_KIND" == snippets-current ]]; then
+            run=41997729511
+            expected=f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+            test "$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
+            gh run download "$run" --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
+            cd "$RUNNER_TEMP/candidate"
+          elif [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippetfix ]]; then
             gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/candidate"
             cd "$RUNNER_TEMP/candidate"
             printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
@@ -49,8 +55,8 @@ jobs:
             expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
             artifact=SelectiveRemote-test-229-arm64
             if [[ "$BUILD_KIND" == snippets-current ]]; then
-              run=41647499832
-              expected=1bb9e373a86df43323c56d3c21c954bd4105c00a
+              run=41997729511
+              expected=f43ad5755aa9bb315860cb99bdc4cbfaceda927c
             fi
             if [[ "$BUILD_KIND" == snippetfix ]]; then
               run=41642527522
@@ -155,7 +161,7 @@ jobs:
             wait "$app_pid" || true
             app_pid=""
             defaults export "$bundle" "$RUNNER_TEMP/snippets-after.plist"
-            python3 scripts/isolated-gui-smoke/verify-snippets.py "$RUNNER_TEMP/snippets-before.plist" "$RUNNER_TEMP/snippets-after.plist" | tee "$RUNNER_TEMP/evidence/snippets-upgrade.json"
+            python3 scripts/isolated-gui-smoke/verify-current-snippets.py "$RUNNER_TEMP/snippets-before.plist" "$RUNNER_TEMP/snippets-after.plist" | tee "$RUNNER_TEMP/evidence/snippets-upgrade.json"
             exit 0
           fi
           inspect_synthetic_keychain() {
