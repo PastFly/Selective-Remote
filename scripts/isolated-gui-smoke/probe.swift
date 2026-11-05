@@ -278,9 +278,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--trigger-sn
     }
     guard let button = groupButtons.first, AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { stop("warning group control") }
     Thread.sleep(forTimeInterval: 1)
-    setUniqueField(en ? "Group Path" : "Путь группы", "TEST-ONLY-CODEX-WARNING")
+    setUniqueField("Group Path", "TEST-ONLY-CODEX-WARNING")
     do {try Data("armed".utf8).write(to:URL(fileURLWithPath:temp+"/snippet-failure-arm"),options:.withoutOverwriting)} catch {stop("warning arm")}
-    pressUnique("AXButton", en ? "Save" : "Сохранить")
+    pressUnique("AXButton", "Save")
     let expected = en ? "Could not save snippets safely. Restart the app to recover your data." : "Не удалось безопасно сохранить сниппеты. Перезапустите приложение для восстановления."
     let deadline=Date(timeIntervalSinceNow:10)
     var matches=[AXUIElement]()

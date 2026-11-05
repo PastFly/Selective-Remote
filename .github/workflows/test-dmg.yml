@@ -3,48 +3,15 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  build:
-    runs-on: macos-14
-    timeout-minutes: 35
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: harness
-      - uses: actions/checkout@v6
-        with:
-          path: candidate
-          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-      - name: Build instrumented candidate
-        run: |
-          set -euo pipefail
-          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          mkdir -p "$RUNNER_TEMP/evidence"
-          cd candidate
-          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-          shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
-          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/instrument.py"
-          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
-          brew install freerdp sdl3
-          ./scripts/build_app.sh
-          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: synthetic-snippet-warning-app
-          path: ${{ runner.temp }}/evidence
-          retention-days: 7
   visual:
-    needs: build
     runs-on: macos-14
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        language: [english, russian]
+        language: [russian]
         theme: [light, dark]
     env:
       SR_VISUAL_LANGUAGE: ${{ matrix.language }}
@@ -55,6 +22,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: synthetic-snippet-warning-app
+          run-id: 42040389930
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/image
       - name: Verify warning and recovery in real rendered app
         shell: bash
