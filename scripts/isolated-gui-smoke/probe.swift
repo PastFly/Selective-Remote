@@ -169,7 +169,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--interrupt-
         guard let stroke=syntheticKeyStroke(character) else {stop("unsupported key")}
         let flags:CGEventFlags=stroke.shift ? .maskShift : []
         post(stroke.code,true,flags);post(stroke.code,false,flags)
-        RunLoop.current.run(until:Date(timeIntervalSinceNow:0.025))
+        RunLoop.current.run(until:Date(timeIntervalSinceNow:0.12))
     }
     let expected = "TEST-ONLY-CODEX-CRASH-REPLACEMENT"
     let confirmDeadline = Date(timeIntervalSinceNow: 3)
