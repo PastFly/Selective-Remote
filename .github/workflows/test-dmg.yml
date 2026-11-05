@@ -71,11 +71,14 @@ jobs:
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
           swiftc scripts/isolated-gui-smoke/CancelSyntheticKeychain.swift -o "$RUNNER_TEMP/cancel-keychain"
           security lock-keychain "$keychain"
+          "$RUNNER_TEMP/cancel-keychain" > "$RUNNER_TEMP/evidence/cancel-read-prompt.log" 2>&1 & cancel_read_pid=$!
           set +e
-          python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/locked-read.log" 2>&1
+          python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/keychain-probe" 032 "$RUNNER_TEMP/evidence/both-collections.json" > "$RUNNER_TEMP/evidence/locked-read.log" 2>&1
           read_result=$?
+          wait "$cancel_read_pid"; cancel_read_result=$?
           set -e
           test "$read_result" -ne 0
+          test "$cancel_read_result" -eq 0
           grep -q 'credential missing or unavailable' "$RUNNER_TEMP/evidence/locked-read.log"
           "$RUNNER_TEMP/cancel-keychain" > "$RUNNER_TEMP/evidence/cancel-prompt.log" 2>&1 & cancel_pid=$!
           set +e
