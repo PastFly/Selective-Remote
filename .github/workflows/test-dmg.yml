@@ -11,7 +11,6 @@ jobs:
       NODE_OPTIONS: --dns-result-order=ipv4first
       TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
       SR_TEST_ANCHOR_TLS_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
-      SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
     services:
       postgres:
         image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
@@ -27,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: actions/setup-node@v6
         with:
           node-version: 22.18.0
@@ -41,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted
-          test "$(git rev-parse HEAD^)" = 97e075529163c3dd701008b8f956b505ee9e3b7e
+          test "$(git rev-parse HEAD^^)" = 97e075529163c3dd701008b8f956b505ee9e3b7e
           certdir="$RUNNER_TEMP/fence-anchor-test"
           mkdir -m 755 "$certdir" "$RUNNER_TEMP/evidence"
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
@@ -59,6 +58,8 @@ jobs:
           done
           docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null
       - name: Two registrations and verifications with fences enabled
+        env:
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
         working-directory: cloud
         shell: bash
         run: |
