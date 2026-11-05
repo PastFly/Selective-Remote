@@ -483,11 +483,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--port-forwa
           AXUIElementPerformAction(tab.0, kAXPressAction as CFString) == .success else { stop("profile Forwarding tab unavailable") }
     Thread.sleep(forTimeInterval: 2)
     pressUnique("AXPopUpButton", "New Tunnel")
-    pressUnique("AXMenuItem", "Local")
+    guard let kind = env["SR_FORWARD_KIND"], ["Remote", "Dynamic"].contains(kind) else { stop("invalid forwarding kind") }
+    pressUnique("AXMenuItem", kind)
     setUniqueField("8080", "52223")
-    setUniqueField("80", "52224")
+    if kind == "Remote" { setUniqueField("80", "52224") }
     pressUnique("AXButton", "Start")
-    print("SYNTHETIC_LOCAL_FORWARD_REQUESTED=YES")
+    print("SYNTHETIC_FORWARD_MODE_REQUESTED=YES")
     exit(0)
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-click-ssh" {
