@@ -24,9 +24,18 @@ func pause(_ name:String) {
 final class BoundaryDefaults: UserDefaults {
     var armed=false
     override func set(_ value:Any?,forKey key:String) {
+        if armed && key=="SelectiveRemote.native032.snippets.pending.v1" {
+            if value == nil { pause("before_clear"); pause("before_remove_clear") }
+            else { pause("before_journal"); pause("before_remove_journal") }
+        }
         if armed && key==groupKey {pause("before_group");pause("before_remove_group")}
         if armed && key==templateKey {pause("before_remove_template")}
         super.set(value,forKey:key)
+        if armed && key=="SelectiveRemote.native032.snippets.pending.v1" {
+            guard super.synchronize() else {fail("journal sync")}
+            if value == nil { pause("after_clear"); pause("after_remove_clear") }
+            else { pause("after_journal"); pause("after_remove_journal") }
+        }
         if armed && key==groupKey {guard super.synchronize() else {fail("group sync")};pause("after_group");pause("after_remove_group")}
         if armed && key==templateKey {guard super.synchronize() else {fail("template sync")};pause("after_template");pause("after_remove_template")}
     }

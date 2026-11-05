@@ -173,4 +173,25 @@ interruptedRestore.set(Data("corrupt".utf8), forKey: "SelectiveRemote.native032.
 var corruptJournalRejected = false
 do { try NativeStorageMigration.prepare(interruptedRestore) } catch { corruptJournalRejected = true }
 check("CORRUPT_RESTORE_JOURNAL_FAILS_CLOSED", corruptJournalRejected && interruptedRestore.object(forKey: newHosts) as? Data == newEdit && interruptedRestore.object(forKey: oldHosts) as? Data == oldData)
+let snippetGroupKey = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.snippetGroups.v1")!
+let snippetTransaction = FakePreferences()
+let originalGroups = try json(["old-group"])
+let changedGroups = try json(["new-group"])
+let originalSnippets = try json(["old-snippet"])
+let changedSnippets = try json(["new-snippet"])
+snippetTransaction.set(originalGroups, forKey: snippetGroupKey)
+snippetTransaction.set(originalSnippets, forKey: newSnippets)
+snippetTransaction.blockedKey = newSnippets
+snippetTransaction.failFlushWhenBlockedWrite = true
+var snippetWriteRejected = false
+do { try NativeStorageMigration.commitSnippets(groups: changedGroups, templates: changedSnippets, to: snippetTransaction) } catch { snippetWriteRejected = true }
+check("SNIPPET_PARTIAL_WRITE_REPORTS_FAILURE", snippetWriteRejected)
+snippetTransaction.blockedKey = nil
+snippetTransaction.flushFails = false
+try NativeStorageMigration.recoverPendingSnippets(snippetTransaction)
+check("SNIPPET_PARTIAL_WRITE_RECOVERS_PAIR", snippetTransaction.object(forKey: snippetGroupKey) as? Data == changedGroups && snippetTransaction.object(forKey: newSnippets) as? Data == changedSnippets && snippetTransaction.object(forKey: "SelectiveRemote.native032.snippets.pending.v1") == nil)
+snippetTransaction.set(Data("bad journal".utf8), forKey: "SelectiveRemote.native032.snippets.pending.v1")
+var snippetJournalRejected = false
+do { try NativeStorageMigration.recoverPendingSnippets(snippetTransaction) } catch { snippetJournalRejected = true }
+check("CORRUPT_SNIPPET_JOURNAL_FAILS_CLOSED", snippetJournalRejected && snippetTransaction.object(forKey: snippetGroupKey) as? Data == changedGroups && snippetTransaction.object(forKey: newSnippets) as? Data == changedSnippets)
 if failures > 0 { exit(1) }
