@@ -167,7 +167,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--backup-war
     while Date() < deadline {
         let nodes=snapshot(app)
         let warning=nodes.contains { element in
-            ["AXTitle","AXDescription","AXValue"].compactMap { attr(element,$0) as? String }.contains { $0.contains("Restore is temporarily unavailable to protect your data") || $0.contains("Восстановление временно недоступно для защиты данных") }
+            ["AXTitle","AXDescription","AXValue"].compactMap { attr(element,$0) as? String }.contains { $0.contains("Восстановление временно недоступно для защиты данных") }
         }
         let buttons=nodes.filter { element in
             (attr(element,"AXRole") as? String)=="AXButton" && ["AXTitle","AXDescription"].contains { key in ["Restore archive…","Восстановить архив…"].contains((attr(element,key) as? String) ?? "") }
