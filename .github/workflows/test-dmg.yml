@@ -1,51 +1,23 @@
-name: Test DMG
-
+name: Isolated legacy and current collection regression
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build:
-    name: Build ARM64 test DMG
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
-      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
-      SELECTIVEREMOTE_RELEASE_MODE: community
+  collections:
+    runs-on: macos-14
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Swift 6 toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-          swift --version | grep -E 'Swift version 6\.'
-
-      - name: Install build dependencies
-        run: brew install freerdp sdl3
-
-      - name: Build ad-hoc signed DMG
-        run: ./scripts/build_app.sh
-
-      - name: Test packaged managed Jump Host transport
-        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
-
-      - name: Upload test DMG
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v6
         with:
-          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
-          path: |
-            dist/*.dmg
-            dist/*.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
+          fetch-depth: 0
+      - run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          set -o pipefail
+          python3 Tests/IntegrityFixtures/NativeCollections/run.py 2>&1 | tee "$RUNNER_TEMP/evidence/collections.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-legacy-current-collections
+          path: ${{ runner.temp }}/evidence
+          retention-days: 14
