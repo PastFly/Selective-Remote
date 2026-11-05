@@ -12,6 +12,14 @@ jobs:
       - name: Test Swift package
         run: |
           set -o pipefail
+          ls -1 /Applications | grep '^Xcode' || true
+          if [ -d /Applications/Xcode_16.2.app ]; then
+            export DEVELOPER_DIR=/Applications/Xcode_16.2.app/Contents/Developer
+          elif [ -d /Applications/Xcode_16.1.app ]; then
+            export DEVELOPER_DIR=/Applications/Xcode_16.1.app/Contents/Developer
+          elif [ -d /Applications/Xcode_16.0.app ]; then
+            export DEVELOPER_DIR=/Applications/Xcode_16.0.app/Contents/Developer
+          fi
           swift --version
           swift test 2>&1 | tee "$RUNNER_TEMP/swift-regression.log"
       - name: Test migration fault handling
