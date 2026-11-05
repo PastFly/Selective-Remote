@@ -510,6 +510,21 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--double-cli
     print("SYNTHETIC_HOST_DOUBLE_CLICK_POSTED=YES")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--create-sftp-host" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP fixture runner identity") }
+    let welcome = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", "Done") }
+    pressUnique("AXPopUpButton", "Add")
+    pressUnique("AXMenuItem", "New SSH")
+    setUniqueField("SSH Server", "TEST-ONLY-CODEX-LOOPBACK")
+    setUniqueField("server.example.com or a Host from ~/.ssh/config", "127.0.0.1")
+    setUniqueField("username", "runner")
+    setUniqueField("22", "52222")
+    print("SYNTHETIC_SFTP_HOST_CREATED=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp" {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP fixture runner identity") }
     for element in snapshot(app) where (attr(element, "AXDescription") as? String) == "SFTP" || (attr(element, "AXTitle") as? String) == "SFTP" {
@@ -534,7 +549,29 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         var point = CGPoint.zero
         return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 300
     }
-    guard remoteSelectors.count == 1, AXUIElementPerformAction(remoteSelectors[0], kAXPressAction as CFString) == .success else { stop("synthetic SFTP remote selector") }
+    guard remoteSelectors.count == 1,
+          let position = attr(remoteSelectors[0], "AXPosition"), let size = attr(remoteSelectors[0], "AXSize"),
+          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("synthetic SFTP remote selector") }
+    var point = CGPoint.zero, dimensions = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions),
+          dimensions.width > 0, dimensions.height > 0, running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP selector frame") }
+    point.x += dimensions.width / 2; point.y += dimensions.height / 2
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    var hit: AXUIElement?
+    var hitPID: pid_t = 0
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid else { stop("SFTP selector hit test") }
+    for clicks in [1, 2] {
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP selector double click") }
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
+        up.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+    }
+    print("SFTP_SELECTOR_DOUBLE_CLICK_POSTED=YES")
     let deadline = Date(timeIntervalSinceNow: 35)
     while Date() < deadline {
         let rows = snapshot(app).filter { element in
