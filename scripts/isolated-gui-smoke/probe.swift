@@ -157,6 +157,26 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--backup-warning" {
+    guard env["SR_BUILD_KIND"] == "candidate", CGPreflightPostEventAccess(), running.activate(options:[.activateIgnoringOtherApps]) else { stop("backup warning fixture") }
+    RunLoop.current.run(until:Date(timeIntervalSinceNow:0.5))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let down=CGEvent(keyboardEventSource:nil,virtualKey:43,keyDown:true), let up=CGEvent(keyboardEventSource:nil,virtualKey:43,keyDown:false) else { stop("settings shortcut") }
+    down.flags = .maskCommand;up.flags = .maskCommand;down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
+    let deadline=Date(timeIntervalSinceNow:20)
+    while Date() < deadline {
+        let nodes=snapshot(app)
+        let warning=nodes.contains { element in
+            ["AXTitle","AXDescription","AXValue"].compactMap { attr(element,$0) as? String }.contains { $0.contains("Restore is temporarily unavailable to protect your data") || $0.contains("Восстановление временно недоступно для защиты данных") }
+        }
+        let buttons=nodes.filter { element in
+            (attr(element,"AXRole") as? String)=="AXButton" && ["AXTitle","AXDescription"].contains { key in ["Restore archive…","Восстановить архив…"].contains((attr(element,key) as? String) ?? "") }
+        }
+        if warning && buttons.count==1 && (attr(buttons[0],"AXEnabled") as? Bool)==false { print("BACKUP_RESTORE_WARNING_AND_DISABLED_BUTTON=PASS");exit(0) }
+        RunLoop.current.run(until:Date(timeIntervalSinceNow:0.3))
+    }
+    stop("backup restore warning or disabled button unavailable")
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
