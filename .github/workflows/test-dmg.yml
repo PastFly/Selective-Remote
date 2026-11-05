@@ -187,7 +187,7 @@ jobs:
           auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
           printf 'auth_delta=%s\n' "$((auth_count-baseline_auth_count))" | tee "$RUNNER_TEMP/evidence/double-click-counts.txt"
           test "$((auth_count-baseline_auth_count))" -eq 2
-          python3 scripts/isolated-gui-smoke/verify-auth-correlation.py "$fixture/correlation.log" "$RUNNER_TEMP/evidence/correlation-result.json"
+          python3 scripts/isolated-gui-smoke/verify-auth-correlation.py "$fixture/correlation.log" "$RUNNER_TEMP/evidence/correlation-result.json" "$RUNNER_TEMP/evidence/processes.jsonl"
           screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
           wait "$app_pid" || true
