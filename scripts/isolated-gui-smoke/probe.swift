@@ -157,6 +157,14 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--keychain-locked-save" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("keychain fixture identity") }
+    pressUnique("AXButton", "Authentication")
+    setUniqueField("Пароль SSH-сервера", "TEST-ONLY-CODEX-REPLACEMENT", verifyVisibleValue: false)
+    pressUnique("AXButton", "Save")
+    print("SYNTHETIC_LOCKED_KEYCHAIN_SAVE_REQUESTED=YES")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
