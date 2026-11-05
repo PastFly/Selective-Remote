@@ -182,9 +182,15 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--drag-host-
         guard let d=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:p,mouseButton:.left), let u=CGEvent(mouseEventSource:nil,mouseType:.leftMouseUp,mouseCursorPosition:p,mouseButton:.left) else { stop("group click") }
         d.post(tap:.cghidEventTap);u.post(tap:.cghidEventTap)
     }
-    var hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
-    if hosts.isEmpty { click(groupPoint); Thread.sleep(forTimeInterval:1); hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" } }
     let targets=matches("No Folder")
+    guard let firstTarget=targets.first, let targetPosition=position(firstTarget) else { stop("target folder unavailable") }
+    var hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
+    if hosts.isEmpty {
+        click(CGPoint(x:targetPosition.x-50,y:groupPoint.y)); Thread.sleep(forTimeInterval:1)
+        hosts=matches("TEST-ONLY-CODEX-LIVE-NEW").filter { (attr($0,"AXRole") as? String) == "AXButton" }
+    }
+    if let host=hosts.first { _ = AXUIElementPerformAction(host, "AXScrollToVisible" as CFString); Thread.sleep(forTimeInterval:1) }
+    print("SYNTHETIC_DRAG_MATCHES hosts=\(hosts.count) targets=\(targets.count)")
     guard hosts.count == 1, let target=targets.first, let from=position(hosts[0]), let to=position(target),
           NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("drag source or destination unavailable") }
     guard let down=CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:from,mouseButton:.left) else { stop("drag down") }; down.post(tap:.cghidEventTap)
