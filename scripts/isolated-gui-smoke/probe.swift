@@ -274,8 +274,8 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
     }
     guard let groupButton = groupButtons.first, AXUIElementPerformAction(groupButton, kAXPressAction as CFString) == .success else { stop("new group control") }
     Thread.sleep(forTimeInterval: 1)
-    setUniqueField("Путь группы", "TEST-ONLY-CODEX-SNIPPET-GROUP")
-    pressUnique("AXButton", "Сохранить")
+    setUniqueField("Group Path", "TEST-ONLY-CODEX-SNIPPET-GROUP")
+    pressUnique("AXButton", "Save")
     print("SYNTHETIC_GROUP_SAVE_REQUESTED=YES")
     let savedGroups = snapshot(app).filter { element in
         (attr(element, "AXRole") as? String) == "AXButton" &&
@@ -312,7 +312,7 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
         let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
         if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty || role == "AXTextArea" {print("SNIPPET_EDITOR role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")}
     }
-    let titles = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextField" && (attr($0, "AXPlaceholderValue") as? String) == "Название" }
+    let titles = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextField" && ["Название", "Name"].contains((attr($0, "AXPlaceholderValue") as? String) ?? "") }
     let commands = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextArea" }
     let targets = editorNodes.filter { element in
         (attr(element, "AXRole") as? String) == "AXCheckBox" &&
