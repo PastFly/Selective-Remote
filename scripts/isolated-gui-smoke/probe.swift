@@ -261,6 +261,42 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-cu
     print("CURRENT_HOST_VISIBLE_IN_DOWNGRADE_UI=\(visible)")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--trigger-snippet-warning" {
+    guard env["SR_BUILD_KIND"] == "candidate", let lang = env["SR_VISUAL_LANGUAGE"], ["english", "russian"].contains(lang),
+          env["SR_TEST_SNIPPET_FAILURE"] == "1" else { stop("warning fixture identity") }
+    let en = lang == "english"
+    let welcome = snapshot(app).filter { element in
+        guard (attr(element, "AXRole") as? String) == "AXWindow", let title=attr(element, "AXTitle") as? String else {return false}
+        return title.contains("What's New") || title.contains("Что нового")
+    }
+    if !welcome.isEmpty { pressUnique("AXButton", en ? "Done" : "Готово") }
+    pressUnique("AXButton", en ? "Snippets" : "Сниппеты")
+    let groupLabel = en ? "New Group" : "Новая группа"
+    let groupButtons = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXButton" &&
+        ((attr($0, "AXTitle") as? String) == groupLabel || (attr($0, "AXDescription") as? String) == groupLabel)
+    }
+    guard let button = groupButtons.first, AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { stop("warning group control") }
+    Thread.sleep(forTimeInterval: 1)
+    setUniqueField(en ? "Group Path" : "Путь группы", "TEST-ONLY-CODEX-WARNING")
+    do {try Data("armed".utf8).write(to:URL(fileURLWithPath:temp+"/snippet-failure-arm"),options:.withoutOverwriting)} catch {stop("warning arm")}
+    pressUnique("AXButton", en ? "Save" : "Сохранить")
+    let expected = en ? "Could not save snippets safely. Restart the app to recover your data." : "Не удалось безопасно сохранить сниппеты. Перезапустите приложение для восстановления."
+    let deadline=Date(timeIntervalSinceNow:10)
+    var matches=[AXUIElement]()
+    while Date()<deadline {
+        matches=snapshot(app).filter { e in ["AXTitle","AXDescription","AXValue"].compactMap { attr(e,$0) as? String }.contains { $0.contains(expected) } }
+        if !matches.isEmpty {break}
+        RunLoop.current.run(until:Date(timeIntervalSinceNow:0.2))
+    }
+    guard let warning=matches.first else {stop("localized warning unavailable")}
+    let role=attr(warning,"AXRole") as? String ?? "unknown"
+    guard let pos=attr(warning,"AXPosition"),let size=attr(warning,"AXSize"),CFGetTypeID(pos)==AXValueGetTypeID(),CFGetTypeID(size)==AXValueGetTypeID() else {stop("warning accessibility geometry")}
+    var origin=CGPoint.zero,extent=CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(pos,to:AXValue.self),.cgPoint,&origin), AXValueGetValue(unsafeBitCast(size,to:AXValue.self),.cgSize,&extent),extent.width>0,extent.height>0 else {stop("warning invalid geometry")}
+    print("SNIPPET_WARNING=PASS language=\(lang) role=\(role) x=\(origin.x) y=\(origin.y) width=\(extent.width) height=\(extent.height)")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-snippets" {
     guard ["snippets", "snippets-current", "snippetfix"].contains(env["SR_BUILD_KIND"] ?? "") else { stop("snippet inspection requires isolated baseline") }
     let welcome = snapshot(app).filter {

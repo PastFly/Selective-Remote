@@ -1,508 +1,103 @@
-name: Isolated candidate GUI launch smoke
+name: Snippet warning language and theme matrix
 on:
   workflow_dispatch:
-    inputs:
-      build:
-        description: Image to launch
-        type: choice
-        required: true
-        options: [baseline, candidate, upgrade, snippets, snippets-current, snippetfix, network, network-current, snippet-fix-tests, ci-gaps]
-        default: candidate
 permissions:
   contents: read
-  actions: read
 jobs:
-  smoke:
-    if: ${{ inputs.build != 'ci-gaps' && inputs.build != 'snippet-fix-tests' && inputs.build != 'network' && inputs.build != 'network-current' }}
+  build:
     runs-on: macos-14
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-      - name: Fetch exact candidate artifact and check provenance
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_KIND: ${{ inputs.build }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          if [[ "$BUILD_KIND" == snippets-current ]]; then
-            run=41997729511
-            expected=f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-            test "$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
-            gh run download "$run" --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
-            cd "$RUNNER_TEMP/candidate"
-          elif [[ "$BUILD_KIND" == baseline || "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippetfix ]]; then
-            gh release download v0.31.0 --repo PastFly/Selective-Remote --pattern 'SelectiveRemote-0.31.0-arm64.dmg*' --dir "$RUNNER_TEMP/candidate"
-            cd "$RUNNER_TEMP/candidate"
-            printf '%s  %s\n' '1aeb31f5992216ac8aed3109b509c3fda78941adeef6142fbefbbeba1181a37f' 'SelectiveRemote-0.31.0-arm64.dmg' | shasum -a 256 -c -
-          elif [[ "$BUILD_KIND" == candidate ]]; then
-            expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
-            actual=$(gh api repos/PastFly/Selective-Remote/actions/runs/41628243576 --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
-            test "$actual" = "$expected"
-            gh run download 41628243576 --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
-            cd "$RUNNER_TEMP/candidate"
-          else
-            exit 1
-          fi
-          shopt -s nullglob
-          images=(*.dmg); hashes=(*.dmg.sha256)
-          test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
-          shasum -a 256 -c "${hashes[0]}"
-          shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/image-sha256.txt"
-          if [[ "$BUILD_KIND" == upgrade || "$BUILD_KIND" == snippets || "$BUILD_KIND" == snippets-current || "$BUILD_KIND" == snippetfix ]]; then
-            run=41628243576
-            expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
-            artifact=SelectiveRemote-test-229-arm64
-            if [[ "$BUILD_KIND" == snippets-current ]]; then
-              run=41997729511
-              expected=f43ad5755aa9bb315860cb99bdc4cbfaceda927c
-            fi
-            if [[ "$BUILD_KIND" == snippetfix ]]; then
-              run=41642527522
-              expected=f9a83583c3eb2e674f07d2312025bffe1313966e
-              artifact=$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run/artifacts" --jq '.artifacts | map(select(.name | startswith("SelectiveRemote-test-"))) | if length == 1 then .[0].name else error("unexpected artifacts") end')
-            fi
-            actual=$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')
-            test "$actual" = "$expected"
-            mkdir "$RUNNER_TEMP/upgrade-image"
-            gh run download "$run" --repo PastFly/Selective-Remote --name "$artifact" --dir "$RUNNER_TEMP/upgrade-image"
-            cd "$RUNNER_TEMP/upgrade-image"
-            images=(*.dmg); hashes=(*.dmg.sha256)
-            test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
-            shasum -a 256 -c "${hashes[0]}"
-            shasum -a 256 "${images[0]}" | tee "$RUNNER_TEMP/evidence/upgrade-image-sha256.txt"
-          fi
-      - name: Launch actual app in the disposable runner
-        env:
-          SR_BUILD_KIND: ${{ inputs.build }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          run_build="$SR_BUILD_KIND"
-          if [[ "$run_build" == upgrade ]]; then export SR_BUILD_KIND=baseline; fi
-          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          keychain="$RUNNER_TEMP/selective-remote-synthetic.keychain-db"
-          original_default=$(security default-keychain -d user | python3 -c 'import shlex,sys; a=shlex.split(sys.stdin.read()); print(a[0] if a else "")')
-          original_keychains=()
-          while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
-          images=("$RUNNER_TEMP"/candidate/*.dmg)
-          mount="$RUNNER_TEMP/candidate-mount"
-          mkdir "$mount"
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${images[0]}" > "$RUNNER_TEMP/evidence/mount.log"
-          app="$mount/Selective Remote.app"
-          test -d "$app"
-          codesign --verify --deep --strict --verbose=2 "$app" 2>&1 | tee "$RUNNER_TEMP/evidence/codesign.log"
-          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
-          binary="$app/Contents/MacOS/$executable"
-          test -x "$binary"
-          shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/executable-sha256.txt"
-          cleanup() {
-            local result=$?
-            if [[ "$result" -ne 0 ]]; then
-              screencapture -x "$RUNNER_TEMP/evidence/failure-screen.png" || true
-            fi
-            if test -n "${app_pid:-}"; then
-              ps -p "$app_pid" -o pid=,ppid=,state=,comm= > "$RUNNER_TEMP/evidence/cleanup-process.txt" 2>&1 || true
-              screencapture -x "$RUNNER_TEMP/evidence/cleanup-screen.png" || true
-              kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true
-            fi
-            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
-            if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
-            if [[ "${#original_keychains[@]}" -gt 0 ]]; then security list-keychains -d user -s "${original_keychains[@]}" || true; fi
-            security delete-keychain "$keychain" || true
-            rm -f "$RUNNER_TEMP/synthetic-keychain-password"
-          }
-          trap cleanup EXIT
-          keychain_password=$(openssl rand -hex 24)
-          umask 077
-          printf '%s' "$keychain_password" > "$RUNNER_TEMP/synthetic-keychain-password"
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 1800 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security list-keychains -d user -s "$keychain"
-          security default-keychain -d user -s "$keychain"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
-          app_pid=$!
-          sleep 12
-          kill -0 "$app_pid"
-          swiftc scripts/isolated-gui-smoke/keyboard-tests/main.swift scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/keyboard-tests"
-          "$RUNNER_TEMP/keyboard-tests"
-          python3 -m unittest discover -s scripts/isolated-gui-smoke/keyboard-tests -p 'test_*.py' -v
-          cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
-          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
-          swiftc scripts/isolated-gui-smoke/KeychainProbe.swift -o "$RUNNER_TEMP/keychain-probe"
-          cp scripts/isolated-gui-smoke/SecurityPrompt.swift "$RUNNER_TEMP/main.swift"
-          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/security-prompt"
-          if [[ "$SR_BUILD_KIND" == snippets || "$SR_BUILD_KIND" == snippets-current || "$SR_BUILD_KIND" == snippetfix ]]; then
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 70 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-snippets | tee "$RUNNER_TEMP/evidence/snippets-ui.log"
-            screencapture -x "$RUNNER_TEMP/evidence/snippets-screen.png"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
-            wait "$app_pid" || true
-            app_pid=""
-            bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
-            defaults export "$bundle" "$RUNNER_TEMP/snippets-before.plist"
-            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
-            upgraded_images=("$RUNNER_TEMP"/upgrade-image/*.dmg)
-            test "${#upgraded_images[@]}" -eq 1
-            hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${upgraded_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
-            codesign --verify --deep --strict "$app"
-            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "$bundle"
-            executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
-            binary="$app/Contents/MacOS/$executable"
-            export SR_BUILD_KIND=candidate
-            sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/snippets-upgrade-app.log" 2>&1 &
-            app_pid=$!
-            sleep 12
-            kill -0 "$app_pid"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-snippets | tee "$RUNNER_TEMP/evidence/snippets-upgrade-ui.log"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
-            wait "$app_pid" || true
-            app_pid=""
-            defaults export "$bundle" "$RUNNER_TEMP/snippets-after.plist"
-            python3 scripts/isolated-gui-smoke/verify-current-snippets.py "$RUNNER_TEMP/snippets-before.plist" "$RUNNER_TEMP/snippets-after.plist" | tee "$RUNNER_TEMP/evidence/snippets-upgrade.json"
-            exit 0
-          fi
-          inspect_synthetic_keychain() {
-            local version="$1" output="$2"
-            python3 scripts/isolated-gui-smoke/run-bounded.py 35 "$RUNNER_TEMP/keychain-probe" "$version" "$RUNNER_TEMP/evidence/baseline-persistence.json" > "$output" 2>&1 &
-            local probe_pid=$!
-            if ! python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$probe_pid" "$version" probe; then
-              kill "$probe_pid" 2>/dev/null || true
-              wait "$probe_pid" || true
-              return 1
-            fi
-            wait "$probe_pid"
-            cat "$output"
-          }
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" | tee "$RUNNER_TEMP/evidence/probe.log"
-          screencapture -x "$RUNNER_TEMP/evidence/synthetic-app-screen.png"
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/termination.log"
-          wait "$app_pid" || true
-          app_pid=""
-          if [[ "$SR_BUILD_KIND" == baseline ]]; then
-            bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
-            defaults export "$bundle" "$RUNNER_TEMP/first.plist"
-            sleep 1
-            defaults export "$bundle" "$RUNNER_TEMP/second.plist"
-            python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/second.plist" | tee "$RUNNER_TEMP/evidence/baseline-persistence.json"
-            inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/baseline-keychain.log"
-            sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-restart.log" 2>&1 &
-            app_pid=$!
-            sleep 12
-            kill -0 "$app_pid"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-baseline | tee "$RUNNER_TEMP/evidence/restart-ui.log"
-            screencapture -x "$RUNNER_TEMP/evidence/baseline-reopened.png"
-            SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/restart-termination.log"
-            wait "$app_pid" || true
-            app_pid=""
-            defaults export "$bundle" "$RUNNER_TEMP/after-restart.plist"
-            python3 scripts/isolated-gui-smoke/verify-baseline.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/restart-persistence.json"
-            python3 scripts/isolated-gui-smoke/compare-legacy.py "$RUNNER_TEMP/first.plist" "$RUNNER_TEMP/after-restart.plist" | tee "$RUNNER_TEMP/evidence/legacy-baseline-restart.json"
-            if [[ "$run_build" == upgrade ]]; then
-              hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
-              upgraded_images=("$RUNNER_TEMP"/upgrade-image/*.dmg)
-              test "${#upgraded_images[@]}" -eq 1
-              hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${upgraded_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
-              test -d "$app"
-              codesign --verify --deep --strict "$app"
-              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "$bundle"
-              executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
-              binary="$app/Contents/MacOS/$executable"
-              shasum -a 256 "$binary" | tee "$RUNNER_TEMP/evidence/upgrade-executable-sha256.txt"
-              export SR_BUILD_KIND=candidate
-              sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-upgrade.log" 2>&1 &
-              app_pid=$!
-              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 25 "$RUNNER_TEMP/security-prompt" "$RUNNER_TEMP/synthetic-keychain-password" "$app_pid" 031 candidate | tee "$RUNNER_TEMP/evidence/candidate-keychain-prompt.log"
-              sleep 12
-              kill -0 "$app_pid"
-              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --inspect-upgrade | tee "$RUNNER_TEMP/evidence/upgrade-ui.log"
-              screencapture -x "$RUNNER_TEMP/evidence/upgrade-screen.png"
-              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/upgrade-termination.log"
-              wait "$app_pid" || true
-              app_pid=""
-              defaults export "$bundle" "$RUNNER_TEMP/upgraded.plist"
-              python3 scripts/isolated-gui-smoke/compare-legacy.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/legacy-upgrade.json"
-              python3 scripts/isolated-gui-smoke/verify-upgrade.py "$RUNNER_TEMP/after-restart.plist" "$RUNNER_TEMP/upgraded.plist" | tee "$RUNNER_TEMP/evidence/upgrade-persistence.json"
-              inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/legacy-keychain-after-upgrade.log"
-              inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/upgraded-keychain.log"
-              hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1
-              baseline_images=("$RUNNER_TEMP"/candidate/*.dmg)
-              test "${#baseline_images[@]}" -eq 1
-              hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${baseline_images[0]}" >> "$RUNNER_TEMP/evidence/mount.log"
-              codesign --verify --deep --strict "$app"
-              executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
-              binary="$app/Contents/MacOS/$executable"
-              export SR_BUILD_KIND=baseline
-              sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app-downgrade.log" 2>&1 &
-              app_pid=$!
-              sleep 12
-              kill -0 "$app_pid"
-              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --verify-baseline | tee "$RUNNER_TEMP/evidence/downgrade-ui.log"
-              SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d " " -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate | tee "$RUNNER_TEMP/evidence/downgrade-termination.log"
-              wait "$app_pid" || true
-              app_pid=""
-              defaults export "$bundle" "$RUNNER_TEMP/downgraded.plist"
-              python3 scripts/isolated-gui-smoke/verify-downgrade.py "$RUNNER_TEMP/upgraded.plist" "$RUNNER_TEMP/downgraded.plist" | tee "$RUNNER_TEMP/evidence/downgrade-persistence.json"
-              inspect_synthetic_keychain 031 "$RUNNER_TEMP/evidence/legacy-keychain-after-downgrade.log"
-              inspect_synthetic_keychain 032 "$RUNNER_TEMP/evidence/upgraded-keychain-after-downgrade.log"
-            fi
-          fi
-      - name: Upload synthetic evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: isolated-candidate-gui-smoke
-          path: ${{ runner.temp }}/evidence/
-          if-no-files-found: error
-          retention-days: 7
-  snippet-fix-tests:
-    if: ${{ inputs.build == 'snippet-fix-tests' }}
-    runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+      SELECTIVEREMOTE_RELEASE_MODE: community
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: f9a83583c3eb2e674f07d2312025bffe1313966e
-      - name: Test exact temporary fix and related snippet suites
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = f9a83583c3eb2e674f07d2312025bffe1313966e
-          swift test --filter Snippet
-  skipped-v1-and-browser:
-    if: ${{ inputs.build == 'ci-gaps' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
-        env:
-          POSTGRES_DB: selective_remote_test
-          POSTGRES_USER: selective_remote_test
-          POSTGRES_PASSWORD: integration-only-password
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U selective_remote_test -d selective_remote_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    steps:
+          path: harness
       - uses: actions/checkout@v6
         with:
-          ref: 4d3153d41bde955dcfe13b8f0ac8a5b28e15a692
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22.18.0
-          cache: npm
-          cache-dependency-path: cloud/package-lock.json
-      - working-directory: cloud
-        run: npm ci
-      - name: Exercise skipped V1 and browser cases
-        working-directory: cloud
-        env:
-          TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+          path: candidate
+          ref: f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+      - name: Build instrumented candidate
         run: |
           set -euo pipefail
-          browser="$(command -v google-chrome || command -v chromium || true)"
-          test -n "$browser"
-          PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
-            node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs tests/public-mobile-locale-browser.test.mjs tests/whole-publication-browser-postgres.test.mjs
-
-  double-click:
-    if: ${{ inputs.build == 'network' || inputs.build == 'network-current' }}
+          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
+          mkdir -p "$RUNNER_TEMP/evidence"
+          cd candidate
+          test "$(git rev-parse HEAD)" = f43ad5755aa9bb315860cb99bdc4cbfaceda927c
+          shasum -a 256 Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/source-before-instrumentation.sha256"
+          python3 "$GITHUB_WORKSPACE/harness/scripts/isolated-warning-matrix/instrument.py"
+          git diff -- Sources/SelectiveRemote/NativeStorageMigration.swift > "$RUNNER_TEMP/evidence/instrumentation.diff"
+          brew install freerdp sdl3
+          ./scripts/build_app.sh
+          cp dist/*.dmg dist/*.dmg.sha256 "$RUNNER_TEMP/evidence/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-snippet-warning-app
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+  visual:
+    needs: build
     runs-on: macos-14
     timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [english, russian]
+        theme: [light, dark]
+    env:
+      SR_VISUAL_LANGUAGE: ${{ matrix.language }}
+      SR_VISUAL_THEME: ${{ matrix.theme }}
+      SR_TEST_SNIPPET_FAILURE: '1'
     steps:
       - uses: actions/checkout@v6
-      - name: Fetch exact PR229 candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_KIND: ${{ inputs.build }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/evidence"
-          run=41628243576
-          expected=5b35c409ee79cf4f48eb10424bde22acf41fe1f5
-          if [[ "$BUILD_KIND" == network-current ]]; then
-            run=41737602354
-            expected=db7c5920a85c74e2008166298d2ac80cab66f857
-          fi
-          test "$(gh api "repos/PastFly/Selective-Remote/actions/runs/$run" --jq 'select(.status == "completed" and .conclusion == "success") | .head_sha')" = "$expected"
-          gh run download "$run" --repo PastFly/Selective-Remote --name SelectiveRemote-test-229-arm64 --dir "$RUNNER_TEMP/candidate"
-          cd "$RUNNER_TEMP/candidate"
-          shopt -s nullglob
-          images=(*.dmg); hashes=(*.dmg.sha256)
-          test "${#images[@]}" -eq 1 && test "${#hashes[@]}" -eq 1
-          shasum -a 256 -c "${hashes[0]}"
-      - name: Exercise real SSH with synthetic loopback server
+      - uses: actions/download-artifact@v4
+        with:
+          name: synthetic-snippet-warning-app
+          path: ${{ runner.temp }}/image
+      - name: Verify warning and recovery in real rendered app
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          test "${HOME:-}" = /Users/runner
-          fixture="$RUNNER_TEMP/ssh-fixture"
-          mount="$RUNNER_TEMP/candidate-mount"
-          control_probe_dir="/private/tmp/selectiveremote-$(id -u)-a11ce001"
-          ssh_dir_created=no
-          config_created=no
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/candidate-mount"
           cleanup() {
-            local result=$?
+            result=$?
             if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
-            if [[ "$result" -ne 0 && -f "$fixture/sshd.log" ]]; then
-              printf 'SYNTHETIC_SSHD_AUTH_COUNT=%s\n' "$(grep -c 'Accepted publickey' "$fixture/sshd.log" || true)"
-              printf 'SYNTHETIC_SSHD_SFTP_COUNT=%s\n' "$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)"
-              printf 'SYNTHETIC_SSHD_ERROR_COUNT=%s\n' "$(grep -ci 'error\|failed\|denied' "$fixture/sshd.log" || true)"
-            fi
-            if [[ -n "${probe_pid:-}" ]]; then kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" 2>/dev/null || true; fi
-            if [[ -n "${app_pid:-}" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
-            if [[ -n "${sshd_pid:-}" ]]; then sudo kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
-            hdiutil detach "$mount" >> "$RUNNER_TEMP/evidence/mount.log" 2>&1 || true
-            if [[ "$config_created" = yes ]]; then rm -f "$HOME/.ssh/config"; fi
-            if [[ "$ssh_dir_created" = yes ]]; then rmdir "$HOME/.ssh" || true; fi
-            if [[ "${control_probe_created:-no}" = yes ]]; then rm -f "$control_probe_dir/probe.sock"; rmdir "$control_probe_dir" || true; fi
+            if [[ -n "${app_pid:-}" ]]; then kill -KILL "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi
+            hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          mkdir -m 700 "$fixture"
-          mkdir -m 700 "$fixture/sftp-root" "$fixture/local"
-          mkdir -m 700 "$fixture/sftp-root/TEST-ONLY-CODEX-DIRECTORY"
-          printf synthetic > "$fixture/sftp-root/TEST-ONLY-CODEX-DIRECTORY/TEST-ONLY-CODEX-NESTED"
-          printf '%s\n' TEST-ONLY-CODEX-SFTP-CONTENT > "$fixture/sftp-root/TEST-ONLY-CODEX-SFTP-CHECK"
-          printf '%s\n' TEST-ONLY-CODEX-SFTP-UPLOAD-CONTENT > "$fixture/local/TEST-ONLY-CODEX-UPLOAD"
-          ssh-keygen -q -t ed25519 -N '' -f "$fixture/hostkey"
-          ssh-keygen -q -t ed25519 -N '' -f "$fixture/clientkey"
-          cp "$fixture/clientkey.pub" "$fixture/authorized_keys"
-          chmod 600 "$fixture/authorized_keys"
-          cat > "$fixture/sshd_config" <<EOF
-          Port 52222
-          ListenAddress 127.0.0.1
-          HostKey $fixture/hostkey
-          PidFile $fixture/sshd.pid
-          AuthorizedKeysFile $fixture/authorized_keys
-          StrictModes no
-          PubkeyAuthentication yes
-          PasswordAuthentication no
-          KbdInteractiveAuthentication no
-          PermitRootLogin no
-          AllowUsers runner
-          AllowTcpForwarding no
-          X11Forwarding no
-          Subsystem sftp internal-sftp -d $fixture/sftp-root
-          UsePAM no
-          LogLevel VERBOSE
-          EOF
-          test ! -e "$HOME/.ssh/config"
-          if [[ ! -d "$HOME/.ssh" ]]; then mkdir -m 700 "$HOME/.ssh"; ssh_dir_created=yes; fi
-          set -o noclobber
-          cat > "$HOME/.ssh/config" <<EOF
-          Host 127.0.0.1
-            IdentityFile $fixture/clientkey
-            IdentitiesOnly yes
-            UserKnownHostsFile $fixture/known_hosts
-          EOF
-          config_created=yes
-          set +o noclobber
-          chmod 600 "$HOME/.ssh/config"
-          printf '[127.0.0.1]:52222 %s\n' "$(cut -d ' ' -f 1,2 "$fixture/hostkey.pub")" > "$fixture/known_hosts"
-          mkdir "$mount"
-          sudo /usr/sbin/sshd -D -e -f "$fixture/sshd_config" > "$fixture/sshd.log" 2>&1 &
-          sshd_pid=$!
-          sleep 3
-          kill -0 "$sshd_pid"
-          ssh -o BatchMode=yes -o ConnectTimeout=5 -p 52222 runner@127.0.0.1 'printf TEST-ONLY-CODEX-SSH-ENDPOINT' | grep -Fx TEST-ONLY-CODEX-SSH-ENDPOINT
-          baseline_auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-          test "$baseline_auth_count" -ge 1
-          images=("$RUNNER_TEMP"/candidate/*.dmg)
-          test "${#images[@]}" -eq 1
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${images[0]}" > "$RUNNER_TEMP/evidence/mount.log"
-          app="$mount/Selective Remote.app"
+          (cd "$RUNNER_TEMP/image"; shasum -a 256 -c ./*.dmg.sha256)
+          images=("$RUNNER_TEMP"/image/*.dmg); test "${#images[@]}" -eq 1
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/candidate-mount" "${images[0]}" >/dev/null
+          app="$RUNNER_TEMP/candidate-mount/Selective Remote.app"
           codesign --verify --deep --strict "$app"
-          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
-          binary="$app/Contents/MacOS/$executable"
-          fixture_uid=$(id -u)
-          policy="(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:52222\"))(allow network-outbound (remote unix-socket (subpath \"$fixture\")))(allow network-outbound (remote unix-socket (path-regex #\"^/private/tmp/selectiveremote-${fixture_uid}-[0-9a-f]+/.*\")))"
-          python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); s.settimeout(5); exec("try:\n c,_=s.accept(); c.close()\nexcept TimeoutError:\n pass"); s.close()' "$fixture/probe.sock" &
-          unix_probe_pid=$!
-          sleep 1
-          if sandbox-exec -p "$policy" python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.close()' "$fixture/probe.sock" 2>/dev/null; then
-            printf '%s\n' 'SYNTHETIC_UNIX_SOCKET_OUTBOUND=ALLOWED'
-          else
-            printf '%s\n' 'SYNTHETIC_UNIX_SOCKET_OUTBOUND=DENIED'
-            exit 1
-          fi
-          wait "$unix_probe_pid" || true
-          test ! -e "$control_probe_dir"
-          mkdir -m 700 "$control_probe_dir"
-          control_probe_created=yes
-          python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); s.settimeout(5); exec("try:\n c,_=s.accept(); c.close()\nexcept TimeoutError:\n pass"); s.close()' "$control_probe_dir/probe.sock" &
-          unix_probe_pid=$!
-          sleep 1
-          if sandbox-exec -p "$policy" python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.close()' "$control_probe_dir/probe.sock" 2>/dev/null; then
-            printf '%s\n' 'SYNTHETIC_CONTROL_SOCKET_OUTBOUND=ALLOWED'
-          else
-            printf '%s\n' 'SYNTHETIC_CONTROL_SOCKET_OUTBOUND=DENIED'
-          fi
-          wait "$unix_probe_pid" || true
-          printf 'ls -1\n' | sandbox-exec -p "$policy" /usr/bin/sftp -b - -o BatchMode=yes -o ConnectTimeout=5 -P 52222 runner@127.0.0.1 | grep -Fx TEST-ONLY-CODEX-SFTP-CHECK
-          printf '%s\n' 'SYNTHETIC_SANDBOX_SFTP_ENDPOINT=PASS'
-          sandbox-exec -p "$policy" "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 &
-          app_pid=$!
-          sleep 12
-          kill -0 "$app_pid"
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+          if defaults read "$bundle" >/dev/null 2>&1; then echo 'Synthetic defaults domain not empty'; exit 1; fi
+          defaults write "$bundle" 'SelectiveRemote.applicationLanguage.v1' -string "$SR_VISUAL_LANGUAGE"
+          defaults write "$bundle" 'SelectiveRemote.appearance.theme.v1' -string "$SR_VISUAL_THEME"
+          binary="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          hash=$(shasum -a 256 "$binary" | cut -d ' ' -f 1)
           cp scripts/isolated-gui-smoke/probe.swift "$RUNNER_TEMP/main.swift"
-          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --double-click-ssh > "$RUNNER_TEMP/evidence/ssh-ui.log" 2>&1 &
-          probe_pid=$!
-          for attempt in {1..90}; do
-            if [[ -f "$RUNNER_TEMP/ssh-host-ready.flag" ]]; then break; fi
-            if ! kill -0 "$probe_pid" 2>/dev/null; then cat "$RUNNER_TEMP/evidence/ssh-ui.log"; wait "$probe_pid"; exit 1; fi
-            sleep 1
-          done
-          test -f "$RUNNER_TEMP/ssh-host-ready.flag"
-          sleep 5
-          baseline_auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-          baseline_shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-          baseline_command_count=$(grep -c 'Starting session: command' "$fixture/sshd.log" || true)
-          baseline_sftp_preclick_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          touch "$RUNNER_TEMP/ssh-click-go.flag"
-          wait "$probe_pid"
-          probe_pid=""
-          cat "$RUNNER_TEMP/evidence/ssh-ui.log"
-          for attempt in {1..30}; do
-            auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-            shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-            if (( auth_count > baseline_auth_count && shell_count > baseline_shell_count )); then break; fi
-            sleep 1
-          done
-          test "$auth_count" -gt "$baseline_auth_count"
-          test "$shell_count" -gt "$baseline_shell_count"
-          sleep 5
-          auth_count=$(grep -c 'Accepted publickey for runner from 127.0.0.1' "$fixture/sshd.log" || true)
-          shell_count=$(grep -c 'Starting session: shell' "$fixture/sshd.log" || true)
-          command_count=$(grep -c 'Starting session: command' "$fixture/sshd.log" || true)
-          sftp_preclick_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          printf 'auth_delta=%s shell_delta=%s command_delta=%s sftp_delta=%s\n' "$((auth_count-baseline_auth_count))" "$((shell_count-baseline_shell_count))" "$((command_count-baseline_command_count))" "$((sftp_preclick_count-baseline_sftp_preclick_count))" | tee "$RUNNER_TEMP/evidence/double-click-counts.txt"
-          test "$((shell_count-baseline_shell_count))" -eq 1
-          printf '%s\n' 'REAL_LOOPBACK_SSH_AUTHENTICATION=PASS' 'REAL_LOOPBACK_INTERACTIVE_SHELL=PASS' | tee "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          if [[ "$((auth_count-baseline_auth_count))" -eq 1 ]]; then
-            echo 'DOUBLE_CLICK_SINGLE_CONNECTION=PASS' | tee -a "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          else
-            echo 'DOUBLE_CLICK_SINGLE_CONNECTION=NOT_PROVEN_EXTRA_AUTH' | tee -a "$RUNNER_TEMP/evidence/ssh-server-result.txt"
-          fi
-          sleep 3
-          screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
-          baseline_sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --open-sftp | tee "$RUNNER_TEMP/evidence/sftp-ui.log"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --sftp-double-click-dir | tee "$RUNNER_TEMP/evidence/sftp-double-click.log"
-          screencapture -x "$RUNNER_TEMP/evidence/sftp-double-click.png"
-          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
-          wait "$app_pid" || true
-          app_pid=""
+          swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-probe"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app.log" 2>&1 & app_pid=$!
+          sleep 12; kill -0 "$app_pid"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-probe" "$app_pid" --trigger-snippet-warning | tee "$RUNNER_TEMP/evidence/warning.log"
+          screencapture -x "$RUNNER_TEMP/evidence/warning.png"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
+          wait "$app_pid" || true; app_pid=""
+          rm -f "$RUNNER_TEMP/snippet-failure-arm"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/restart.log" 2>&1 & app_pid=$!
+          sleep 12; kill -0 "$app_pid"
+          SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" "$RUNNER_TEMP/gui-probe" "$app_pid" --terminate
+          wait "$app_pid" || true; app_pid=""
+          defaults export "$bundle" "$RUNNER_TEMP/after.plist"
+          python3 scripts/isolated-warning-matrix/verify.py "$RUNNER_TEMP/after.plist" | tee "$RUNNER_TEMP/evidence/recovery.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: isolated-sftp-directory-double-click
+          name: snippet-warning-${{ matrix.language }}-${{ matrix.theme }}
           path: ${{ runner.temp }}/evidence
-          retention-days: 7
+          retention-days: 14
