@@ -245,9 +245,10 @@ if CommandLine.arguments.count == 3 && ["--duplicate-selected", "--delete-select
     print("QA_HOST_ACTION_REQUESTED=\(deleting ? "DELETE" : favorite ? "FAVORITE" : "DUPLICATE")")
     exit(0)
 }
-if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host", "--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2]) {
-    let late = ["--create-late-host", "--create-live-old"].contains(CommandLine.arguments[2])
-    let live = ["--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2])
+if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-host", "--create-live-old", "--create-live-current", "--create-migration-old"].contains(CommandLine.arguments[2]) {
+    let migration = CommandLine.arguments[2] == "--create-migration-old"
+    let late = migration || ["--create-late-host", "--create-live-old"].contains(CommandLine.arguments[2])
+    let live = migration || ["--create-live-old", "--create-live-current"].contains(CommandLine.arguments[2])
     guard env["SR_BUILD_KIND"] == (late ? "baseline" : "candidate") else { stop("mixed-write version mismatch") }
     let welcome = snapshot(app).filter {
         (attr($0, "AXRole") as? String) == "AXWindow" && (attr($0, "AXTitle") as? String) == "What's New in Selective Remote"
@@ -260,10 +261,12 @@ if CommandLine.arguments.count == 3 && ["--create-late-host", "--create-current-
     setUniqueField(late ? "For example: Work" : "For example: Work/Servers/Linux", "TEST-ONLY-CODEX-MIXED-FOLDER")
     setUniqueField("server.example.com or a Host from ~/.ssh/config", live ? (late ? "192.0.2.13" : "192.0.2.14") : (late ? "192.0.2.11" : "192.0.2.12"))
     setUniqueField("username", "test")
-    pressUnique("AXButton", "Authentication")
-    setUniqueField("Пароль SSH-сервера", live ? (late ? "TEST-ONLY-CODEX-LIVE-OLD-SECRET" : "TEST-ONLY-CODEX-LIVE-NEW-SECRET") : (late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-CURRENT-SECRET"), verifyVisibleValue: false)
-    pressUnique("AXButton", "Save")
-    pressUnique("AXButton", "General")
+    if !migration {
+        pressUnique("AXButton", "Authentication")
+        setUniqueField("Пароль SSH-сервера", live ? (late ? "TEST-ONLY-CODEX-LIVE-OLD-SECRET" : "TEST-ONLY-CODEX-LIVE-NEW-SECRET") : (late ? "TEST-ONLY-CODEX-LATE-SECRET" : "TEST-ONLY-CODEX-CURRENT-SECRET"), verifyVisibleValue: false)
+        pressUnique("AXButton", "Save")
+        pressUnique("AXButton", "General")
+    }
     print("SYNTHETIC_MIXED_PROFILE_SAVE_REQUESTED=YES")
     exit(0)
 }
