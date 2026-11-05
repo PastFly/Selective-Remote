@@ -157,6 +157,51 @@ func setUniqueField(_ placeholder: String, _ value: String, verifyVisibleValue: 
     key(48, down: true); key(48, down: false)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--backup-export-request" {
+    guard env["SR_BUILD_KIND"] == "candidate" else { stop("backup export fixture identity") }
+    func pressEither(_ labels:[String]) {
+        let matches=snapshot(app).filter { e in (attr(e,"AXRole") as? String)=="AXButton" && ["AXTitle","AXDescription"].contains { key in labels.contains((attr(e,key) as? String) ?? "") } }
+        if matches.count != 1 {
+            for e in snapshot(app) where (attr(e,"AXRole") as? String)=="AXButton" { let label=(attr(e,"AXTitle") as? String) ?? (attr(e,"AXDescription") as? String) ?? ""; if !label.isEmpty { print("BACKUP_BUTTON=\(label)") } }
+        }
+        guard matches.count==1, AXUIElementPerformAction(matches[0],kAXPressAction as CFString) == .success else { stop("backup export control") }
+        Thread.sleep(forTimeInterval:1)
+    }
+    pressEither(["Create Encrypted Archive…","Создать зашифрованный архив…"])
+    func placeholder(_ choices:[String])->String {
+        let nodes=snapshot(app).filter { (attr($0,"AXRole") as? String)=="AXTextField" }
+        for choice in choices { if nodes.filter({ (attr($0,"AXPlaceholderValue") as? String)==choice }).count==1 {return choice} }
+        for e in nodes { print("BACKUP_FIELD_PLACEHOLDER=\(attr(e,"AXPlaceholderValue") as? String ?? "")") }
+        stop("backup password field")
+    }
+    let first=placeholder(["Пароль","Password"]),second=placeholder(["Повторите пароль","Repeat Password","Confirm Password"])
+    setUniqueField(first,"TEST-ONLY-CODEX-BACKUP-PASSPHRASE",verifyVisibleValue:false)
+    setUniqueField(second,"TEST-ONLY-CODEX-BACKUP-PASSPHRASE",verifyVisibleValue:false)
+    pressEither(["Create Archive…","Создать архив…"])
+    print("SYNTHETIC_BACKUP_OWNER_AUTH_REQUESTED=YES")
+    Thread.sleep(forTimeInterval:8)
+    exit(0)
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--backup-warning" {
+    guard env["SR_BUILD_KIND"] == "candidate", CGPreflightPostEventAccess(), running.activate(options:[.activateIgnoringOtherApps]) else { stop("backup warning fixture") }
+    RunLoop.current.run(until:Date(timeIntervalSinceNow:0.5))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          let down=CGEvent(keyboardEventSource:nil,virtualKey:43,keyDown:true), let up=CGEvent(keyboardEventSource:nil,virtualKey:43,keyDown:false) else { stop("settings shortcut") }
+    down.flags = .maskCommand;up.flags = .maskCommand;down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
+    let deadline=Date(timeIntervalSinceNow:20)
+    while Date() < deadline {
+        let nodes=snapshot(app)
+        let warning=nodes.contains { element in
+            ["AXTitle","AXDescription","AXValue"].compactMap { attr(element,$0) as? String }.contains { $0.contains("Restore is temporarily unavailable to protect your data") || $0.contains("Восстановление временно недоступно для защиты данных") }
+        }
+        let buttons=nodes.filter { element in
+            (attr(element,"AXRole") as? String)=="AXButton" && ["AXTitle","AXDescription"].contains { key in ["Restore archive…","Восстановить архив…"].contains((attr(element,key) as? String) ?? "") }
+        }
+        if warning && buttons.count==1 && (attr(buttons[0],"AXEnabled") as? Bool)==false { print("BACKUP_RESTORE_WARNING_AND_DISABLED_BUTTON=PASS");exit(0) }
+        RunLoop.current.run(until:Date(timeIntervalSinceNow:0.3))
+    }
+    stop("backup restore warning or disabled button unavailable")
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--edit-current-host" {
     guard env["SR_BUILD_KIND"] == "candidate" else { stop("host edit requires candidate") }
     setUniqueField("SSH Server", "TEST-ONLY-CODEX-EDITED")
