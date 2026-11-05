@@ -23,11 +23,19 @@ try:
  first=command(['/usr/bin/ssh-add','-L'],env=env).split()[1];expected=key.with_suffix('.pub').read_text().split()[1]
  if first!=expected:raise RuntimeError('synthetic key fingerprint mismatch')
  command(['/usr/bin/ssh-add','-D'],env=env)
+ os.kill(agentpid,15);agentpid=None
+ agent=command(['/usr/bin/ssh-agent','-s','-a',str(root/'second-agent.sock')]);sock=pid=None
+ for field in agent.split(';'):
+  field=field.strip()
+  if field.startswith('SSH_AUTH_SOCK='):sock=field.split('=',1)[1]
+  if field.startswith('SSH_AGENT_PID='):pid=int(field.split('=',1)[1])
+ if not sock or not pid:raise RuntimeError('could not read restarted agent identity')
+ agentpid=pid;env.update({'SSH_AUTH_SOCK':sock,'SSH_AGENT_PID':str(pid)})
  command(['/usr/bin/ssh-add','--apple-load-keychain',str(key)],env=env,timeout=40)
  second=command(['/usr/bin/ssh-add','-L'],env=env).split()[1]
  if second!=expected:raise RuntimeError('keychain reload mismatch')
  print('SYNTHETIC_OPENSSH_PASSPHRASE_RELOAD=PASS')
- evidence.joinpath('openssh-keychain.json').write_text(json.dumps({'result':'PASS','scope':'synthetic encrypted SSH key; real ssh-add and temporary agent/Keychain, no app UI or Touch ID','loadedKeyMatchesGeneratedPublicKey':True})+'\n')
+ evidence.joinpath('openssh-keychain.json').write_text(json.dumps({'result':'PASS','scope':'synthetic encrypted SSH key; real ssh-add and two consecutive disposable agents and temporary Keychain, no app UI or Touch ID','loadedKeyMatchesGeneratedPublicKey':True})+'\n')
 finally:
  if agentpid:
   try:os.kill(agentpid,15)
