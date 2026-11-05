@@ -25,8 +25,11 @@ def make_app(source, name):
     return f'class {name} {{ var profiles: [Record] = []; let profilesKey = {key}\nfunc saveProfiles() {{\n{body}\n}}\n}}\n'
 def make_snippets(source, name):
     key = extract(source, r'static let templates = ([^\n]+)')
-    body = extract(source, r'    private func persistTemplates\(\) \{\n(.*?)\n    \}')
-    return f'class {name} {{ var storedTemplates: [Record] = []; var snippetRevision = 0; let defaults = FakePreferences.standard; enum Key {{ static let templates = {key} }}\nfunc persistTemplates() {{\n{body}\n}}\n}}\n'
+    if name == 'OldSnippets':
+        body = extract(source, r'    private func persistTemplates\(\) \{\n(.*?)\n    \}')
+        return f'class {name} {{ var storedTemplates: [Record] = []; var snippetRevision = 0; let defaults = FakePreferences.standard; enum Key {{ static let templates = {key} }}\nfunc persistTemplates() {{\n{body}\n}}\n}}\n'
+    body = extract(source, r'    private func persistSnippets\(\) -> Bool \{\n(.*?)\n    \}')
+    return f'class {name} {{ var storedTemplates: [Record] = []; var storedSnippetGroups: [Record] = []; var snippetRevision = 0; var snippetPersistenceFailed = false; let defaults = FakePreferences.standard; enum Key {{ static let templates = {key} }}\n@discardableResult func persistSnippets() -> Bool {{\n{body}\n}}\nfunc persistTemplates() {{ _ = persistSnippets() }}\n}}\n'
 main = '''import Foundation
 struct Record: Codable { let id: String }
 final class FakePreferences: NativePreferencesAccess {
