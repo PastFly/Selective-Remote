@@ -49,9 +49,18 @@ func snapshot(_ root: AXUIElement) -> [AXUIElement] {
     }
     return result
 }
-var raw: CFTypeRef?
-let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw)
-guard result == .success, let windows = raw as? [AXUIElement], !windows.isEmpty else { stop("no accessible app window") }
+var windows: [AXUIElement] = []
+if CommandLine.arguments.contains("--race-folder") || CommandLine.arguments.contains("--race-favorite") {
+    _ = running.activate(options: [.activateIgnoringOtherApps])
+}
+let windowDeadline = Date(timeIntervalSinceNow: 15)
+while Date() < windowDeadline {
+    var raw: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw)
+    if result == .success, let found = raw as? [AXUIElement], !found.isEmpty { windows = found; break }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
+guard !windows.isEmpty else { stop("no accessible app window for pid \(pid)") }
 print("APP_PID=\(pid)")
 print("ACCESSIBLE_WINDOW_COUNT=\(windows.count)")
 func pressUnique(_ role: String, _ label: String) {
