@@ -3,7 +3,7 @@ from pathlib import Path
 assert os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('RUNNER_ENVIRONMENT')=='github-hosted' and os.environ.get('USER')=='runner'
 root=Path(os.environ['SR_SNIPPET_FAULT_ROOT']);root.mkdir(mode=0o700,exist_ok=False)
 exe=Path(sys.argv[1]);out=Path(sys.argv[2]);out.mkdir(exist_ok=True);results=[]
-for point in ('before_group','after_group','after_template'):
+for point in ('before_group','after_group','after_template','before_remove_template','after_remove_template','before_remove_group','after_remove_group'):
  seed=subprocess.run([str(exe),'seed',point],capture_output=True,text=True,timeout=20)
  if seed.returncode: raise RuntimeError(f'{point} seed {seed.stderr}')
  p=subprocess.Popen([str(exe),'fault',point],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)

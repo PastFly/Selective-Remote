@@ -24,10 +24,11 @@ func pause(_ name:String) {
 final class BoundaryDefaults: UserDefaults {
     var armed=false
     override func set(_ value:Any?,forKey key:String) {
-        if armed && key==groupKey {pause("before_group")}
+        if armed && key==groupKey {pause("before_group");pause("before_remove_group")}
+        if armed && key==templateKey {pause("before_remove_template")}
         super.set(value,forKey:key)
-        if armed && key==groupKey {guard super.synchronize() else {fail("group sync")};pause("after_group")}
-        if armed && key==templateKey {guard super.synchronize() else {fail("template sync")};pause("after_template")}
+        if armed && key==groupKey {guard super.synchronize() else {fail("group sync")};pause("after_group");pause("after_remove_group")}
+        if armed && key==templateKey {guard super.synchronize() else {fail("template sync")};pause("after_template");pause("after_remove_template")}
     }
 }
 guard let defaults=BoundaryDefaults(suiteName:suite) else {fail("suite")}
@@ -47,7 +48,11 @@ guard let defaults=BoundaryDefaults(suiteName:suite) else {fail("suite")}
         let store=TerminalCommandHistoryStore(defaults:defaults)
         guard store.snippetGroups().contains(where:{$0.id==groupID && $0.name=="TEST-ONLY-OLD-GROUP"}),store.templates().contains(where:{$0.id==templateID}) else {fail("initial state")}
         defaults.armed=true
-        _=store.renameSnippetGroup(id:groupID,name:"TEST-ONLY-NEW-GROUP",profileID:global)
+        if point.hasPrefix("remove_") || point.contains("_remove_") {
+            _=store.removeSnippetGroup(id:groupID,profileID:global)
+        } else {
+            _=store.renameSnippetGroup(id:groupID,name:"TEST-ONLY-NEW-GROUP",profileID:global)
+        }
         withExtendedLifetime(lease) {}
         fail("boundary not reached")
     } else if mode=="recover" {
@@ -60,7 +65,9 @@ guard let defaults=BoundaryDefaults(suiteName:suite) else {fail("suite")}
         fflush(stdout)
         let old = groups.count==1 && groups[0].id==groupID && groups[0].name=="TEST-ONLY-OLD-GROUP" && templates.count==1 && templates[0].id==templateID && templates[0].groupID==groupID && templates[0].category=="TEST-ONLY-OLD-GROUP"
         let new = groups.count==1 && groups[0].id==groupID && groups[0].name=="TEST-ONLY-NEW-GROUP" && templates.count==1 && templates[0].id==templateID && templates[0].groupID==groupID && templates[0].category=="TEST-ONLY-NEW-GROUP"
-        guard old || new else {fail("partially committed group rename")}
+        let removed = groups.count==1 && groups[0].name==TerminalCommandHistoryStore.defaultSnippetGroupName && templates.count==1 && templates[0].id==templateID && templates[0].groupID==groups[0].id && templates[0].category==groups[0].name
+        let valid = point.contains("remove_") ? (old || removed) : (old || new)
+        guard valid else {fail("partially committed group operation")}
         print("SNIPPET_ATOMIC_RECOVERY=PASS state=\(old ? "old":"new")")
         withExtendedLifetime(lease) {}
     } else {fail("unknown mode")}
