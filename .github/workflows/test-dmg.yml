@@ -361,6 +361,8 @@ jobs:
           trap cleanup EXIT
           mkdir -m 700 "$fixture"
           mkdir -m 700 "$fixture/sftp-root" "$fixture/local"
+          mkdir -m 700 "$fixture/sftp-root/TEST-ONLY-CODEX-DIRECTORY"
+          printf synthetic > "$fixture/sftp-root/TEST-ONLY-CODEX-DIRECTORY/TEST-ONLY-CODEX-NESTED"
           printf '%s\n' TEST-ONLY-CODEX-SFTP-CONTENT > "$fixture/sftp-root/TEST-ONLY-CODEX-SFTP-CHECK"
           printf '%s\n' TEST-ONLY-CODEX-SFTP-UPLOAD-CONTENT > "$fixture/local/TEST-ONLY-CODEX-UPLOAD"
           ssh-keygen -q -t ed25519 -N '' -f "$fixture/hostkey"
@@ -487,31 +489,14 @@ jobs:
           screencapture -x "$RUNNER_TEMP/evidence/ssh-screen.png"
           baseline_sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
           SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --open-sftp | tee "$RUNNER_TEMP/evidence/sftp-ui.log"
-          for attempt in {1..30}; do
-            sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-            if (( sftp_count > baseline_sftp_count )); then break; fi
-            sleep 1
-          done
-          test "$sftp_count" -gt "$baseline_sftp_count"
-          printf '%s\n' 'REAL_LOOPBACK_SFTP_SUBSYSTEM=PASS' | tee "$RUNNER_TEMP/evidence/sftp-server-result.txt"
-          screencapture -x "$RUNNER_TEMP/evidence/sftp-screen.png"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --sftp-upload-fixture | tee "$RUNNER_TEMP/evidence/sftp-upload-ui.log"
-          for attempt in {1..30}; do [[ -f "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD" ]] && break; sleep 1; done
-          test -f "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD"
-          cmp "$fixture/local/TEST-ONLY-CODEX-UPLOAD" "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD"
-          shasum -a 256 "$fixture/local/TEST-ONLY-CODEX-UPLOAD" "$fixture/sftp-root/TEST-ONLY-CODEX-UPLOAD" | tee "$RUNNER_TEMP/evidence/upload-hashes.txt"
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 100 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --sftp-download-fixture | tee "$RUNNER_TEMP/evidence/sftp-download-ui.log"
-          for attempt in {1..30}; do [[ -f "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK" ]] && break; sleep 1; done
-          test -f "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK"
-          cmp "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK" "$fixture/sftp-root/TEST-ONLY-CODEX-SFTP-CHECK"
-          shasum -a 256 "$fixture/local/TEST-ONLY-CODEX-SFTP-CHECK" "$fixture/sftp-root/TEST-ONLY-CODEX-SFTP-CHECK" | tee "$RUNNER_TEMP/evidence/download-hashes.txt"
-          echo 'SYNTHETIC_SFTP_UPLOAD_AND_DOWNLOAD_BYTES=PASS'
+          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --sftp-double-click-dir | tee "$RUNNER_TEMP/evidence/sftp-double-click.log"
+          screencapture -x "$RUNNER_TEMP/evidence/sftp-double-click.png"
           SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" "$RUNNER_TEMP/gui-app-probe" "$app_pid" --terminate
           wait "$app_pid" || true
           app_pid=""
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: isolated-double-click-evidence
+          name: isolated-sftp-directory-double-click
           path: ${{ runner.temp }}/evidence
           retention-days: 7

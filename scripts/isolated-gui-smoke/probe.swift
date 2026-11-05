@@ -546,6 +546,44 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
     }
     stop("synthetic SFTP file not visible")
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--sftp-double-click-dir" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP double click runner identity") }
+    let deadline = Date(timeIntervalSinceNow: 30)
+    var target: AXUIElement?
+    while Date() < deadline {
+        let found = snapshot(app).filter { element in
+            (attr(element, "AXRole") as? String) == "AXStaticText" &&
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "TEST-ONLY-CODEX-DIRECTORY" }
+        }
+        if found.count == 1 { target = found[0]; break }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    }
+    guard let target, let position = attr(target, "AXPosition"), let size = attr(target, "AXSize"),
+          CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { stop("SFTP synthetic directory unavailable") }
+    var point = CGPoint.zero; var extent = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent),
+          extent.width > 0, extent.height > 0, running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP directory geometry") }
+    point.x += extent.width / 2; point.y += extent.height / 2
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { stop("SFTP directory focus") }
+    for count in [1, 2] {
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP double click") }
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(count)); up.setIntegerValueField(.mouseEventClickState, value: Int64(count))
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+    }
+    let nestedDeadline = Date(timeIntervalSinceNow: 30)
+    while Date() < nestedDeadline {
+        if snapshot(app).contains(where: { element in
+            (attr(element, "AXRole") as? String) == "AXStaticText" &&
+            ["AXTitle", "AXDescription", "AXValue"].contains { (attr(element, $0) as? String) == "TEST-ONLY-CODEX-NESTED" }
+        }) { print("SFTP_DOUBLE_CLICK_REMOTE_DIRECTORY=PASS"); exit(0) }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    }
+    stop("nested SFTP entry not visible after double click")
+}
 if CommandLine.arguments.count == 3 && ["--sftp-upload-fixture", "--sftp-download-fixture"].contains(CommandLine.arguments[2]) {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP transfer fixture runner identity") }
     let upload = CommandLine.arguments[2] == "--sftp-upload-fixture"
