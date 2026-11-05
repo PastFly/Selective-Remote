@@ -276,6 +276,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--snippet-di
     }
     if !welcome.isEmpty { pressUnique("AXButton", en ? "Done" : "Готово") }
     pressUnique("AXButton", en ? "Snippets" : "Сниппеты")
+    let emptyText = en ? "No snippets yet" : "Сниппетов пока нет"
+    guard snapshot(app).contains(where: { element in ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }.contains(emptyText) }) else { stop("localized empty Snippets state") }
+    let capture = Process(); capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    capture.arguments = ["-x", temp + "/evidence/empty.png"]
+    do { try capture.run(); capture.waitUntilExit() } catch { stop("empty state screenshot") }
+    guard capture.terminationStatus == 0 else { stop("empty state screenshot status") }
     let label = en ? "New Group" : "Новая группа"
     let candidates = snapshot(app).filter { (attr($0, "AXRole") as? String) == "AXButton" && ((attr($0, "AXTitle") as? String) == label || (attr($0, "AXDescription") as? String) == label) }
     guard let button = candidates.first, AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { stop("group control") }

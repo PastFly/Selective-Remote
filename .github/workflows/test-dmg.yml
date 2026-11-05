@@ -21,7 +21,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: SelectiveRemote-test-229-arm64
-          run-id: 42052055785
+          run-id: 42070025475
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/image
       - name: Verify exact candidate dialog
@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/42052055785 --jq .head_sha)" = d9d756e8f0f2201aa201f2ef517ecad008775882
+          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/42070025475 --jq .head_sha)" = 97e075529163c3dd701008b8f956b505ee9e3b7e
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/candidate-mount"
           cleanup() {
             result=$?
