@@ -577,16 +577,30 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp"
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
     }
     print("SFTP_HOST_MENU_DOUBLE_CLICK_POSTED=YES")
-    let deadline = Date(timeIntervalSinceNow: 35)
-    while Date() < deadline {
-        let rows = snapshot(app).filter { element in
+    func fileVisible() -> Bool {
+        snapshot(app).contains { element in
             ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(element, $0) as? String }
                 .contains(where: { $0.contains("TEST-ONLY-CODEX-SFTP-CHECK") })
         }
-        if !rows.isEmpty { print("SYNTHETIC_SFTP_FILE_VISIBLE=YES"); exit(0) }
+    }
+    let deadline = Date(timeIntervalSinceNow: 15)
+    while Date() < deadline {
+        if fileVisible() { print("SYNTHETIC_SFTP_FILE_VISIBLE=YES"); exit(0) }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
     }
-    stop("synthetic SFTP file not visible")
+    print("SFTP_DOUBLE_CLICK_RESULT=NO_CONNECTION_OBSERVED")
+    let control = snapshot(app).filter {
+        (attr($0, "AXRole") as? String) == "AXMenuItem" &&
+        ((attr($0, "AXDescription") as? String) == "TEST-ONLY-CODEX-LOOPBACK" || (attr($0, "AXTitle") as? String) == "TEST-ONLY-CODEX-LOOPBACK")
+    }
+    if control.count == 1 && AXUIElementPerformAction(control[0], kAXPressAction as CFString) == .success {
+        let controlDeadline = Date(timeIntervalSinceNow: 25)
+        while Date() < controlDeadline {
+            if fileVisible() { print("SFTP_AXPRESS_CONTROL=PASS"); stop("double click did not open SFTP although accessibility control did") }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        }
+    }
+    stop("synthetic SFTP file not visible; accessibility control did not establish connection")
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--sftp-double-click-dir" {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP double click runner identity") }
