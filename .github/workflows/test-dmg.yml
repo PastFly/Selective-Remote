@@ -63,14 +63,20 @@ jobs:
           sleep 12; kill -0 "$app_pid"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-probe" "$app_pid" --create-live-current > "$RUNNER_TEMP/evidence/create.log"
           defaults export "$bundle" "$RUNNER_TEMP/before.plist"
-          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary" > "$RUNNER_TEMP/evidence/app2.log" 2>&1 & app_pid2=$!
+          copy="$RUNNER_TEMP/Second Selective Remote.app"
+          ditto "$app" "$copy"
+          codesign --verify --deep --strict "$copy"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$copy/Contents/Info.plist")" = "$bundle"
+          binary2="$copy/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$copy/Contents/Info.plist")"
+          test "$(shasum -a 256 "$binary2" | cut -d ' ' -f 1)" = "$hash"
+          sandbox-exec -p '(version 1)(allow default)(deny network*)' "$binary2" > "$RUNNER_TEMP/evidence/app2.log" 2>&1 & app_pid2=$!
           sleep 12; kill -0 "$app_pid"; kill -0 "$app_pid2"; test "$app_pid" != "$app_pid2"
           SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-probe" "$app_pid" --race-name > "$RUNNER_TEMP/evidence/name.log"
           sleep 2; defaults export "$bundle" "$RUNNER_TEMP/after-name.plist"
-          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-probe" "$app_pid2" --race-folder > "$RUNNER_TEMP/evidence/folder.log"
+          SR_BUILD_KIND=candidate SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 60 "$RUNNER_TEMP/gui-probe" "$app_pid2" --race-folder > "$RUNNER_TEMP/evidence/folder.log"
           sleep 2; defaults export "$bundle" "$RUNNER_TEMP/after-folder.plist"
           SR_BUILD_KIND=candidate SR_RACE_READY="$RUNNER_TEMP/ready1" SR_RACE_GO="$RUNNER_TEMP/go" SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/gui-probe" "$app_pid" --race-favorite > "$RUNNER_TEMP/evidence/race1.log" & race1=$!
-          SR_BUILD_KIND=candidate SR_RACE_READY="$RUNNER_TEMP/ready2" SR_RACE_GO="$RUNNER_TEMP/go" SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/gui-probe" "$app_pid2" --race-favorite > "$RUNNER_TEMP/evidence/race2.log" & race2=$!
+          SR_BUILD_KIND=candidate SR_RACE_READY="$RUNNER_TEMP/ready2" SR_RACE_GO="$RUNNER_TEMP/go" SR_EXPECTED_EXECUTABLE="$binary2" SR_EXPECTED_HASH="$hash" python3 scripts/isolated-gui-smoke/run-bounded.py 45 "$RUNNER_TEMP/gui-probe" "$app_pid2" --race-favorite > "$RUNNER_TEMP/evidence/race2.log" & race2=$!
           for n in {1..300}; do [[ -f "$RUNNER_TEMP/ready1" && -f "$RUNNER_TEMP/ready2" ]] && break; sleep .1; done
           test -f "$RUNNER_TEMP/ready1" && test -f "$RUNNER_TEMP/ready2"
           touch "$RUNNER_TEMP/go"
