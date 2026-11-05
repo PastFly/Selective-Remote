@@ -449,7 +449,12 @@ jobs:
           swiftc "$RUNNER_TEMP/main.swift" scripts/isolated-gui-smoke/KeyboardMap.swift -o "$RUNNER_TEMP/gui-app-probe"
           SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 120 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --create-sftp-host | tee "$RUNNER_TEMP/evidence/sftp-host.log"
           baseline_sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
-          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --open-sftp | tee "$RUNNER_TEMP/evidence/sftp-double-click.log"
+          SR_BUILD_KIND=network SR_EXPECTED_EXECUTABLE="$binary" SR_EXPECTED_HASH="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)" python3 scripts/isolated-gui-smoke/run-bounded.py 90 "$RUNNER_TEMP/gui-app-probe" "$app_pid" --host-sftp-double | tee "$RUNNER_TEMP/evidence/sftp-double-click.log"
+          for attempt in {1..30}; do
+            sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
+            if (( sftp_count > baseline_sftp_count )); then break; fi
+            sleep 1
+          done
           sleep 3
           sftp_count=$(grep -c 'Starting session: subsystem.*sftp' "$fixture/sshd.log" || true)
           printf 'SFTP_SUBSYSTEM_DELTA=%s\n' "$((sftp_count-baseline_sftp_count))" | tee "$RUNNER_TEMP/evidence/sftp-server-result.txt"

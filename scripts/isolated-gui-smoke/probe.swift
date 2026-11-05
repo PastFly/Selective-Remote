@@ -525,6 +525,38 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--create-sft
     print("SYNTHETIC_SFTP_HOST_CREATED=YES")
     exit(0)
 }
+if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--host-sftp-double" {
+    guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP host double click runner") }
+    let buttons = snapshot(app).filter { element in
+        guard (attr(element, "AXRole") as? String) == "AXButton",
+              ((attr(element, "AXDescription") as? String) == "SFTP" || (attr(element, "AXTitle") as? String) == "SFTP"),
+              let position = attr(element, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return false }
+        var point = CGPoint.zero
+        return AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) && point.x > 700
+    }
+    guard buttons.count == 1, let pos = attr(buttons[0], "AXPosition"), let rawSize = attr(buttons[0], "AXSize"),
+          CFGetTypeID(pos) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() else { stop("SFTP host tab not unique") }
+    var point = CGPoint.zero, size = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(pos, to: AXValue.self), .cgPoint, &point),
+          AXValueGetValue(unsafeBitCast(rawSize, to: AXValue.self), .cgSize, &size), size.width > 0, size.height > 0,
+          running.activate(options: [.activateIgnoringOtherApps]) else { stop("SFTP host tab geometry") }
+    point.x += size.width / 2; point.y += size.height / 2
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+    var hit: AXUIElement?; var hitPID: pid_t = 0
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+          AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit, AXUIElementGetPid(hit, &hitPID) == .success, hitPID == pid else { stop("SFTP host tab hit test") }
+    for clicks in [1, 2] {
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { stop("SFTP host tab mouse") }
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(clicks)); up.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
+        down.post(tap: .cghidEventTap); RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)); up.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.08))
+    }
+    print("SFTP_HOST_TAB_DOUBLE_CLICK_POSTED=YES")
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 3))
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--open-sftp" {
     guard env["SR_BUILD_KIND"] == "network", env["RUNNER_ENVIRONMENT"] == "github-hosted" else { stop("SFTP fixture runner identity") }
     for element in snapshot(app) where (attr(element, "AXDescription") as? String) == "SFTP" || (attr(element, "AXTitle") as? String) == "SFTP" {
