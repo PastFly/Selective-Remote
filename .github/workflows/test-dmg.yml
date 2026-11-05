@@ -1,32 +1,28 @@
-name: Synthetic Snippet group transaction crash
+name: Snippet crash fix build and regression
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  fault:
+  swift-regression:
     runs-on: macos-14
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
-      - name: Compile exact Snippet store source with isolated fault adapter
-        shell: bash
+      - name: Test Swift package
         run: |
-          set -euo pipefail
-          test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          mkdir -p "$RUNNER_TEMP/evidence"
-          shasum -a 256 Sources/SelectiveRemote/TerminalCommandHistory.swift Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift > "$RUNNER_TEMP/evidence/source-sha256.txt"
-          swiftc Sources/SelectiveRemote/TerminalCommandHistory.swift Sources/SelectiveRemote/NativeStorageMigration.swift Sources/SelectiveRemote/NativeStorageLease.swift scripts/isolated-snippet-boundaries/main.swift -o "$RUNNER_TEMP/snippet-fault"
-      - name: Kill between actual group and Snippet writes
-        env:
-          SR_SNIPPET_FAULT_ROOT: ${{ runner.temp }}/snippet-write-boundaries
-        shell: bash
+          set -o pipefail
+          swift --version
+          swift test 2>&1 | tee "$RUNNER_TEMP/swift-regression.log"
+      - name: Test migration fault handling
         run: |
-          set -euo pipefail
-          python3 scripts/isolated-snippet-boundaries/supervise.py "$RUNNER_TEMP/snippet-fault" "$RUNNER_TEMP/evidence" | tee "$RUNNER_TEMP/evidence/boundaries.log"
+          set -o pipefail
+          python3 Tests/IntegrityFixtures/NativeStorageMigration/run.py 2>&1 | tee "$RUNNER_TEMP/migration-regression.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-snippet-group-atomicity
-          path: ${{ runner.temp }}/evidence
+          name: snippet-fix-build-regression
+          path: |
+            ${{ runner.temp }}/swift-regression.log
+            ${{ runner.temp }}/migration-regression.log
           retention-days: 14
