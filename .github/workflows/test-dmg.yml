@@ -1,4 +1,4 @@
-name: Synthetic Keychain crash boundaries
+name: Synthetic Keychain credential matrix
 on:
   workflow_dispatch:
 permissions:
@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Compile exact vault source with isolated API hooks
+      - name: Compile exact vault source for six synthetic credential types
         shell: bash
         run: |
           set -euo pipefail
@@ -17,7 +17,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/evidence"
           shasum -a 256 Sources/SelectiveRemote/UnifiedCredentialVault.swift > "$RUNNER_TEMP/evidence/source-sha256.txt"
           swiftc Sources/SelectiveRemote/UnifiedCredentialVault.swift scripts/isolated-keychain-boundaries/main.swift -o "$RUNNER_TEMP/keychain-probe"
-      - name: Kill on actual synthetic Keychain call boundaries
+      - name: Migrate, restart and delete six credential types
         env:
           SR_KEYCHAIN_FAULT_ROOT: ${{ runner.temp }}/keychain-write-boundaries
         shell: bash
@@ -30,6 +30,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-keychain-crash-boundaries
+          name: synthetic-keychain-six-type-matrix
           path: ${{ runner.temp }}/evidence
           retention-days: 14

@@ -1,79 +1,39 @@
 import Foundation
 import Security
 import CryptoKit
-import Darwin
-
-struct KeychainCredentialReference { let service:String; let account:String }
-enum KeychainError: Error {case invalidData, unifiedVaultDisappeared, concurrentVaultWrite, vaultLockUnavailable, unexpectedStatus(OSStatus)}
-let env=ProcessInfo.processInfo.environment
-let args=CommandLine.arguments
-func fail(_ message:String)->Never {fputs("KEYCHAIN_FAULT_ERROR: \(message)\n",stderr);exit(2)}
-guard env["GITHUB_ACTIONS"]=="true",env["RUNNER_ENVIRONMENT"]=="github-hosted",env["USER"]=="runner",
-      let temp=env["RUNNER_TEMP"],let run=env["GITHUB_RUN_ID"],let root=env["SR_KEYCHAIN_FAULT_ROOT"],
-      root==temp+"/keychain-write-boundaries",args.count==3,
-      args[2].allSatisfy({$0.isLetter || $0.isNumber || $0=="_"}) else {fail("runner identity")}
-let mode=args[1],point=args[2],marker=URL(fileURLWithPath:root).appendingPathComponent("stopped-\(point)")
-let service="local.selectiveremote.credentials.unified.v2",migrationService="local.selectiveremote.credentials.unified.v2-migration",legacyService="local.selectiveremote.credentials.unified.v1"
-let reference=KeychainCredentialReference(service:"local.selectiveremote.credentials.v2",account:"11111111-1111-4111-8111-111111111111.ssh")
-let second=KeychainCredentialReference(service:"local.selectiveremote.credentials",account:"22222222-2222-4222-8222-222222222222.gateway")
-let old="TEST-ONLY-CODEX-OLD-SECRET",new="TEST-ONLY-CODEX-NEW-SECRET",other="TEST-ONLY-CODEX-OTHER-SECRET"
-let lockRoot=URL(fileURLWithPath:root).appendingPathComponent("lock-\(point)",isDirectory:true)
-let suite="TEST-ONLY-CODEX-KEYCHAIN-\(run)-\(point)"
-guard let defaults=UserDefaults(suiteName:suite) else {fail("defaults")}
-func pause(_ name:String) {
-    guard mode=="fault",point==name else {return}
-    do {try Data(name.utf8).write(to:marker,options:.atomic)} catch {fail("marker")}
-    fflush(nil);raise(SIGSTOP);fail("resumed without kill")
-}
-func SecItemAdd(_ attributes:CFDictionary,_ result:UnsafeMutablePointer<CFTypeRef?>?)->OSStatus {
-    let item=attributes as NSDictionary
-    let name=item[kSecAttrService as String] as? String ?? ""
-    if name==migrationService {pause("before_pending_marker")}
-    if name==service {pause("before_current_add")}
-    let status=Security.SecItemAdd(attributes,result)
-    if status==errSecSuccess && name==migrationService {pause("after_pending_marker")}
-    if status==errSecSuccess && name==service {pause("after_current_add")}
-    return status
-}
-func SecItemUpdate(_ query:CFDictionary,_ attributes:CFDictionary)->OSStatus {
-    let item=query as NSDictionary,updates=attributes as NSDictionary
-    let name=item[kSecAttrService as String] as? String ?? ""
-    let payload=updates[kSecValueData as String] as? Data
-    let committing=name==migrationService && payload.flatMap {String(data:$0,encoding:.utf8)}=="committed"
-    if committing {pause("before_marker_commit")}
-    if name==service && payload != nil {pause("before_current_update")}
-    let status=Security.SecItemUpdate(query,attributes)
-    if status==errSecSuccess && committing {pause("after_marker_commit")}
-    if status==errSecSuccess && name==service && payload != nil {pause("after_current_update")}
-    return status
-}
-func legacyData() throws -> Data {try JSONEncoder().encode([UnifiedCredentialVault.entryKey(for:reference):old,UnifiedCredentialVault.entryKey(for:second):other])}
+struct KeychainCredentialReference {let service:String; let account:String}
+enum KeychainError:Error {case invalidData, unifiedVaultDisappeared, concurrentVaultWrite, vaultLockUnavailable, unexpectedStatus(OSStatus)}
+let env=ProcessInfo.processInfo.environment,args=CommandLine.arguments
+func fail(_ m:String)->Never {fputs("KEYCHAIN_MATRIX_ERROR: \(m)\n",stderr);exit(2)}
+guard env["GITHUB_ACTIONS"]=="true",env["RUNNER_ENVIRONMENT"]=="github-hosted",env["USER"]=="runner",let temp=env["RUNNER_TEMP"],let run=env["GITHUB_RUN_ID"],let root=env["SR_KEYCHAIN_FAULT_ROOT"],root==temp+"/keychain-write-boundaries",args.count==2 else {fail("runner identity")}
+let oldService="local.selectiveremote.credentials",newService="local.selectiveremote.credentials.v2",base="11111111-1111-4111-8111-111111111111"
+let references=[KeychainCredentialReference(service:oldService,account:base),KeychainCredentialReference(service:oldService,account:base+".gateway"),KeychainCredentialReference(service:newService,account:base+".ssh"),KeychainCredentialReference(service:newService,account:base+".forwarding"),KeychainCredentialReference(service:newService,account:base+".ssh-key-authorization"),KeychainCredentialReference(service:newService,account:base+".proxy")]
+let kinds=["rdp","gateway","ssh","forwarding","ssh-key-authorization","proxy"]
+let legacyService="local.selectiveremote.credentials.unified.v1"
+let legacyEntries=Dictionary(uniqueKeysWithValues:zip(references,kinds).map{(UnifiedCredentialVault.entryKey(for:$0.0),"TEST-ONLY-SECRET-"+$0.1)})
 func legacyQuery()->[String:Any] {[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:legacyService,kSecAttrAccount as String:"credential-vault"]}
 func inspectLegacy() throws {
-    var query=legacyQuery();query[kSecReturnData as String]=true;query[kSecMatchLimit as String]=kSecMatchLimitOne
-    var raw:CFTypeRef?;let status=Security.SecItemCopyMatching(query as CFDictionary,&raw)
-    guard status==errSecSuccess,let data=raw as? Data,let values=try? JSONDecoder().decode([String:String].self,from:data),values[UnifiedCredentialVault.entryKey(for:reference)]==old,values[UnifiedCredentialVault.entryKey(for:second)]==other else {fail("legacy values/status=\(status)")}
+ var q=legacyQuery();q[kSecReturnData as String]=true;q[kSecMatchLimit as String]=kSecMatchLimitOne
+ var item:CFTypeRef?;let status=SecItemCopyMatching(q as CFDictionary,&item)
+ guard status==errSecSuccess,let data=item as? Data,try JSONDecoder().decode([String:String].self,from:data)==legacyEntries else {fail("legacy vault changed status=\(status)")}
 }
+guard let defaults=UserDefaults(suiteName:"TEST-ONLY-CODEX-MATRIX-\(run)") else {fail("suite")}
+let lockRoot=URL(fileURLWithPath:root).appendingPathComponent("matrix-lock",isDirectory:true)
+let mode=args[1]
 if mode=="seed" {
-    defaults.removePersistentDomain(forName:suite)
-    var item=legacyQuery();item[kSecValueData as String]=try legacyData();item[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    let status=Security.SecItemAdd(item as CFDictionary,nil);guard status==errSecSuccess else {fail("seed status=\(status)")}
-    if point.contains("current_update") {let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot);try vault.unlock();guard try vault.read(reference:reference)==old else {fail("seed old")}}
-    print("SYNTHETIC_KEYCHAIN_SEED=PASS")
-} else if mode=="fault" {
-    let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
-    if point.contains("current_update") {try vault.save(new,reference:reference)} else {try vault.unlock()}
-    fail("fault boundary not reached")
-} else if mode=="busy" {
-    let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
-    do {try vault.withExclusiveAccess {};fail("lock unexpectedly acquired")}
-    catch KeychainError.concurrentVaultWrite {print("SYNTHETIC_KEYCHAIN_LOCK=BUSY")}
-    catch {fail("unexpected lock error")}
-} else if mode=="recover" {
-    let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
-    let value=try vault.read(reference:reference)
-    let expected=point=="after_current_update" ? new : old
-    guard value==expected,try vault.read(reference:second)==other else {fail("recovered values")}
-    try inspectLegacy()
-    print("SYNTHETIC_KEYCHAIN_RECOVERY=PASS point=\(point) value=\(value==new ? "new" : "old") legacy_unchanged=YES")
+ var q=legacyQuery();q[kSecValueData as String]=try JSONEncoder().encode(legacyEntries);q[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+ let status=SecItemAdd(q as CFDictionary,nil);guard status==errSecSuccess else {fail("seed \(status)")}
+ print("SIX_TYPE_LEGACY_SEED=PASS")
+} else if mode=="migrate" || mode=="restart" {
+ let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
+ for (ref,kind) in zip(references,kinds) {guard try vault.read(reference:ref)=="TEST-ONLY-SECRET-"+kind else {fail("read \(kind)")}}
+ try inspectLegacy();print("SIX_TYPE_\(mode.uppercased())=PASS legacy_unchanged=YES")
+} else if mode=="delete" {
+ let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
+ for ref in references {try vault.delete(reference:ref)}
+ try inspectLegacy();print("SIX_TYPE_DELETE=PASS legacy_unchanged=YES")
+} else if mode=="verify-delete" {
+ let vault=UnifiedCredentialVault(defaults:defaults,lockDirectory:lockRoot)
+ for (ref,kind) in zip(references,kinds) {guard try vault.read(reference:ref)==nil,try vault.isLegacySuppressed(reference:ref) else {fail("deleted \(kind)")}}
+ try inspectLegacy();print("SIX_TYPE_DELETE_RESTART=PASS legacy_unchanged=YES")
 } else {fail("unknown mode")}
