@@ -33,7 +33,13 @@ jobs:
           while IFS= read -r item; do original_keychains+=("$item"); done < <(security list-keychains -d user | python3 -c 'import shlex,sys; print("\n".join(shlex.split(sys.stdin.read())))')
           cleanup() {
             result=$?
-            if [[ "$result" -ne 0 ]]; then screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true; fi
+            if [[ "$result" -ne 0 ]]; then
+              screencapture -x "$RUNNER_TEMP/evidence/failure.png" || true
+              if [[ -n "${app_pid2:-}" ]]; then
+                ps -p "$app_pid2" -o pid=,ppid=,state=,comm= > "$RUNNER_TEMP/evidence/second-process.txt" || true
+                sample "$app_pid2" 2 -file "$RUNNER_TEMP/evidence/second-process-sample.txt" > /dev/null 2>&1 || true
+              fi
+            fi
             for pid in "${app_pid:-}" "${app_pid2:-}"; do if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; done
             hdiutil detach "$RUNNER_TEMP/candidate-mount" >/dev/null 2>&1 || true
             if [[ -n "$original_default" ]]; then security default-keychain -d user -s "$original_default" || true; fi
