@@ -312,14 +312,19 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--inspect-sn
         let placeholder = attr(element, "AXPlaceholderValue") as? String ?? ""
         if !title.isEmpty || !description.isEmpty || !placeholder.isEmpty || role == "AXTextArea" {print("SNIPPET_EDITOR role=\(role) title=\(title) description=\(description) placeholder=\(placeholder)")}
     }
-    let titles = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextField" && ["Название", "Name"].contains((attr($0, "AXPlaceholderValue") as? String) ?? "") }
+    let titles = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextField" }.compactMap { element -> (AXUIElement, CGFloat)? in
+        guard let position = attr(element, "AXPosition"), CFGetTypeID(position) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point) else { return nil }
+        return (element, point.y)
+    }.sorted { $0.1 < $1.1 }
     let commands = editorNodes.filter { (attr($0, "AXRole") as? String) == "AXTextArea" }
     let targets = editorNodes.filter { element in
         (attr(element, "AXRole") as? String) == "AXCheckBox" &&
         ["AXTitle", "AXDescription"].compactMap { attr(element, $0) as? String }.contains { ["Local Terminal", "Локальный терминал"].contains($0) }
     }
-    guard titles.count == 1, commands.count == 1, targets.count == 1 else { stop("snippet editor controls") }
-    let hitFields = [titles[0], commands[0], targets[0]]
+    guard !titles.isEmpty, (titles.count == 1 || titles[0].1 < titles[1].1), commands.count == 1, targets.count == 1 else { stop("snippet editor controls") }
+    let hitFields = [titles[0].0, commands[0], targets[0]]
     func typeSynthetic(_ value: String, in element: AXUIElement) {
         guard CGPreflightPostEventAccess(), running.activate(options: [.activateIgnoringOtherApps]) else { stop("snippet input access") }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
