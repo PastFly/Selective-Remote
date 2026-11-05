@@ -440,6 +440,13 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--proxy-ui" 
     setUniqueField("server.example.com or a Host from ~/.ssh/config", "192.0.2.22")
     setUniqueField("username", "test")
     pressUnique("AXButton", "Route")
+    for element in snapshot(app) {
+        let role = attr(element, "AXRole") as? String ?? ""
+        let title = attr(element, "AXTitle") as? String ?? ""
+        let desc = attr(element, "AXDescription") as? String ?? ""
+        let value = attr(element, "AXValue") as? String ?? ""
+        if ["AXRadioButton", "AXRadioGroup", "AXGroup", "AXButton", "AXPopUpButton"].contains(role) && (!title.isEmpty || !desc.isEmpty || !value.isEmpty) { print("ROUTE_NODE role=\(role) title=\(title) description=\(desc) value=\(value)") }
+    }
     let items = snapshot(app).filter { (attr($0, "AXTitle") as? String) == "HTTP CONNECT" || (attr($0, "AXDescription") as? String) == "HTTP CONNECT" }
     guard items.count == 1, AXUIElementPerformAction(items[0], kAXPressAction as CFString) == .success else { stop("HTTP proxy selector unavailable") }
     setUniqueField("proxy.example.com", "192.0.2.23")
