@@ -53,9 +53,14 @@ async function browser(session, ...args) {
     const {stdout, stderr} = await execute('playwright-cli', [`-s=${session}`, ...args], {
       cwd: root, timeout: 90000, maxBuffer: 2 * 1024 * 1024,
     });
+    const status = (stdout + stderr).match(/team_status_(\d{3})_([a-z_]+)/);
+    if (status) throw Error(`team_status_${status[1]}_${status[2]}`);
     if (/### Error|TimeoutError|Error:/.test(stdout + stderr)) throw Error('browser_action_failed');
     return stdout;
-  } catch {
+  } catch (error) {
+    if (/^team_status_\d{3}_[a-z_]+$/.test(error.message)) throw error;
+    const status = String(error.stdout ?? '').match(/team_status_(\d{3})_([a-z_]+)/);
+    if (status) throw Error(`team_status_${status[1]}_${status[2]}`);
     // execFile errors include its complete arguments; they can contain test tokens.
     throw Error('browser_action_failed');
   }
@@ -159,7 +164,7 @@ test('disposable browser Team Host MVP progress', {
         return {status:r.status,body:await r.json()};
       });
       if (response.status !== 503 || response.body.error !== 'team_security_temporarily_unavailable')
-        throw Error('team_stop_not_observed');
+        throw Error('team_status_' + response.status + '_' + String(response.body.error || 'missing'));
     }`);
     for (const name of ['team_create','host_create','invite_b','accept','device_approval','sync','edit','revoke']) stages[name]='BLOCKED';
   } catch (error) {
