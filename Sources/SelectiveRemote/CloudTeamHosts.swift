@@ -1843,7 +1843,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     select: {
                                         if selectedHostID != host.id { selectedHostID = host.id }
                                     },
-                                    activate: { selectedHostID = host.id; resetConnectionFields(); connect(host) }
+                                    activate: { connectFromCard(host) }
                                 ) {
                                     hostRow(host)
                                 }
@@ -1922,7 +1922,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                             select: {
                                                 if selectedHostID != host.id { selectedHostID = host.id }
                                             },
-                                            activate: { selectedHostID = host.id; resetConnectionFields(); connect(host) }
+                                            activate: { connectFromCard(host) }
                                         ) {
                                             teamHostGridCard(host)
                                         }
@@ -2064,12 +2064,11 @@ struct SelectiveRemoteTeamHostsView: View {
         guard let request = requestedAction,
               let host = store.hosts.first(where: { $0.id == request.hostID })
         else { return }
-        selectedHostID = host.id
+        if request.action != .connect { selectedHostID = host.id }
         hostDetailVisible = true
         switch request.action {
         case .connect:
-            resetConnectionFields()
-            connect(host)
+            connectFromCard(host)
         case .create:
             if let context = context(for: host),
                SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
@@ -2727,6 +2726,14 @@ struct SelectiveRemoteTeamHostsView: View {
             guard let children = item.children else { return [] }
             return [item.id] + teamFolderIDs(children)
         }
+    }
+
+    private func connectFromCard(_ host: SelectiveRemoteTeamHost) {
+        if selectedHostID != host.id {
+            selectedHostID = host.id
+            resetConnectionFields()
+        }
+        connect(host)
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {
