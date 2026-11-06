@@ -1,0 +1,39 @@
+name: Free Playwright CLI browser tooling
+
+on:
+  push:
+    branches:
+      - tooling/free-playwright-cli-qa
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  playwright-cli:
+    name: Install CLI and verify offline Cloud browser smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Install pinned free Playwright CLI
+        run: |
+          npm install --global @playwright/cli@0.1.23
+          playwright-cli --help
+          playwright-cli install --skills
+      - name: Verify browser availability and execute smoke
+        run: |
+          command -v google-chrome
+          google-chrome --version
+          bash scripts/qa/playwright-cli-preflight.sh
+      - name: Preserve synthetic QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-playwright-cli-browser-preflight
+          path: qa-artifacts/browser/
+          if-no-files-found: warn
+          retention-days: 7
