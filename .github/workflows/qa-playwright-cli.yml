@@ -8,6 +8,7 @@ on:
       - '.playwright/cli.config.json'
       - '.github/workflows/qa-playwright-cli.yml'
       - 'scripts/qa/playwright-cli-preflight.sh'
+      - 'cloud/tests/playwright-team-host-mvp.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -15,9 +16,23 @@ permissions:
 
 jobs:
   playwright-cli:
-    name: Install CLI and verify offline Cloud browser smoke
+    name: Verify browser smoke and isolated Team prerequisites
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_USER: selective_remote_test
+          POSTGRES_PASSWORD: integration-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U selective_remote_test -d selective_remote_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -33,6 +48,40 @@ jobs:
           command -v google-chrome
           google-chrome --version
           bash scripts/qa/playwright-cli-preflight.sh
+      - name: Install existing Cloud dependencies
+        working-directory: cloud
+        run: npm ci
+      - name: Start disposable TLS anchor
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/fence-anchor-test"
+          mkdir -m 755 "$certdir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout "$certdir/server.key" -out "$certdir/server.crt" >/dev/null 2>&1
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          uid=$(docker run --rm --entrypoint id "$image" -u postgres)
+          chmod 600 "$certdir/server.key"
+          sudo chown "$uid" "$certdir/server.key"
+          docker run -d --name sr-test-fence-anchor -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=sranchor -e POSTGRES_PASSWORD=integration-only-anchor -e POSTGRES_DB=postgres \
+            -v "$certdir:/certs:ro" "$image" -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key >/dev/null
+          for attempt in {1..30}; do
+            if docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null
+      - name: Exercise disposable browser prerequisites and report blocked Team stages
+        working-directory: cloud
+        env:
+          SR_TEAM_HOST_BROWSER: '1'
+          TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+          SR_TEST_ANCHOR_TLS_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
+          NODE_OPTIONS: --dns-result-order=ipv4first
+        run: node --test tests/playwright-team-host-mvp.test.mjs
+      - name: Remove disposable anchor
+        if: always()
+        run: docker rm -f sr-test-fence-anchor >/dev/null 2>&1 || true
       - name: Preserve synthetic QA evidence
         if: always()
         uses: actions/upload-artifact@v4
