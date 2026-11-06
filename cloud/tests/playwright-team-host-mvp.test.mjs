@@ -130,6 +130,9 @@ test('disposable browser Team Host MVP progress', {
       stages[`verify_${suffix}`]='PASS';
       currentStage=`login_${suffix}_open`;
       await browser(session,'run-code',`async (page) => {
+        await page.locator('#verification-home').click();
+        const continueButton = page.getByRole('button', {name: /^(Continue|Продолжить)$/});
+        if (await continueButton.isVisible()) await continueButton.click();
         await page.locator('[data-open-auth="login"]').first().click();
       }`);
       currentStage=`login_${suffix}_submit`;
