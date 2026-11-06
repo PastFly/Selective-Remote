@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - 'cloud/public/**'
+      - 'cloud/src/**'
+      - 'cloud/migrations/**'
+      - 'cloud/package*.json'
+      - 'cloud/tests/publication-runtime-fixture.mjs'
+      - 'cloud/tests/synthetic-http-anchor-fixture.mjs'
       - '.playwright/cli.config.json'
       - '.github/workflows/qa-playwright-cli.yml'
       - 'scripts/qa/playwright-cli-preflight.sh'
