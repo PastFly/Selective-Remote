@@ -1179,6 +1179,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var gatewayPassword = ""
+    @State private var connectionFieldsHostID: UUID?
     @State private var editorRequest: SelectiveRemoteTeamHostEditorRequest?
     @State private var personalSettingsHost: SelectiveRemoteTeamHost?
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
@@ -2731,6 +2732,8 @@ struct SelectiveRemoteTeamHostsView: View {
     private func connectFromCard(_ host: SelectiveRemoteTeamHost) {
         if selectedHostID != host.id {
             selectedHostID = host.id
+        }
+        if connectionFieldsHostID != host.id {
             resetConnectionFields()
         }
         connect(host)
@@ -2759,6 +2762,7 @@ struct SelectiveRemoteTeamHostsView: View {
     private func normalizeSelection() {
         if let selectedHostID,
            store.hosts.contains(where: { $0.id == selectedHostID }) {
+            if connectionFieldsHostID != selectedHostID { resetConnectionFields() }
             return
         }
         self.selectedHostID = store.hosts.first?.id
@@ -2771,6 +2775,7 @@ struct SelectiveRemoteTeamHostsView: View {
         } ?? ""
         password = selectedHost?.credentials.password ?? ""
         gatewayPassword = selectedHost?.credentials.gatewayPassword ?? ""
+        connectionFieldsHostID = selectedHost?.id
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
