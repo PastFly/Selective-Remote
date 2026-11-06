@@ -6,7 +6,7 @@ permissions:
   actions: read
 jobs:
   visual:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 12
     strategy:
       fail-fast: false
