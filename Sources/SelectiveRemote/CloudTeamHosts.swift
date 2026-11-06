@@ -1083,6 +1083,7 @@ struct SelectiveRemoteTeamVaultFilterControl<Vault: SelectiveRemoteTeamVaultFilt
 }
 
 enum SelectiveRemoteTeamHostRequestedAction: Equatable {
+    case connect
     case create
     case createFolder
     case duplicate
@@ -1210,6 +1211,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var gatewayPassword = ""
+    @State private var connectionFieldsHostID: UUID?
     @State private var editorRequest: SelectiveRemoteTeamHostEditorRequest?
     @State private var personalSettingsHost: SelectiveRemoteTeamHost?
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
@@ -1873,7 +1875,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                     previewTitle: host.profile.friendlyName,
                                     select: {
                                         if selectedHostID != host.id { selectedHostID = host.id }
-                                    }
+                                    },
+                                    activate: { connectFromCard(host) }
                                 ) {
                                     hostRow(host)
                                 }
@@ -1951,7 +1954,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                             previewTitle: host.profile.friendlyName,
                                             select: {
                                                 if selectedHostID != host.id { selectedHostID = host.id }
-                                            }
+                                            },
+                                            activate: { connectFromCard(host) }
                                         ) {
                                             teamHostGridCard(host)
                                         }
@@ -2093,9 +2097,11 @@ struct SelectiveRemoteTeamHostsView: View {
         guard let request = requestedAction,
               let host = store.hosts.first(where: { $0.id == request.hostID })
         else { return }
-        selectedHostID = host.id
+        if request.action != .connect { selectedHostID = host.id }
         hostDetailVisible = true
         switch request.action {
+        case .connect:
+            connectFromCard(host)
         case .create:
             if let context = context(for: host),
                SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
@@ -2763,6 +2769,16 @@ struct SelectiveRemoteTeamHostsView: View {
         }
     }
 
+    private func connectFromCard(_ host: SelectiveRemoteTeamHost) {
+        if selectedHostID != host.id {
+            selectedHostID = host.id
+        }
+        if connectionFieldsHostID != host.id {
+            resetConnectionFields()
+        }
+        connect(host)
+    }
+
     private func connect(_ host: SelectiveRemoteTeamHost) {
         if host.publication != nil { connectPublished(host); return }
         var profile = personalSettingsStore.appliedProfile(
@@ -2786,6 +2802,7 @@ struct SelectiveRemoteTeamHostsView: View {
     private func normalizeSelection() {
         if let selectedHostID,
            store.hosts.contains(where: { $0.id == selectedHostID }) {
+            if connectionFieldsHostID != selectedHostID { resetConnectionFields() }
             return
         }
         self.selectedHostID = store.hosts.first?.id
@@ -2798,6 +2815,7 @@ struct SelectiveRemoteTeamHostsView: View {
         } ?? ""
         password = selectedHost?.credentials.password ?? ""
         gatewayPassword = selectedHost?.credentials.gatewayPassword ?? ""
+        connectionFieldsHostID = selectedHost?.id
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {

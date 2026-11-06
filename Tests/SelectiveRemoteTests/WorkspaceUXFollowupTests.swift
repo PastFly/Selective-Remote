@@ -18,6 +18,20 @@ struct WorkspaceUXFollowupTests {
         #expect(pointer.release() == .none)
     }
 
+    @Test("A second click activates once without stealing a drag")
+    func hostCardDoubleClickActivation() {
+        var pointer = SelectiveRemoteHostCardPointerSequence(threshold: 4)
+        pointer.press(at: CGPoint(x: 8, y: 8), clickCount: 1)
+        #expect(pointer.release() == .select)
+        pointer.press(at: CGPoint(x: 8, y: 8), clickCount: 2)
+        #expect(pointer.release() == .activate)
+        pointer.press(at: CGPoint(x: 8, y: 8), clickCount: 2)
+        #expect(pointer.move(to: CGPoint(x: 14, y: 8)) == .beginDrag)
+        #expect(pointer.release() == .none)
+        pointer.press(at: CGPoint(x: 8, y: 8), clickCount: 3)
+        #expect(pointer.release() == .none)
+    }
+
     @Test("Card pointer behavior is independent of content position and collection surface")
     func hostCardPointerCoverage() {
         for start in [CGPoint(x: 2, y: 2), CGPoint(x: 35, y: 15),
