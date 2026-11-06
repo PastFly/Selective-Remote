@@ -159,12 +159,14 @@ test('disposable browser Team Host MVP progress', {
     // A stop remains a stop: do not replace routes, inject state, or disable guards.
     currentStage='team_stop';
     await browser(sessions[0],'run-code',`async (page) => {
-      const response = await page.evaluate(async () => {
-        const r = await fetch('/v1/teams');
-        return {status:r.status,body:await r.json()};
-      });
-      if (response.status !== 503 || response.body.error !== 'team_security_temporarily_unavailable')
-        throw Error('team_status_' + response.status + '_' + String(response.body.error || 'missing'));
+      await page.locator('[data-workspace-target="team-vault"][data-team-view="teams"]:visible').first().click();
+      await page.locator('#team-create-name').fill('TEST-ONLY-CODEX-MVP');
+      const pending = page.waitForResponse(r => r.url().endsWith('/v1/teams') && r.request().method() === 'POST');
+      await page.locator('#team-create-form button[type="submit"]').click();
+      const response = await pending;
+      const body = await response.json();
+      if (response.status() !== 503 || body.error !== 'team_security_temporarily_unavailable')
+        throw Error('team_status_' + response.status() + '_' + String(body.error || 'missing'));
     }`);
     for (const name of ['team_create','host_create','invite_b','accept','device_approval','sync','edit','revoke']) stages[name]='BLOCKED';
   } catch (error) {
