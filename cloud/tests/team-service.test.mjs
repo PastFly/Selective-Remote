@@ -319,13 +319,14 @@ test("Team activity exposes bounded audit facts without metadata", async () => {
 test("Team creation derives Owner identity from the authenticated session", async () => {
   const store = new TeamStore();
   const service = new CloudService(store, config);
-  const result = await service.createTeam(session, { name: " Operations ", ownerUserID: "attacker" }, "request:team-create-01");
+  const result = await service.createTeam(session, { name: " Operations ", ownerUserID: "attacker", actorDeviceID: "attacker-device" }, "request:team-create-01");
 
   assert.equal(result.team.id, teamID);
   assert.equal(result.team.membershipID, membershipID);
   assert.equal(result.team.role, "owner");
   assert.deepEqual(store.calls[0][1], {
     actorUserID: "user-1",
+    actorDeviceID: deviceID,
     name: "Operations",
     idempotencyKey: "request:team-create-01",
   });

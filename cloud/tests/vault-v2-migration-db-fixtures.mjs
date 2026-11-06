@@ -1,5 +1,6 @@
 import { migrationFixture, uuid } from "./vault-v2-migration-fixtures.mjs";
 import { validateSignedDeviceBundle } from "../src/device-trust-policy.mjs";
+import { MemoryPublicationFence } from "./publication-fence-fixtures.mjs";
 export async function seedMigration(pool) {
   const f = await migrationFixture(),
     user = f.accountID,
@@ -71,7 +72,9 @@ export async function seedMigration(pool) {
       environment: "staging",
       enabled: true,
       allowedVaultIDs: [vault],
-      fence: { intent: async () => {} },
+      // Explicit unit fixtures only: integration durability tests inject a real file fence.
+      fence: new MemoryPublicationFence(),
+      activationGuard: async () => {},
     },
   };
 }

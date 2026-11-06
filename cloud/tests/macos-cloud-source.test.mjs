@@ -70,7 +70,8 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /localRevision > local\.syncedLocalRevision/);
   assert.match(coordinator, /return \.conflict\(\.init\(local: localVersion, remote: remoteVersion\)\)/);
   assert.match(coordinator, /macos:team-vault:/);
-  assert.match(coordinator, /try snapshots\.save\(staged, endpoint: endpoint\)/);
+  assert.match(coordinator, /try commit\(staged, replacing: current\)/);
+  assert.match(coordinator, /snapshots\.saveIfCurrent\(next, endpoint: endpoint, replacing: expected\)/);
   assert.match(coordinator, /write\.revision == expectedServerRevision/);
   assert.match(coordinator, /func resolveConflict\(/);
   assert.match(coordinator, /latestRemote == conflict\.remote/);
@@ -108,7 +109,7 @@ test("Host context menu opens a real encrypted Team Vault share flow", async () 
   ]);
   assert.match(content, /Share with Team/);
   assert.match(content, /SelectiveRemoteCloudProfileShareView/);
-  assert.match(sharing, /client\.teamKeyDevices/);
+  assert.match(sharing, /boundClient\.teamKeyDevices/);
   assert.match(sharing, /coordinator\.initialize/);
   assert.match(sharing, /coordinator\.stage/);
   assert.match(sharing, /coordinator\.push/);
@@ -394,7 +395,8 @@ test("macOS Team Host controls expose writes only through the encrypted role-awa
   assert.match(hosts, /\.create\(profile, credentials\)/u);
   assert.match(hosts, /\.update\(recordID:/u);
   assert.match(hosts, /\.delete\(recordID:/u);
-  assert.match(hosts, /store\.replaceVault\(with: snapshot\)/u);
+  assert.match(hosts, /delivery\.bind\(snapshot\)/u);
+  assert.match(hosts, /store\.replaceVault\(with: boundSnapshot\)/u);
   assert.doesNotMatch(hosts, /model\.profiles|profiles\.append/u);
   assert.match(editor, /Shared passwords are encrypted inside Team Vault/u);
   assert.match(editor, /SecureField/u);
@@ -591,12 +593,11 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(crypto, /static func open\(/u);
   assert.match(settings, /personalVaultAutoSyncConfigured = true/u);
   assert.doesNotMatch(settings, /Background sync is disabled/u);
-  assert.match(sync, /func downloadIfNewer\(/u);
-  assert.match(sync, /remote\.revision > material\.revision/u);
+  assert.match(sync, /func checkForChanges\(/u);
+  assert.match(sync, /enum CheckResult: Sendable/u);
   assert.match(sync, /func acceptDownload\(/u);
   assert.match(sync, /func mergeConcurrent\(/u);
   assert.match(sync, /mergedKeepingNewest/u);
-  assert.match(sync, /if concurrentChange \{ return \}/u);
   assert.match(app, /runPersonalVaultInboundSyncLoop/u);
   assert.match(app, /Task\.sleep\(for: \.seconds\(15\)\)/u);
   assert.match(app, /KeychainService\.savePasswords\(snapshot\.credentials\)/u);
@@ -619,10 +620,8 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(settings, /Синхронизировать сейчас/u);
   assert.match(settings, /personalVaultSyncError/u);
   assert.match(sync, /catch SelectiveRemotePersonalVaultError\.invalidRecoveryPhrase/u);
-  assert.match(sync, /guard exported\.summary\.total > 0/u);
   assert.match(sync, /baseRevision: remote\.revision/u);
-  assert.match(sync, /legacyMigrationRequiresLocalData/u);
-  assert.match(sync, /previous ciphertext in vault_revisions/u);
+  assert.match(sync, /throw EnrollmentError\.existingVaultUnlockFailed/u);
 });
 
 test("macOS registration checks username availability and explains password strength", async () => {

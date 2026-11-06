@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-private struct TerminalStartupSnippetSequenceRecord: Codable, Equatable, Identifiable {
+struct TerminalStartupSnippetSequenceRecord: Codable, Equatable, Identifiable {
     let id: String
     var snippetIDs: [UUID]
     let compositeTemplateID: UUID
@@ -31,7 +31,7 @@ final class TerminalStartupSnippetSequenceStore: ObservableObject {
     @Published private(set) var revision = 0
 
     private let defaults: UserDefaults
-    private let key = "SelectiveRemote.terminal.startupSnippetSequences.v1"
+    private let key = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.startupSnippetSequences.v1")!
     private var records: [TerminalStartupSnippetSequenceRecord]
 
     init(defaults: UserDefaults = .standard) {

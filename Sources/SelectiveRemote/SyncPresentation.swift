@@ -42,9 +42,23 @@ enum SyncLifecycle: Equatable, Sendable {
 
 enum SyncIssue: Equatable, Sendable {
     case vaultLocked, sessionExpired, keyOrWrapperMissing, rotationRequired
-    case conflict, transientFailure, unknownFailure
+    case conflict, transientFailure, unknownFailure, writeTemporarilyUnavailable
+
+    static func isWriteTemporarilyUnavailable(_ error: Error) -> Bool {
+        guard let cloudError = error as? SelectiveRemoteCloudError,
+              case .serviceError(503, "vault_write_temporarily_unavailable") = cloudError else { return false }
+        return true
+    }
+
+    func message(english: Bool) -> String? {
+        guard self == .writeTemporarilyUnavailable else { return nil }
+        return english
+            ? "Writing to Cloud is temporarily unavailable to protect your data. Keep your local copies."
+            : "Запись в Cloud временно недоступна для защиты данных. Сохраните локальные копии."
+    }
 
     static func classifyPersonal(_ error: Error) -> Self {
+        if isWriteTemporarilyUnavailable(error) { return .writeTemporarilyUnavailable }
         if let error = error as? SelectiveRemotePersonalVaultError {
             switch error {
             case .uploadConflict, .remoteVaultNotEmpty: return .conflict
@@ -52,7 +66,7 @@ enum SyncIssue: Equatable, Sendable {
                  .legacyMigrationRequiresLocalData: return .unknownFailure
             }
         }
-        if error as? SelectiveRemoteCloudError == .authenticationRequired {
+        if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
             return .sessionExpired
         }
         return .unknownFailure
@@ -106,9 +120,13 @@ final class SyncPresentationStore: ObservableObject {
 
     @Published private(set) var personal = SyncScopeSnapshot.unknown(.personal)
     @Published private(set) var team = SyncScopeSnapshot.unknown(.team)
+    @Published private(set) var unconfirmedSessionCleanup = false
     private(set) var generation = UUID()
     private var accountKey: String?
     private var activeTeamCycle: (token: UUID, generation: UUID)?
+
+    func reportUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = true }
+    func acknowledgeUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = false }
 
     var aggregate: SyncLifecycle {
         let scopes = [personal.lifecycle, team.lifecycle]
@@ -168,6 +186,10 @@ final class SyncPresentationStore: ObservableObject {
                issue: issue, pending: personal.pendingLocalChanges)
     }
 
+    func recordPersonalPending() {
+        update(.personal, lifecycle: .pending, issue: nil, pending: true)
+    }
+
     func recordPersonalUnknown() {
         update(.personal, lifecycle: .unknown, issue: nil,
                pending: personal.pendingLocalChanges)
@@ -201,7 +223,7 @@ final class SyncPresentationStore: ObservableObject {
             issue = report.rotations > 0 ? .rotationRequired : .keyOrWrapperMissing
         } else if report.failures > 0 {
             lifecycle = .error
-            issue = .unknownFailure
+            issue = report.writeTemporarilyUnavailable ? .writeTemporarilyUnavailable : .unknownFailure
         } else if report.conflicts > 0 {
             lifecycle = .conflict
             issue = .conflict

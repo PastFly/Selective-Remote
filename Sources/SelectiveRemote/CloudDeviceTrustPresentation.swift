@@ -10,6 +10,9 @@ enum CloudDeviceTrustPresentation {
                     "This Cloud version does not support device approval. Ask the administrator to update Cloud, then retry.")
             case .authenticationRequired:
                 return text("Войдите в Cloud снова, чтобы проверить устройства.", "Sign in to Cloud again to check your devices.")
+            case .logoutUnconfirmed:
+                return text("Завершение сеанса не подтверждено. На другом доверенном устройстве можно отозвать этот Mac; его потребуется подтвердить заново, а Team Vault может потребовать ротации ключей.",
+                    "Session termination is unconfirmed. You can revoke this Mac from another trusted device; it will need approval again, and Team Vault keys may require rotation.")
             case .serviceError(_, "invalid_credentials"):
                 return text("Пароль аккаунта не подходит. Проверьте его и повторите подтверждение.", "The account password is incorrect. Check it and try approval again.")
             default: break

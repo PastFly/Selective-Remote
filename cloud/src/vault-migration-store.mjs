@@ -15,6 +15,8 @@ import {
 } from "../public/resource-crypto-v2.js";
 import { requireAccessMutation } from "./team-policy.mjs";
 import { publicationHash, validateReaderProjection, prepareAdministrativeSidecarCommitment } from "../public/vault-publication-v1.js";
+import { PublicationFenceCoordinator, createPublicationFenceTransaction } from "./publication-fence-coordinator.mjs";
+import { useFramedV1Writer } from "./v1-commit-fence.mjs";
 export const migrationLockTables = [
   "devices",
   "device_trust_certificates_v1",
@@ -52,6 +54,7 @@ export class VaultMigrationStore {
       enabled = false,
       allowedVaultIDs = [],
       fence = null,
+      activationGuard = null,
       faultAt = () => {},
     } = {},
   ) {
@@ -59,6 +62,8 @@ export class VaultMigrationStore {
     this.enabled = enabled === true && environment === "staging";
     this.allowed = new Set(allowedVaultIDs);
     this.fence = fence;
+    this.fenceCoordinator = typeof fence?.append==='function'&&typeof fence?.snapshot==='function'?new PublicationFenceCoordinator({fence}):null;
+    this.activationGuard = activationGuard;
     this.faultAt = faultAt;
   }
   gate(input) {
@@ -71,6 +76,7 @@ export class VaultMigrationStore {
     this.gate(input);
     for (let attempt = 0; ; attempt++) {
       const c = await this.pool.connect();
+      const fenced = createPublicationFenceTransaction({query:(text,values)=>c.query(text,values),fence:this.fence,coordinator:this.fenceCoordinator});
       let retry = false;
       try {
         await c.query(
@@ -80,12 +86,18 @@ export class VaultMigrationStore {
           await c.query(
             `LOCK TABLE ${migrationLockTables.join(",")} IN SHARE ROW EXCLUSIVE MODE`,
           );
-        const result = await work(c);
-        await c.query("COMMIT");
+        const result = await work(c,fenced);
+        if(fenced.intentID)await this.faultAt("before_commit");
+        await fenced.commit();
+        if(fenced.intentID)await this.faultAt("after_commit");
+        await fenced.confirm();
         return result;
       } catch (e) {
-        await c.query("ROLLBACK").catch(() => {});
-        if (attempt < 3 && ["40P01", "40001"].includes(e.code)) retry = true;
+        let rollbackError;
+        try{await fenced.rollback();}catch(error){rollbackError=error;}
+        if(fenced.commitDispatched)throw e;
+        if(rollbackError&&fenced.intentID)throw rollbackError;
+        if (!rollbackError&&attempt < 3 && ["40P01", "40001"].includes(e.code)) retry = true;
         else throw e;
       } finally {
         c.release();
@@ -763,7 +775,7 @@ export class VaultMigrationStore {
     );
   }
   async activate(input, manifestHash) {
-    return this.transaction(input, async (c) => {
+    return this.transaction(input, async (c,fenced) => {
       const a = await this.attempt(c, input);
       if (a.manifest_hash !== manifestHash)
         throw Error("migration_replay_conflict");
@@ -804,21 +816,31 @@ export class VaultMigrationStore {
         rootPublicKey: s.actorRootPublicKey,
       });
       await this.verify(c,a,s,a.manifest);
-      if (typeof this.fence?.intent !== "function")
-        throw Error("deployment_fence_required");
-      await this.fence.intent({
+      const vault={
         teamID: input.teamID,
         vaultID: input.vaultID,
         attemptID: input.attemptID,
         manifestHash,
-        schemaFloor: a.manifest.payload.reader ? 20 : 19,
-      });
+      };
+      if(a.manifest.payload.reader){
+        const projection=(await c.query('SELECT projection,header_hash FROM vault_publication_projections WHERE attempt_id=$1',[a.id])).rows[0];
+        if(!projection)throw Error('publication_invalid');
+        delete vault.attemptID;Object.assign(vault,{generationID:a.id,sequence:projection.projection.header.payload.sequence,headerHash:projection.header_hash});
+      }
+      if(typeof this.activationGuard!=='function')throw Error('deployment_activation_guard_required');
+      const vaultMetadata=(await c.query('SELECT id,team_id,name,format_state FROM shared_vaults WHERE id=$1 AND team_id=$2',[input.vaultID,input.teamID])).rows;
+      await this.activationGuard({kind:'MIGRATION',input,operationID:input.attemptID,vaults:[vault],
+        manifests:[{vaultID:input.vaultID,manifest:a.manifest}],snapshots:[{vaultID:input.vaultID,snapshot:s}],vaultMetadata});
+      await fenced.beforeCommit({kind:'MIGRATION',operationID:input.attemptID,schemaFloor:a.manifest.payload.reader?20:19,vaults:[vault]});
       await this.faultAt("pre_activation");
       await c.query(
         "UPDATE vault_migration_attempts SET state='V2_ACTIVE' WHERE id=$1",
         [input.attemptID],
       );
       await this.faultAt("active_attempt");
+      // Activation has passed its signed-manifest and controller guards; its
+      // retirement of the legacy ciphertext is part of this same transaction.
+      await useFramedV1Writer(c);
       await c.query(
         "UPDATE shared_vaults SET format_state='V2_ACTIVE',format_schema_version=2,active_publication_attempt_id=$2,access_policy_version=$3,envelope_version=NULL,ciphertext=NULL,nonce=NULL,auth_tag=NULL,content_hash=NULL,updated_by_device_id=NULL WHERE id=$1",
         [input.vaultID, input.attemptID, a.scope.policyVersion],

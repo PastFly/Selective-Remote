@@ -11,6 +11,8 @@ enum SelectiveRemoteBackupError: LocalizedError, Equatable {
     case fileTooLarge
     case cryptoFailure
     case missingFile(String)
+    case unsafeSharedRestore
+    case restoreTemporarilyUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +30,16 @@ enum SelectiveRemoteBackupError: LocalizedError, Equatable {
             UpdateLocalization.text(ru: "Не удалось подготовить ключ шифрования архива.", en: "Could not prepare the archive encryption key.")
         case let .missingFile(path):
             UpdateLocalization.text(ru: "Файл для резервной копии недоступен: \(path)", en: "Backup file is unavailable: \(path)")
+        case .unsafeSharedRestore:
+            UpdateLocalization.text(
+                ru: "Не удалось безопасно восстановить копию. Перезапустите приложение, чтобы проверить и восстановить прежнее состояние.",
+                en: "The backup could not be restored safely. Relaunch the app to check and recover the previous state."
+            )
+        case .restoreTemporarilyUnavailable:
+            UpdateLocalization.text(
+                ru: "Восстановление временно недоступно для защиты данных. Сохраните архив до обновления приложения.",
+                en: "Restore is temporarily unavailable to protect your data. Keep the archive until the app is updated."
+            )
         }
     }
 }
@@ -107,10 +119,18 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
     private let fileManager: FileManager
     private let defaults: UserDefaults
     private let migrateCredentials: () throws -> Void
+    private let exportCredentials: () throws -> [String: String]
+    private let replaceCredentials: ([String: String]) throws -> Void
+    private let supportOverride: URL?
+    private let requireRestoreQuiescence: () throws -> Void
 
     init(
         fileManager: FileManager = .default,
         defaults: UserDefaults = .standard,
+        exportCredentials: @escaping () throws -> [String: String] = { try UnifiedCredentialVault.shared.exportedSecrets() },
+        replaceCredentials: @escaping ([String: String]) throws -> Void = { try UnifiedCredentialVault.shared.replaceSecrets($0) },
+        supportOverride: URL? = nil,
+        requireRestoreQuiescence: @escaping () throws -> Void = { throw SelectiveRemoteBackupError.restoreTemporarilyUnavailable },
         migrateCredentials: @escaping () throws -> Void = {
             try KeychainService.migrateCredentialsToUnifiedVault()
         }
@@ -118,6 +138,10 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
         self.fileManager = fileManager
         self.defaults = defaults
         self.migrateCredentials = migrateCredentials
+        self.exportCredentials = exportCredentials
+        self.replaceCredentials = replaceCredentials
+        self.supportOverride = supportOverride
+        self.requireRestoreQuiescence = requireRestoreQuiescence
     }
 
     func exportArchive(
@@ -132,7 +156,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
 
         let defaultsPlist = try captureDefaults()
         let credentials = options.includeCredentials
-            ? try UnifiedCredentialVault.shared.exportedSecrets()
+            ? try exportCredentials()
             : [:]
         let descriptors = try collectFiles(options: options)
         let summary = try makeSummary(
@@ -159,12 +183,38 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
         return SelectiveRemoteBackupInspection(summary: reader.manifest.summary)
     }
 
+    func checkRestoreAvailability() throws {
+        try requireRestoreQuiescence()
+    }
+
     func restoreArchive(
         at source: URL,
         password: String
     ) throws -> SelectiveRemoteBackupRestoreResult {
         try validatePassword(password)
         let reader = try ArchiveReader(url: source, password: password)
+        // Live model caches and Cloud writes must be stopped before applying a
+        // restore. No production coordinator exists yet, so the default fails
+        // closed before any file, preference or Keychain mutation.
+        try checkRestoreAvailability()
+        // A mixed Keychain/defaults restore needs durable crash recovery before
+        // it is safe to mutate either store. Keep it unavailable until then.
+        guard reader.manifest.credentials.isEmpty else { throw SelectiveRemoteBackupError.unsafeSharedRestore }
+        guard !reader.manifest.files.contains(where: {
+            $0.category == .sessionLog || $0.category == .connectionActivity || $0.category == .sshCertificate
+                || $0.category == .sshCAPrivateKey || $0.category == .sshCAPublicKey
+        }) else {
+            throw SelectiveRemoteBackupError.unsafeSharedRestore
+        }
+        // Preflight before installing files or mutating Keychain/defaults.
+        guard let archiveValues = try PropertyListSerialization.propertyList(
+            from: reader.manifest.userDefaultsPlist, options: [], format: nil
+        ) as? [String: Any] else { throw SelectiveRemoteBackupError.invalidArchive }
+        do {
+            let restored = try NativeStorageMigration.restoreValues(archiveValues, existing: defaults.dictionaryRepresentation())
+            try NativeStorageValidation.validate(restored)
+        }
+        catch { throw SelectiveRemoteBackupError.unsafeSharedRestore }
         let staging = fileManager.temporaryDirectory
             .appendingPathComponent("SelectiveRemote-Restore-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(
@@ -182,9 +232,15 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
             descriptors: reader.manifest.files,
             restoredPaths: remappedPaths
         )
+        guard let remapped = try PropertyListSerialization.propertyList(from: defaultsPlist, options: [], format: nil) as? [String: Any]
+        else { throw SelectiveRemoteBackupError.invalidArchive }
+        do {
+            let restored = try NativeStorageMigration.restoreValues(remapped, existing: defaults.dictionaryRepresentation())
+            try NativeStorageValidation.validate(restored)
+        } catch { throw SelectiveRemoteBackupError.unsafeSharedRestore }
 
         if !reader.manifest.credentials.isEmpty {
-            try UnifiedCredentialVault.shared.replaceSecrets(reader.manifest.credentials)
+            try replaceCredentials(reader.manifest.credentials)
         }
         try restoreDefaults(from: defaultsPlist)
 
@@ -218,12 +274,11 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
         ) as? [String: Any] else {
             throw SelectiveRemoteBackupError.invalidArchive
         }
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.defaultsPrefix) {
-            defaults.removeObject(forKey: key)
-        }
-        for (key, value) in values where key.hasPrefix(Self.defaultsPrefix) {
-            defaults.set(value, forKey: key)
-        }
+        let restored: [String: Any]
+        do { restored = try NativeStorageMigration.restoreValues(values, existing: defaults.dictionaryRepresentation()) }
+        catch { throw SelectiveRemoteBackupError.unsafeSharedRestore }
+        do { try NativeStorageMigration.applyRestore(restored, to: defaults) }
+        catch { throw SelectiveRemoteBackupError.unsafeSharedRestore }
     }
 
     private func collectFiles(
@@ -264,7 +319,8 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
         }
 
         if options.includePrivateKeys,
-           let data = defaults.data(forKey: "SelectiveRemote.sshKeys.v1"),
+           let data = defaults.data(forKey: NativeStorageMigration.newKey(for: "SelectiveRemote.sshKeys.v1")!)
+                ?? defaults.data(forKey: "SelectiveRemote.sshKeys.v1"),
            let records = try? JSONDecoder().decode([SSHKeyRecord].self, from: data) {
             for record in records {
                 let privateURL = URL(fileURLWithPath: record.privateKeyPath)
@@ -299,7 +355,8 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
         }
 
         if options.includePrivateKeys,
-           let data = defaults.data(forKey: "SelectiveRemote.sshCertificateAuthorities.v1"),
+           let data = defaults.data(forKey: NativeStorageMigration.newKey(for: "SelectiveRemote.sshCertificateAuthorities.v1")!)
+                ?? defaults.data(forKey: "SelectiveRemote.sshCertificateAuthorities.v1"),
            let records = try? JSONDecoder().decode([SSHCertificateAuthorityRecord].self, from: data) {
             for record in records {
                 if fileManager.isReadableFile(atPath: record.privateKeyPath) {
@@ -370,8 +427,12 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
             options: [],
             format: nil
         ) as? [String: Any] else { throw SelectiveRemoteBackupError.invalidArchive }
-        let profiles = decodeCount([ConnectionProfile].self, key: "SelectiveRemote.connectionProfiles.v2", values: values)
-        let snippets = decodeCount([TerminalCommandTemplate].self, key: "SelectiveRemote.terminal.commandTemplates.v1", values: values)
+        let profileKey = values[NativeStorageMigration.newKey(for: "SelectiveRemote.connectionProfiles.v2")!] == nil
+            ? "SelectiveRemote.connectionProfiles.v2" : NativeStorageMigration.newKey(for: "SelectiveRemote.connectionProfiles.v2")!
+        let snippetKey = values[NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandTemplates.v1")!] == nil
+            ? "SelectiveRemote.terminal.commandTemplates.v1" : NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandTemplates.v1")!
+        let profiles = decodeCount([ConnectionProfile].self, key: profileKey, values: values)
+        let snippets = decodeCount([TerminalCommandTemplate].self, key: snippetKey, values: values)
         return SelectiveRemoteBackupSummary(
             createdAt: Date(),
             appVersion: AppBuildInfo.fullText,
@@ -470,6 +531,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
     ) throws -> [UUID: String] {
         let support = applicationSupportURL()
         let keyRoot = support.appendingPathComponent("Restored SSH Keys", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let logRoot = support.appendingPathComponent("Session Logs", isDirectory: true)
         try fileManager.createDirectory(at: keyRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
 
@@ -523,7 +585,9 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
             format: nil
         ) as? [String: Any] else { throw SelectiveRemoteBackupError.invalidArchive }
 
-        if let data = values["SelectiveRemote.sshKeys.v1"] as? Data,
+        let versionedSSHKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshKeys.v1")!
+        let sshKey = values[versionedSSHKey] == nil ? "SelectiveRemote.sshKeys.v1" : versionedSSHKey
+        if let data = values[sshKey] as? Data,
            var keys = try? JSONDecoder().decode([SSHKeyRecord].self, from: data) {
             for index in keys.indices {
                 let owner = keys[index].id
@@ -542,9 +606,12 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
                     paths: restoredPaths
                 ) ?? keys[index].publicKeyPath
             }
-            values["SelectiveRemote.sshKeys.v1"] = try JSONEncoder().encode(keys)
+            values[sshKey] = try JSONEncoder().encode(keys)
         }
-        if let data = values["SelectiveRemote.sshCertificateAuthorities.v1"] as? Data,
+        let versionedCAKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshCertificateAuthorities.v1")!
+        let caKey = values[versionedCAKey] == nil ? "SelectiveRemote.sshCertificateAuthorities.v1" : versionedCAKey
+        if descriptors.contains(where: { $0.category == .sshCAPublicKey }),
+           let data = values[caKey] as? Data,
            var authorities = try? JSONDecoder().decode([SSHCertificateAuthorityRecord].self, from: data) {
             for index in authorities.indices {
                 if let publicPath = restoredPath(
@@ -556,7 +623,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
                     authorities[index].publicKeyPath = publicPath
                 }
             }
-            values["SelectiveRemote.sshCertificateAuthorities.v1"] = try JSONEncoder().encode(authorities)
+            values[caKey] = try JSONEncoder().encode(authorities)
         }
         return try PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
     }
@@ -573,6 +640,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
     }
 
     private func applicationSupportURL() -> URL {
+        if let supportOverride { return supportOverride }
         let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         return root.appendingPathComponent("Selective Remote", isDirectory: true)

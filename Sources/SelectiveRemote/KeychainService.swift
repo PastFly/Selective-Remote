@@ -27,6 +27,9 @@ private final class TouchIDResultBox: @unchecked Sendable {
 enum KeychainError: LocalizedError {
     case unexpectedStatus(OSStatus)
     case invalidData
+    case unifiedVaultDisappeared
+    case concurrentVaultWrite
+    case vaultLockUnavailable
     case touchIDUnavailable(String)
     case biometricAuthenticationFailed(String)
     case recoveryFailed(String)
@@ -48,6 +51,21 @@ enum KeychainError: LocalizedError {
             )
         case .invalidData:
             return UpdateLocalization.text(ru: "Keychain вернул некорректные данные", en: "Keychain returned invalid data")
+        case .unifiedVaultDisappeared:
+            return UpdateLocalization.text(
+                ru: "Запись Keychain была удалена или изменена другим экземпляром. Данные не перезаписаны; перезапустите приложение и проверьте доступ.",
+                en: "The Keychain item was removed or changed by another instance. Data was not overwritten; restart the app and check access."
+            )
+        case .concurrentVaultWrite:
+            return UpdateLocalization.text(
+                ru: "Другая копия приложения сейчас изменяет Keychain. Повторите операцию.",
+                en: "Another app instance is modifying the Keychain. Retry the operation."
+            )
+        case .vaultLockUnavailable:
+            return UpdateLocalization.text(
+                ru: "Не удалось безопасно заблокировать хранилище Keychain. Данные не изменены.",
+                en: "The Keychain store could not be locked safely. No data was changed."
+            )
         case let .touchIDUnavailable(message):
             return message
         case let .biometricAuthenticationFailed(message):
@@ -98,8 +116,8 @@ enum KeychainService {
     static let legacyService = "local.selectiveremote.credentials"
     static let service = "local.selectiveremote.credentials.v2"
 
-    private static let sshPasswordTouchIDDefaultsKey = "SelectiveRemote.sshPasswordUserPresenceProfiles.v1"
-    private static let forwardingPasswordTouchIDDefaultsKey = "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1"
+    private static let sshPasswordTouchIDDefaultsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.sshPasswordUserPresenceProfiles.v1")!
+    private static let forwardingPasswordTouchIDDefaultsKey = NativeStorageMigration.newKey(for: "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1")!
 
     static var touchIDAvailable: Bool {
         let context = LAContext()
@@ -269,8 +287,20 @@ enum KeychainService {
     }
 
     static func passwordExists(reference: KeychainCredentialReference) -> Bool {
-        if UnifiedCredentialVault.shared.contains(reference: reference) { return true }
-        if UnifiedCredentialVault.shared.isLegacySuppressed(reference: reference) { return false }
+        // An unavailable Keychain is not evidence that a protected secret is
+        // absent. Security-sensitive callers use the throwing variant below.
+        (try? passwordExistsVerified(reference: reference)) ?? true
+    }
+
+    static func passwordExistsVerified(reference: KeychainCredentialReference) throws -> Bool {
+        try UnifiedCredentialVault.shared.withExclusiveAccess {
+            try passwordExistsVerifiedLocked(reference: reference)
+        }
+    }
+
+    private static func passwordExistsVerifiedLocked(reference: KeychainCredentialReference) throws -> Bool {
+        if try UnifiedCredentialVault.shared.contains(reference: reference) { return true }
+        if try UnifiedCredentialVault.shared.isLegacySuppressed(reference: reference) { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: reference.service,
@@ -278,17 +308,29 @@ enum KeychainService {
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnAttributes as String: true
         ]
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
+        return true
     }
 
     static func readPassword(
         reference: KeychainCredentialReference,
         authenticationPrompt: String? = nil
     ) throws -> String? {
+        try UnifiedCredentialVault.shared.withExclusiveAccess {
+            try readPasswordLocked(reference: reference, authenticationPrompt: authenticationPrompt)
+        }
+    }
+
+    private static func readPasswordLocked(
+        reference: KeychainCredentialReference,
+        authenticationPrompt: String?
+    ) throws -> String? {
         if let value = try UnifiedCredentialVault.shared.read(reference: reference) {
             return value
         }
-        if UnifiedCredentialVault.shared.isLegacySuppressed(reference: reference) {
+        if try UnifiedCredentialVault.shared.isLegacySuppressed(reference: reference) {
             return nil
         }
         var query: [String: Any] = [
@@ -315,7 +357,7 @@ enum KeychainService {
         }
         // Lazy migration: once a legacy record has been authorized, future
         // sessions and future app builds use the single unified vault item.
-        try? UnifiedCredentialVault.shared.save(value, reference: reference)
+        try UnifiedCredentialVault.shared.save(value, reference: reference)
         return value
     }
 
@@ -428,10 +470,8 @@ enum KeychainService {
     /// longer access (for example after an ad-hoc signature changed and the
     /// user accidentally chose an incorrect permanent authorization).
     ///
-    /// First use SecItemDelete. If macOS reports a stale authorization problem,
-    /// ask the system `security` utility to remove only this app-owned generic
-    /// password record. The caller must then ask the user to save the SSH
-    /// password again; no secret is exported or copied during recovery.
+    /// The caller must ask the user to save the SSH password again. Legacy
+    /// items remain intact for older versions, and failure must be reported.
     static func repairPasswordAccess(
         profileID: UUID,
         kind: KeychainCredentialKind
@@ -440,15 +480,7 @@ enum KeychainService {
         // namespace is used for SSH/Forwarding, so recovery simply clears the
         // current app-owned record and leaves any unreadable legacy record
         // orphaned and harmless.
-        try? deletePassword(profileID: profileID, kind: kind)
-        if kind == .ssh || kind == .forwarding {
-            let legacyQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: legacyService,
-                kSecAttrAccount as String: kind.account(profileID: profileID)
-            ]
-            _ = SecItemDelete(legacyQuery as CFDictionary)
-        }
+        try deletePassword(profileID: profileID, kind: kind)
     }
 
     static func deleteAllPasswords(profileID: UUID) throws {

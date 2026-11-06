@@ -35,19 +35,22 @@ enum SelectiveRemoteHostDragIdentity {
 
 /// A left click commits only on mouse-up; moving past the threshold starts one drag.
 struct SelectiveRemoteHostCardPointerSequence {
-    enum Action: Equatable { case none, select, beginDrag }
+    enum Action: Equatable { case none, select, activate, beginDrag }
 
     let threshold: CGFloat
     private var origin: CGPoint?
     private var dragging = false
+    private var clickCount = 0
 
     init(threshold: CGFloat) {
         self.threshold = threshold
     }
 
-    mutating func press(at point: CGPoint) {
+    mutating func press(at point: CGPoint, clickCount: Int = 1) {
+        guard (1...2).contains(clickCount) else { cancel(); return }
         origin = point
         dragging = false
+        self.clickCount = clickCount
     }
 
     mutating func move(to point: CGPoint) -> Action {
@@ -59,13 +62,15 @@ struct SelectiveRemoteHostCardPointerSequence {
     }
 
     mutating func release() -> Action {
-        defer { origin = nil; dragging = false }
-        return origin != nil && !dragging ? .select : .none
+        defer { cancel() }
+        guard origin != nil && !dragging else { return .none }
+        return clickCount == 2 ? .activate : .select
     }
 
     mutating func cancel() {
         origin = nil
         dragging = false
+        clickCount = 0
     }
 }
 
@@ -116,6 +121,7 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
     let navigationScope: String
     let previewTitle: String
     let select: () -> Void
+    let activate: () -> Void
 
     func makeNSView(context: Context) -> PointerView {
         PointerView()
@@ -126,6 +132,7 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
         view.navigationScope = navigationScope
         view.previewTitle = previewTitle
         view.select = select
+        view.activate = activate
     }
 
     final class PointerView: NSView, NSDraggingSource {
@@ -133,6 +140,7 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
         var navigationScope = ""
         var previewTitle = ""
         var select: (() -> Void)?
+        var activate: (() -> Void)?
         private var pointer = SelectiveRemoteHostCardPointerSequence(threshold: 4)
 
         override var acceptsFirstResponder: Bool { true }
@@ -145,11 +153,7 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
         }
 
         override func mouseDown(with event: NSEvent) {
-            guard event.clickCount == 1 else {
-                pointer.cancel()
-                return
-            }
-            pointer.press(at: convert(event.locationInWindow, from: nil))
+            pointer.press(at: convert(event.locationInWindow, from: nil), clickCount: event.clickCount)
         }
 
         override func mouseDragged(with event: NSEvent) {
@@ -163,9 +167,15 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
         }
 
         override func mouseUp(with event: NSEvent) {
-            if pointer.release() == .select {
+            switch pointer.release() {
+            case .select:
                 window?.makeFirstResponder(self)
                 select?()
+            case .activate:
+                window?.makeFirstResponder(self)
+                activate?()
+            case .none, .beginDrag:
+                break
             }
         }
 
@@ -254,6 +264,7 @@ struct SelectiveRemoteDraggableHostCard<Content: View>: View {
     let navigationScope: String
     let previewTitle: String
     let select: () -> Void
+    let activate: () -> Void
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -262,7 +273,7 @@ struct SelectiveRemoteDraggableHostCard<Content: View>: View {
             .overlay {
                 SelectiveRemoteHostCardPointerSurface(
                     identity: identity, navigationScope: navigationScope,
-                    previewTitle: previewTitle, select: select
+                    previewTitle: previewTitle, select: select, activate: activate
                 )
             }
             .accessibilityAddTraits(.isButton)

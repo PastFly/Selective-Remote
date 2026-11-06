@@ -14,7 +14,8 @@ const gate = { teamID, publicationAvailable: true, environment: 'staging', curre
 test('whole publication transport authenticates through the existing session and sends mandatory version capabilities', async () => {
   const calls = [], client = createAuthenticatedVaultClient({ fetchValue: async (path, options) => {
     calls.push({ path, options }); return new Response(JSON.stringify(path === '/v1/auth/login' ? {
-      token: 's'.repeat(32), deviceID, user: { id: accountID, email: 'fixture@example.invalid', username: 'fixture', displayName: 'Fixture' } } : gate));
+      token: 's'.repeat(32), deviceID, user: { id: accountID, email: 'fixture@example.invalid', username: 'fixture', displayName: 'Fixture' } } : gate),
+      { headers: path === '/v1/auth/login' ? { 'X-Selective-Session-Binding': deviceID } : {} });
   } });
   await client.login({ email: 'fixture@example.invalid', password: 'SYNTHETIC-PASSWORD', deviceID });
   assert.equal(typeof client.wholePublicationTransport, 'function', 'authenticated publication transport is missing');

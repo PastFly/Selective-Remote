@@ -15,7 +15,7 @@ enum SelectiveRemotePublisherVerificationSheet {
     }
     static func closeAll() { windows.values.forEach { $0.window.close() }; windows = [:] }
     static func closeInvalid() {
-        for (id, item) in windows where (try? item.session.check()) == nil { item.window.close(); windows.removeValue(forKey: id) }
+        for (id, item) in windows where (try? item.session.checkAuthorization()) == nil { item.window.close(); windows.removeValue(forKey: id) }
     }
 }
 
