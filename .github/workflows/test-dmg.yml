@@ -1,4 +1,4 @@
-name: Exact DMG Snippet group dialog locale matrix
+name: Exact PR229 DMG Snippet group dialog locale matrix
 on:
   workflow_dispatch:
 permissions:
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: SelectiveRemote-test-229-arm64
-          run-id: 42070025475
+          run-id: 42184957825
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/image
       - name: Verify exact candidate dialog
@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_ACTIONS:-}" = true && test "${RUNNER_ENVIRONMENT:-}" = github-hosted && test "${USER:-}" = runner
-          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/42070025475 --jq .head_sha)" = 97e075529163c3dd701008b8f956b505ee9e3b7e
+          test "$(gh api repos/PastFly/Selective-Remote/actions/runs/42184957825 --jq .head_sha)" = 37b12c7b7d653f29a79f983130abca3ffbc2d143
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/candidate-mount"
           cleanup() {
             result=$?
