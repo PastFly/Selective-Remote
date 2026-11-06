@@ -66,12 +66,13 @@ async function browser(session, ...args) {
   }
 }
 
-test('disposable browser Team Host MVP progress', {
+test('disposable browser prerequisites preserve Team STOP', {
   skip: !browserEnabled,
   timeout: 360000,
 }, async () => {
   const stages = Object.fromEntries(['register_a','verify_a','login_a','team_create','host_create',
-    'register_b','verify_b','login_b','invite_b','accept','device_approval','sync','edit','revoke']
+    'register_b','verify_b','login_b','invite_b','accept','device_approval','sync','connect','edit',
+    'relogin','restart','revoke','access_after_revocation']
     .map(name => [name, 'NOT_RUN']));
   const sessions = ['sr-mvp-a', 'sr-mvp-b'];
   let db, runtime, smtp, anchorFixture, currentStage='setup';
@@ -168,7 +169,8 @@ test('disposable browser Team Host MVP progress', {
       if (response.status() !== 503 || body.error !== 'team_security_temporarily_unavailable')
         throw Error('team_status_' + response.status() + '_' + String(body.error || 'missing'));
     }`);
-    for (const name of ['team_create','host_create','invite_b','accept','device_approval','sync','edit','revoke']) stages[name]='BLOCKED';
+    for (const name of ['team_create','host_create','invite_b','accept','device_approval','sync','connect','edit',
+      'relogin','restart','revoke','access_after_revocation']) stages[name]='BLOCKED';
   } catch (error) {
     process.stdout.write(`MVP_FAILED_STAGE=${currentStage}\n`);
     try {

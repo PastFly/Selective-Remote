@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   playwright-cli:
-    name: Install CLI and verify offline Cloud browser smoke
+    name: Verify browser smoke and isolated Team prerequisites
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
