@@ -128,9 +128,12 @@ test('disposable browser Team Host MVP progress', {
         if ((await response).status() !== 200) throw Error('verification_http_failed');
       }`);
       stages[`verify_${suffix}`]='PASS';
-      currentStage=`login_${suffix}`;
+      currentStage=`login_${suffix}_open`;
       await browser(session,'run-code',`async (page) => {
         await page.locator('[data-open-auth="login"]').first().click();
+      }`);
+      currentStage=`login_${suffix}_submit`;
+      await browser(session,'run-code',`async (page) => {
         await page.locator('#cloud-email').fill('${email}');
         await page.locator('#cloud-password').fill('${password}');
         const response = page.waitForResponse(r => r.url().endsWith('/v1/auth/login') && r.request().method() === 'POST');
@@ -158,6 +161,11 @@ test('disposable browser Team Host MVP progress', {
     for (const name of ['team_create','host_create','invite_b','accept','device_approval','sync','edit','revoke']) stages[name]='BLOCKED';
   } catch (error) {
     process.stdout.write(`MVP_FAILED_STAGE=${currentStage}\n`);
+    try {
+      await mkdir(join(root,'qa-artifacts/browser'),{recursive:true});
+      const session = currentStage.includes('_b') ? sessions[1] : sessions[0];
+      await browser(session,'screenshot',`--filename=${join(root,'qa-artifacts/browser/mvp-failure.png')}`);
+    } catch {}
     throw error;
   } finally {
     for(const session of sessions) { try { await browser(session,'close'); } catch {} }
