@@ -53,8 +53,11 @@ func newLocalTerminalProductionPathPreservesLegacyAndRerenders() throws {
         "tabs": [["id": UUID().uuidString, "title": legacyTitle, "isPrimary": true]],
         "layout": "single"
     ]
-    defaults.set(try JSONSerialization.data(withJSONObject: legacyStorage),
-                 forKey: "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)")
+    let oldKey = "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
+    let originalLegacyData = try JSONSerialization.data(withJSONObject: legacyStorage)
+    defaults.set(originalLegacyData, forKey: oldKey)
+    try NativeStorageMigration.prepareWorkspaces(defaults)
+    try NativeStorageValidation.validate(defaults)
 
     let workspace = TerminalWorkspaceModel(
         profileID: profileID,
@@ -70,6 +73,8 @@ func newLocalTerminalProductionPathPreservesLegacyAndRerenders() throws {
     let second = try #require(workspace.tabForNewLocalTerminalCommand(workingDirectory: "/tmp"))
     #expect(second.title == "Терминал 2")
     workspace.renameTab(second.id, to: "My terminal")
+    #expect(defaults.data(forKey: oldKey) == originalLegacyData)
+    #expect(defaults.data(forKey: NativeStorageMigration.workspaceKey(for: profileID)) != originalLegacyData)
 
     language.selection = .english
     #expect(workspace.tabs.map(\.title) == [legacyTitle, "Terminal 1", "My terminal"])
@@ -278,6 +283,7 @@ func historicalTerminalTitleWithoutProvenanceIsNotGuessedFromItsText() throws {
         try JSONSerialization.data(withJSONObject: legacyStorage),
         forKey: "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
     )
+    try NativeStorageMigration.prepareWorkspaces(defaults)
 
     let workspace = TerminalWorkspaceModel(
         profileID: profileID,
@@ -690,6 +696,7 @@ func migratesLegacyTemplatesToSnippetGroups() throws {
         try JSONEncoder().encode(legacy),
         forKey: "SelectiveRemote.terminal.commandTemplates.v1"
     )
+    try NativeStorageMigration.prepare(defaults)
 
     var store = TerminalCommandHistoryStore(defaults: defaults)
     let migrated = try #require(store.template(id: firstID, profileID: firstProfile))

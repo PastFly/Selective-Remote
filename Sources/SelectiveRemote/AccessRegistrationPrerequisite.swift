@@ -54,7 +54,7 @@ enum PublishedAccessWindows {
     private static var windows: [(NSWindow, SelectiveRemotePublishedModelReference)] = []
     static func retain(_ window: NSWindow, reference: SelectiveRemotePublishedModelReference) { windows.append((window, reference)) }
     static func closeInvalid() { windows.removeAll { window, reference in
-        guard !SelectiveRemotePublicationPresentation.shared.valid(reference) else { return false }; window.close(); return true
+        guard !SelectiveRemotePublicationPresentation.shared.validIgnoringTaskCancellation(reference) else { return false }; window.close(); return true
     } }
 }
 

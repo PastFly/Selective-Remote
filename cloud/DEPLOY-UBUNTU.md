@@ -70,6 +70,31 @@ Email verification, password reset, request rate limiting and abuse protection
 are implemented, but registration remains disabled until SMTP is configured
 and the complete browser/macOS flow is manually approved.
 
+### Public V1 registration candidate
+
+The controller has an explicit `production-v1` registration mode in its
+root-owned, reviewed settings. Its absence retains the closed staging policy:
+registration requires the exact two-address staging allowlist. Public V1 mode
+requires `NODE_ENV=production`, `PUBLICATION_ENVIRONMENT=production`, both
+`PUBLICATION_READER_ENABLED=false` and `WHOLE_PUBLICATION_ENABLED=false`, no
+staging email allowlist, and no V2 Vault allowlist. The controller checks the
+effective environment against the pinned image and environment file. It does
+not make the mode live or grant permission to enable registration.
+
+A protected operator can request `--disable-public-registration` with an
+empty JSON object on stdin. The command accepts only the exact pinned public
+registration override, closes Cloud and Caddy, writes the disabled settings
+and restarts through the independent controller. A failed transition leaves
+traffic closed for inspection. In `production-v1` mode the staging migration
+operator rejects every other operation, including V2 activation. The switch
+requires a provisioned, pinned registration override and is not a substitute
+for a reviewed production provisioning/deployment procedure.
+
+Before selecting this mode, verify the actual backup and restore, SMTP and
+email delivery, abuse limits, account recovery, real Mac/browser Team and
+Personal workflows, and the release security gates. Production deployment and
+public registration require a separate Owner approval.
+
 ## 4. Database backup and restore drill
 
 Create a private directory outside the checkout, then run a custom-format

@@ -11,7 +11,7 @@ import { applyMigrations } from "../src/migrations.mjs";
 import { VaultMigrationStore } from "../src/vault-migration-store.mjs";
 import { MigrationFence } from "../src/migration-fence.mjs";
 import { prepareLegacyMigration } from "../public/vault-v2-migration.js";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const connectionString = process.env.TEST_DATABASE_URL;
@@ -36,6 +36,9 @@ try {
     const f = await seedMigration(pool),
       dir = await mkdtemp(join(tmpdir(), "sel-migration-scale-")),
       fence = new MigrationFence(join(dir, "fence"));
+    // Explicit first provisioning belongs only to this disposable benchmark.
+    // The production append adapter must never recreate missing history.
+    await writeFile(join(dir, "fence"), "", { mode: 0o600, flag: "wx" });
     await addSyntheticDevices(pool, f);
     const groups = [];
     for (let n = 0; n < 3; n++) {

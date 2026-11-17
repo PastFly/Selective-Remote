@@ -2,7 +2,30 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createLocalVaultController } from "../public/vault-local.js";
+import { createIndexedDBVaultRepository, createLocalVaultController } from "../public/vault-local.js";
+import { IDBFactory } from "./approved-idb-fixture.mjs";
+import { encryptVaultPayload } from "../public/vault-crypto.js";
+import { capturePersonalVaultSession, synchronizeVault } from "../public/vault-sync.js";
+import * as application from "../public/app.js";
+
+test("writer compatibility errors tell Personal and Team users to update without clearing data", async () => {
+  const message = application.vaultStorageCompatibilityMessage("vault_client_upgrade_required");
+  assert.match(message, /Обновите/u);
+  assert.match(message, /Не очищайте данные браузера/u);
+  assert.equal(application.teamVaultSynchronizationErrorMessage("vault_client_upgrade_required"), message);
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.match(i18n, /Update the app or Cloud server before synchronizing/u);
+});
+
+test("temporarily stopped writes tell Personal and Team users to keep local copies", async () => {
+  const message = application.vaultStorageCompatibilityMessage("vault_write_temporarily_unavailable");
+  assert.match(message, /временно недоступна/u);
+  assert.match(message, /Сохраните локальные копии/u);
+  assert.equal(application.teamVaultSynchronizationErrorMessage("vault_write_temporarily_unavailable"), message);
+  assert.equal(application.vaultStorageCompatibilityMessage("unrelated_server_failure"), null);
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.match(i18n, /Writing to Cloud is temporarily unavailable.*Keep your local copies/u);
+});
 import {
   accountVaultPassphrase,
   appearancePreference,
@@ -41,6 +64,16 @@ import {
   workspaceCommands,
 } from "../public/app.js";
 
+test("unsupported Cloud sessions present an upgrade message in both languages", async () => {
+  const message = application.cloudCompatibilityMessage("cloud_upgrade_required");
+  assert.match(message, /Обновите Cloud/u);
+  assert.match(message, /Сохранённые данные не изменены/u);
+  assert.equal(application.cloudCompatibilityMessage("authentication_required"), null);
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.ok(i18n.includes(JSON.stringify(message)));
+  assert.match(i18n, /Update Cloud, then sign in again\. Your saved data has not been changed\./u);
+});
+
 test("Team role labels follow the active RU and EN locale", () => {
   assert.deepEqual(
     ["owner", "admin", "editor", "viewer"].map((role) => teamRoleLabel(role, "ru")),
@@ -50,6 +83,857 @@ test("Team role labels follow the active RU and EN locale", () => {
     ["owner", "admin", "editor", "viewer"].map((role) => teamRoleLabel(role, "en")),
     ["Owner", "Administrator", "Editor", "Viewer"],
   );
+});
+
+test("conflicting versions expose their differences only after an explicit reveal", () => {
+  const nodes = [];
+  const documentValue = { createElement(tag) {
+    const node = { tag, hidden: false, textContent: "", attributes: {},
+      setAttribute(key, value) { this.attributes[key] = value; },
+      addEventListener(_name, listener) { this.activate = listener; } };
+    nodes.push(node); return node;
+  } };
+  const parent = { children: [], append(...children) { this.children.push(...children); } };
+  application.appendVaultConflictDetails({ documentValue, parent, choice: "local", entity: {
+    kind: "record", value: { type: "credential", data: { title: "Same", password: "synthetic-secret" } },
+  } });
+  const [button, detail] = parent.children;
+  assert.equal(detail.textContent, "");
+  assert.equal(detail.hidden, true);
+  assert.equal(button.attributes["aria-expanded"], "false");
+  button.activate();
+  assert.match(detail.textContent, /synthetic-secret/u);
+  assert.equal(detail.hidden, false);
+  assert.equal(button.attributes["aria-expanded"], "true");
+  button.activate();
+  assert.equal(detail.hidden, true);
+  assert.equal(detail.textContent, "");
+});
+
+
+test("Team Host edit batches its credential update and duplicate cleanup", () => {
+  assert.equal(typeof application.teamVaultRecordOperations, "function");
+  const host = { id: "host", type: "host", data: { title: "Synthetic host" } };
+  const credentials = ["first", "duplicate"].map(id => ({ id, type: "credential", data: { sourceID: "host", kind: "ssh" } }));
+  const other = { id: "other", type: "credential", data: { sourceID: "other-host", kind: "ssh" } };
+  const replacement = { id: "fresh", type: "credential", data: { sourceID: "host", kind: "ssh", secret: "synthetic" } };
+  assert.deepEqual(application.teamVaultRecordOperations({
+    records: [host, ...credentials, other], record: host, credential: { record: replacement },
+  }), [
+    { op: "upsert", record: host },
+    { op: "upsert", record: { ...replacement, id: "first" } },
+    { op: "delete", id: "duplicate" },
+  ]);
+  assert.deepEqual(application.teamVaultRecordOperations({
+    records: [host, ...credentials, other], record: host, credential: { remove: true },
+  }), [{ op: "upsert", record: host }, { op: "delete", id: "first" }, { op: "delete", id: "duplicate" }]);
+});
+
+test("Team editor detects changed record values and linked credentials without rejecting unrelated changes", () => {
+  assert.equal(typeof application.captureTeamRecordEditorSnapshot, "function");
+  assert.equal(typeof application.teamRecordEditorMatches, "function");
+  const host = { id: "host", type: "host", version: { a: 1 }, data: { title: "Synthetic", address: "old.invalid" } };
+  const credential = { id: "credential", type: "credential", version: { a: 1 }, data: { sourceID: "host", kind: "ssh", secret: "synthetic" } };
+  const unrelated = { id: "other", type: "snippet", data: { title: "Before" } };
+  const snapshot = application.captureTeamRecordEditorSnapshot([host, credential, unrelated], host);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [host, credential, { ...unrelated, data: { title: "After" } }]), true);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [{ ...host, data: { ...host.data, address: "new.invalid" } }, credential]), false);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [host, { ...credential, version: { a: 2 } }]), false);
+  assert.equal(application.teamRecordEditorMatches(snapshot, [host]), false);
+});
+
+test("Team bulk deletion batches linked credentials exactly once and rejects missing selections", () => {
+  assert.equal(typeof application.teamVaultDeleteOperations, "function");
+  const records = [
+    { id: "host", type: "host", data: {} },
+    { id: "credential", type: "credential", data: { sourceID: "host", kind: "ssh" } },
+    { id: "other", type: "snippet", data: {} },
+  ];
+  assert.deepEqual(application.teamVaultDeleteOperations(records, ["credential", "host", "other"]), [
+    { op: "delete", id: "credential" }, { op: "delete", id: "host" }, { op: "delete", id: "other" },
+  ]);
+  assert.throws(() => application.teamVaultDeleteOperations(records, ["host", "missing"]), /record_changed/u);
+});
+
+test("a Team editing target requires the same active account and Vault", () => {
+  assert.equal(typeof application.teamVaultEditTargetMatches, "function");
+  const target = { controller: {}, teamID: "team", vaultID: "vault", sessionID: "account-a", sessionGeneration: "old" };
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target }), true);
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target, sessionID: "account-b" }), false);
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target, sessionGeneration: "new" }), false);
+  assert.equal(application.teamVaultEditTargetMatches(target, { ...target, vaultID: "other" }), false);
+  assert.equal(application.teamVaultEditTargetMatches({ ...target, sessionID: null }, { ...target, sessionID: null }), false);
+  assert.equal(application.teamVaultEditTargetMatches({ ...target, lockEpoch: 1 }, { ...target, lockEpoch: 2 }), false);
+});
+
+test("Personal Vault lock drops in-memory access before uncertain remembered-key cleanup finishes", async () => {
+  assert.equal(typeof application.lockPersonalVault, "function");
+  let release, locked = false, viewLocked = false;
+  const cleanup = new Promise(resolve => { release = resolve; });
+  const operation = application.lockPersonalVault({ controller: { lock() { locked = true; } },
+    cleanup: () => cleanup, onLocked() { viewLocked = true; } });
+  assert.equal(locked, true);
+  assert.equal(viewLocked, true);
+  release(false);
+  assert.equal(await operation, false);
+  assert.equal(await application.lockPersonalVault({ controller: { lock() { locked = true; } },
+    cleanup() { throw new Error("synthetic_storage_failure"); } }), false);
+});
+
+test("logout reports server and local cleanup results even if Vault status is unavailable", async () => {
+  assert.equal(typeof application.createBrowserLogoutRestoreView, "function");
+  let current = true;
+  const message = { textContent: "" };
+  const restoreView = application.createBrowserLogoutRestoreView({ message, isCurrent: () => current });
+  const vault = { lock() {}, async status() { throw new Error("synthetic_storage_failure"); },
+    async forgetTrackedRememberedSession() { return false; } };
+  await application.completeBrowserSessionLogout({ client: { logout: async () => {}, session: () => null }, vault,
+    clearView() {}, restoreView });
+  assert.match(message.textContent, /завершён на сервере/u);
+  assert.match(message.textContent, /не удалось подтвердить удаление локального ключа/iu);
+  const oldMessage = message.textContent;
+  current = false;
+  restoreView({ remoteRevoked: false, localCleanupConfirmed: false });
+  assert.equal(message.textContent, oldMessage);
+});
+
+test("confirmed deletion of account A does not alter a newer session B", async () => {
+  assert.equal(typeof application.completeBrowserAccountDeletion, "function");
+  let session = { id: "a" }, generation = "a", release, locked = 0, cleaned = 0, cleared = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { await held; return { deleted: true, sessionChanged: true }; } };
+  const operation = application.completeBrowserAccountDeletion({ client,
+    vault: { lock() { locked++; }, async forgetTrackedRememberedSession() { cleaned++; } },
+    email: "synthetic@example.invalid", password: "synthetic",
+    isBeforeCurrent: () => generation === "a", isViewCurrent: () => generation === "a",
+    cancelPendingActivations() { cleaned++; }, clearView() { cleared++; } });
+  session = { id: "b" }; generation = "b"; release();
+  assert.deepEqual(await operation, { deleted: true, sessionChanged: true });
+  assert.deepEqual({ session, locked, cleaned, cleared }, { session: { id: "b" }, locked: 0, cleaned: 0, cleared: 0 });
+});
+
+test("confirmed account deletion remains successful if local cleanup fails", async () => {
+  assert.equal(typeof application.completeBrowserAccountDeletion, "function");
+  let session = { id: "a" }, generation = "a", locked = 0, cleared = 0;
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { session = null; generation = "retired"; return { deleted: true }; } };
+  const result = await application.completeBrowserAccountDeletion({ client,
+    vault: { lock() { locked++; }, async forgetTrackedRememberedSession() { throw new Error("synthetic_storage_failure"); } },
+    email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => generation === "a",
+    isViewCurrent: () => true, cancelPendingActivations: () => true, clearView() { cleared++; } });
+  assert.deepEqual(result, { deleted: true, localCleanupConfirmed: false, sessionChanged: false });
+  assert.equal(locked, 1);
+  assert.equal(cleared, 1);
+});
+
+test("account A cleanup finishing after a login to B does not restore A's view", async () => {
+  let session = { id: "a" }, generation = "a", release, entered, locked = 0, cleared = 0;
+  const held = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { session = null; generation = "retired"; return { deleted: true }; } };
+  const operation = application.completeBrowserAccountDeletion({ client,
+    vault: { lock() { locked++; }, async forgetTrackedRememberedSession() { entered(); await held; return false; } },
+    email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => generation === "a",
+    isViewCurrent: () => generation !== "b", cancelPendingActivations: () => true, clearView() { cleared++; } });
+  await started;
+  session = { id: "b" }; generation = "b"; release();
+  assert.deepEqual(await operation, { deleted: true, localCleanupConfirmed: false, sessionChanged: true });
+  assert.equal(locked, 1);
+  assert.equal(cleared, 1);
+  assert.equal(session.id, "b");
+});
+
+test("a view cleanup failure does not misreport confirmed account deletion or key cleanup", async () => {
+  let session = { id: "a" }, generation = "a";
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async deleteAccount() { session = null; generation = "retired"; return { deleted: true }; } };
+  const result = await application.completeBrowserAccountDeletion({ client,
+    vault: { lock() {}, async forgetTrackedRememberedSession() { return true; } },
+    email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => generation === "a",
+    isViewCurrent: () => true, cancelPendingActivations: () => true, clearView() { throw new Error("synthetic_ui_failure"); } });
+  assert.equal(result.deleted, true);
+  assert.equal(result.localCleanupConfirmed, true);
+  assert.equal(result.viewCleared, false);
+});
+
+test("account deletion stops before requesting DELETE when the captured session changed", async () => {
+  assert.equal(typeof application.completeBrowserAccountDeletion, "function");
+  let requested = false;
+  const result = await application.completeBrowserAccountDeletion({ client: { async deleteAccount() { requested = true; } },
+    vault: {}, email: "synthetic@example.invalid", password: "synthetic", isBeforeCurrent: () => false });
+  assert.deepEqual(result, { deleted: false, sessionChanged: true });
+  assert.equal(requested, false);
+});
+
+for (const failed of [false, true]) test(`a late username update ${failed ? "error" : "success"} cannot alter the newer session's view`, async () => {
+  assert.equal(typeof application.completeBrowserUsernameUpdate, "function");
+  let generation = "a", release, applied = 0, errors = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const operation = application.completeBrowserUsernameUpdate({ client: { async updateUsername() {
+    await held;
+    if (failed) throw new Error("synthetic_username_failure");
+    return { id: "a", username: "synthetic", sessionChanged: true };
+  } }, username: "synthetic", password: "synthetic", isCurrent: () => generation === "a",
+    onSuccess() { applied++; }, onError() { errors++; } });
+  generation = "b"; release();
+  await operation;
+  assert.deepEqual({ applied, errors }, { applied: 0, errors: 0 });
+});
+
+for (const failed of [false, true]) test(`a late password update ${failed ? "error" : "success"} cannot alter the newer session's view`, async () => {
+  assert.equal(typeof application.completeBrowserPasswordUpdate, "function");
+  let generation = "a", release, applied = 0, errors = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const operation = application.completeBrowserPasswordUpdate({ client: { async changePassword() {
+    await held;
+    if (failed) throw new Error("synthetic_password_failure");
+    return { changed: true };
+  } }, currentPassword: "synthetic", newPassword: "synthetic-new", isCurrent: () => generation === "a",
+    onSuccess() { applied++; }, onError() { errors++; } });
+  generation = "b"; release();
+  await operation;
+  assert.deepEqual({ applied, errors }, { applied: 0, errors: 0 });
+});
+
+async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccepted = async () => {}, legacyServer = false, onLoginResponse = async () => {} }) {
+  const { createAuthenticatedVaultClient, loginWithDeviceConflictRetry } = await import("../public/vault-sync.js");
+  const { runInNewContext } = await import("node:vm");
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const deviceID = "11111111-1111-4111-8111-111111111111", password = "synthetic testing password";
+  const client = createAuthenticatedVaultClient({ sessionStorageValue: null, fetchValue: async (path, options) => {
+    if (path === "/v1/auth/login") {
+      const email = JSON.parse(options.body).email;
+      const id = email.startsWith("b@") ? accountB : accountA;
+      await onLoginResponse();
+      return new Response(JSON.stringify({ token: "a".repeat(43), user: { id, email, username: "synthetic" }, deviceID }), {
+        status: 200, headers: legacyServer ? {} : { "X-Selective-Session-Binding": deviceID },
+      });
+    }
+    if (path === "/v1/vault") return onVaultRequest();
+    throw new Error(`unexpected_synthetic_request:${path}`);
+  } });
+  let submit;
+  const form = { elements: { email: { value: "a@example.invalid" }, password: { value: password } },
+    querySelector: () => ({ disabled: false }), addEventListener(_event, listener) { submit = listener; } };
+  const calls = { sessions: [], modes: [], accountMessages: [], text: [], locks: 0, personal: 0, team: 0,
+    deactivations: 0, teamOwner: "previous-account", ownerWhenShown: [] };
+  const accountDevices = { deviceID: async () => deviceID, remember: async (_email, id) => id,
+    accepted: onAccepted, replaceAfterConflict: async () => null };
+  const context = { form, client, accountDevices, loginWithDeviceConflictRetry, crypto: webcrypto, storageUnavailableCode: null,
+    startupCompatibilityMessage: null,
+    loginAttempt: 0, loginInputRevision: 0, completeInteractivePersonalVaultLogin: application.completeInteractivePersonalVaultLogin,
+    ensureTeamDeviceIdentity: async () => identity, teamDeviceRepository: {},
+    activateAccountVault: async () => ({ vault: { rememberSession: async () => true } }),
+    unlockAndSyncPersonalVault: async () => { calls.personal++; return client.getVault(); },
+    vaultUI: { mode(value) { calls.modes.push(value); } }, vault: { lock() { calls.locks++; } },
+    showSession(user) { if (!user) context.teamWorkspace.deactivate(); calls.sessions.push(user); calls.ownerWhenShown.push(calls.teamOwner); },
+    teamWorkspace: { async activate() { calls.team++; }, deactivate() { calls.deactivations++; calls.teamOwner = null; } },
+    message: {}, vaultMessage: {}, setText(element, value) { element.textContent = value; calls.text.push(value); },
+    setAccountMessage(value) { calls.accountMessages.push(value); },
+    hideConflicts() {},
+    cloudCompatibilityMessage: application.cloudCompatibilityMessage,
+    vaultStorageCompatibilityMessage: application.vaultStorageCompatibilityMessage,
+    personalVaultRecoveryMessage: application.personalVaultRecoveryMessage,
+    personalVaultOwnershipError: () => false, personalVaultLegacyUnverifiedMessage: () => "legacy",
+    personalVaultKeyMismatchMessage: () => "mismatch", sessionRetiredByError: application.sessionRetiredByError,
+    retiredSessionGeneration: null };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const retireStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
+  const retireEnd = source.indexOf("\n  const teamWorkspace = ", retireStart);
+  assert.ok(retireStart >= 0 && retireEnd > retireStart);
+  runInNewContext(source.slice(retireStart, retireEnd), context);
+  const start = source.indexOf('  form.addEventListener("submit", async (event) => {', source.indexOf("export async function initializeCloudAccount"));
+  const end = source.indexOf("\n  let reauthenticationAttempt", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  return { client, calls, context, submit: () => submit({ preventDefault() {} }), accountB, deviceID, password };
+}
+
+test("login to a legacy server shows the upgrade requirement before touching the Vault", async () => {
+  const fixture = await loginLifecycleFixture({ legacyServer: true, onVaultRequest: async () => { throw Error("unexpected_vault_request"); } });
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.match(fixture.calls.accountMessages.at(-1), /Обновите Cloud/u);
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.equal(fixture.calls.team, 0);
+  assert.equal(fixture.context.form.elements.password.value, "");
+});
+
+test("a delayed legacy-server rejection does not clear a newer password entry", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await loginLifecycleFixture({ legacyServer: true, onLoginResponse: async () => { entered(); await held; },
+    onVaultRequest: async () => { throw Error("unexpected_vault_request"); } });
+  const pending = fixture.submit();
+  await started;
+  fixture.context.form.elements.password.value = "newer synthetic entry";
+  fixture.context.loginInputRevision += 1;
+  release();
+  await pending;
+  assert.equal(fixture.context.form.elements.password.value, "newer synthetic entry");
+  assert.equal(fixture.client.session(), null);
+});
+
+test("a 401 during Personal Vault login leaves the expired session signed out", async () => {
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 }) });
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.equal(fixture.calls.locks, 1);
+  assert.equal(fixture.calls.team, 0);
+  assert.equal(fixture.calls.teamOwner, null);
+  assert.ok(fixture.calls.deactivations >= 1);
+  assert.match(fixture.calls.accountMessages.at(-1), /сессия cloud истекла/iu);
+});
+
+test("deferred storage rejects login locally with an actionable message", async () => {
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => { throw new Error("unexpected_request"); } });
+  fixture.context.storageUnavailableCode = "vault_storage_upgrade_confirmation_required";
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.equal(fixture.calls.personal, 0);
+  assert.equal(fixture.calls.team, 0);
+  assert.match(fixture.calls.accountMessages.at(-1), /хранилище Cloud не открыто/iu);
+});
+
+test("login explains when another tab blocks the safe storage upgrade", async () => {
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => { throw new Error("unexpected_vault_request"); } });
+  fixture.context.accountDevices.deviceID = async () => { throw new Error("vault_storage_upgrade_blocked"); };
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.equal(fixture.calls.personal, 0);
+  assert.match(fixture.calls.accountMessages.at(-1), /вкладках.*закройте/iu);
+  assert.match(fixture.calls.accountMessages.at(-1), /сохранённые данные не изменены/iu);
+});
+
+test("a late 401 from account A cannot repaint or lock account B", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => {
+    entered(); await held; return new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 });
+  } });
+  const pending = fixture.submit();
+  await started;
+  await fixture.client.login({ email: "b@example.invalid", password: fixture.password, deviceID: fixture.deviceID });
+  fixture.calls.teamOwner = "account-b";
+  release();
+  await pending;
+  assert.equal(fixture.client.session().id, fixture.accountB);
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.deepEqual(fixture.calls.modes, []);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+  assert.equal(fixture.calls.locks, 0);
+  assert.equal(fixture.calls.team, 0);
+  assert.equal(fixture.calls.teamOwner, "account-b");
+});
+
+test("a 401 during Team key bootstrap cannot restore an expired login", async () => {
+  const fixture = await loginLifecycleFixture({ identity: { publicKey: null },
+    onVaultRequest: async () => new Response(JSON.stringify({ error: "authentication_required" }), { status: 401 }) });
+  fixture.context.unlockAndSyncPersonalVault = async () => ({});
+  fixture.client.bootstrapDeviceKey = async () => fixture.client.getVault();
+  await fixture.submit();
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.equal(fixture.calls.locks, 1);
+  assert.equal(fixture.calls.team, 0);
+  assert.match(fixture.calls.accountMessages.at(-1), /сессия cloud истекла/iu);
+});
+
+test("a replaced session during device acceptance cannot continue the older login", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => { throw new Error("unexpected_vault_request"); },
+    onAccepted: async () => { entered(); await held; } });
+  const pending = fixture.submit();
+  await started;
+  await fixture.client.login({ email: "b@example.invalid", password: fixture.password, deviceID: fixture.deviceID });
+  release();
+  await pending;
+  assert.equal(fixture.client.session().id, fixture.accountB);
+  assert.equal(fixture.calls.personal, 0);
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.equal(fixture.calls.team, 0);
+});
+
+test("a new login clears the prior Team view before showing the new account", async () => {
+  const fixture = await loginLifecycleFixture({ onVaultRequest: async () => new Response("{}", { status: 500 }) });
+  await fixture.submit();
+  assert.equal(fixture.calls.sessions.length, 1);
+  assert.equal(fixture.calls.sessions[0].email, "a@example.invalid");
+  assert.deepEqual(fixture.calls.ownerWhenShown, [null]);
+  assert.ok(fixture.calls.deactivations >= 1);
+});
+
+test("authentication loss belongs only to its exact retired session generation", () => {
+  const error = Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "5" });
+  let generation = "6", session = null;
+  const client = { session: () => session, sessionGeneration: () => generation };
+  assert.equal(application.sessionRetiredByError(client, error, "5"), true);
+  generation = "7";
+  assert.equal(application.sessionRetiredByError(client, error, "5"), false);
+  generation = "6"; session = { id: "new" };
+  assert.equal(application.sessionRetiredByError(client, error, "5"), false);
+});
+
+test("session presentation clears the previous Team before displaying another account", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  let sessionPresentationEpoch = ");
+  const end = source.indexOf("\n  function setSettingsMessage", start);
+  assert.ok(start >= 0 && end > start);
+  let generation = "a", teamOwner = "initial", deactivations = 0;
+  const observations = [];
+  const context = { client: { sessionGeneration: () => generation },
+    teamWorkspace: { deactivate() { deactivations++; teamOwner = null; } },
+    tabs: {}, form: {}, registrationForm: {}, recoveryFormAccount: {}, registrationSuccess: {}, signedIn: {},
+    syncButton: {}, accountName: {}, usernameForm: { elements: { username: {} } },
+    setText(element, value) { element.textContent = value; }, onSessionChange(user) { observations.push({ user, teamOwner }); } };
+  runInNewContext(`${source.slice(start, end)}\nthis.showCapturedSession = showSession;`, context);
+  context.showCapturedSession({ id: "a", username: "synthetic-a" });
+  teamOwner = "account-a"; generation = "b";
+  context.showCapturedSession({ id: "b", username: "synthetic-b" });
+  assert.equal(observations.at(-1).teamOwner, null);
+  const count = deactivations;
+  teamOwner = "account-b";
+  context.showCapturedSession({ id: "b", username: "synthetic-b-renamed" });
+  assert.equal(deactivations, count);
+  assert.equal(observations.at(-1).teamOwner, "account-b");
+});
+
+async function startupLifecycleFixture({ requestVault, failRestore = false, onRestore = null, storageUnavailableCode = null, unsupportedServer = false }) {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  setAuthMode("login");\n  let startupSession');
+  const end = source.indexOf("\n  return {\n    client,", start);
+  assert.ok(start >= 0 && end > start);
+  let session = null, generation = "0";
+  const calls = { sessions: [], modes: [], accountMessages: [], locks: 0 };
+  const error = () => Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "1" });
+  const client = { session: () => session, sessionGeneration: () => generation,
+    async restoreSession() {
+      generation = "1";
+      if (onRestore) await onRestore();
+      if (unsupportedServer) throw new Error("cloud_upgrade_required");
+      if (failRestore) { generation = "2"; throw error(); }
+      session = { id: "a" }; return session;
+    },
+    async getVault() { return requestVault({ expire() { session = null; generation = "2"; return error(); } }); } };
+  const context = { client, storageUnavailableCode, setAuthMode() {}, showSession(user) { calls.sessions.push(user?.id ?? null); },
+    startupCompatibilityMessage: null,
+    capturePersonalVaultSession() { const id = session.id, prior = generation;
+      return { requireCurrent() { if (session?.id !== id || generation !== prior) throw new Error("authentication_required"); } }; },
+    async activateAccountVault() { return { restored: false, legacyOwnershipUnverified: false }; },
+    vault: { async status() { return "locked"; }, async restoreRememberedSession() { return false; }, lock() { calls.locks++; } },
+    vaultUI: { mode(value) { calls.modes.push(value); }, render() {} }, vaultMessage: {}, setText() {},
+    setAccountMessage(value) { calls.accountMessages.push(value); }, hideConflicts() {}, sessionRetiredByError: application.sessionRetiredByError,
+    cloudCompatibilityMessage: application.cloudCompatibilityMessage,
+    retiredSessionGeneration: null };
+  const retireStart = source.indexOf("  function retireCurrentTeamSession(error, generation)");
+  const retireEnd = source.indexOf("\n  const teamWorkspace = ", retireStart);
+  assert.ok(retireStart >= 0 && retireEnd > retireStart);
+  runInNewContext(source.slice(retireStart, retireEnd), context);
+  const pending = runInNewContext(`(async () => {${source.slice(start, end)}\n})()`, context);
+  return { pending, calls, client, context, source, replaceSession() { session = { id: "b" }; generation = "2"; } };
+}
+
+test("startup on a legacy server explains the upgrade and leaves the Vault closed", async () => {
+  const fixture = await startupLifecycleFixture({ unsupportedServer: true, requestVault: async () => { throw Error("unexpected_vault_request"); } });
+  await fixture.pending;
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.match(fixture.calls.accountMessages.at(-1), /Обновите Cloud/u);
+  // Initial navigation calls setAuthMode after startup and must not erase the warning.
+  const { runInNewContext } = await import("node:vm");
+  Object.assign(fixture.context, { metadata: { registrationEnabled: false }, initialTeamInvitationToken: null,
+    form: {}, registrationForm: { querySelectorAll: () => [] }, recoveryFormAccount: {}, registrationSuccess: {},
+    loginTab: { setAttribute() {} }, registrationTab: { setAttribute() {} } });
+  const start = fixture.source.indexOf("  function setAuthMode(mode)");
+  const end = fixture.source.indexOf("\n  function hideConflicts", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(fixture.source.slice(start, end) + "\nglobalThis.navigateToLogin = setAuthMode;", fixture.context);
+  fixture.context.navigateToLogin("login");
+  assert.match(fixture.calls.accountMessages.at(-1), /Обновите Cloud/u);
+});
+
+test("deferred storage does not restore a session or touch account Vault state", async () => {
+  let restores = 0;
+  const fixture = await startupLifecycleFixture({ requestVault: async () => { throw new Error("unexpected_request"); },
+    onRestore: async () => { restores++; }, storageUnavailableCode: "vault_storage_upgrade_confirmation_required" });
+  await fixture.pending;
+  assert.equal(restores, 0);
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, [null]);
+});
+
+test("a current 401 during restored Personal Vault startup clears the signed-in view", async () => {
+  const fixture = await startupLifecycleFixture({ requestVault: async ({ expire }) => { throw expire(); } });
+  await fixture.pending;
+  assert.equal(fixture.client.session(), null);
+  assert.deepEqual(fixture.calls.sessions, ["a", null]);
+  assert.equal(fixture.calls.locks, 1);
+  assert.match(fixture.calls.accountMessages.at(-1), /сессия cloud истекла/iu);
+});
+
+test("a late startup 401 does not clear the newer signed-in session", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await startupLifecycleFixture({ requestVault: async () => {
+    entered(); await held; throw new Error("authentication_required");
+  } });
+  await started;
+  fixture.replaceSession(); release();
+  await fixture.pending;
+  assert.equal(fixture.client.session().id, "b");
+  assert.deepEqual(fixture.calls.sessions, ["a"]);
+  assert.equal(fixture.calls.locks, 0);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+});
+
+test("an ordinary signed-out startup does not report an expired restored session", async () => {
+  const fixture = await startupLifecycleFixture({ failRestore: true, requestVault: async () => { throw new Error("unexpected_request"); } });
+  await fixture.pending;
+  assert.deepEqual(fixture.calls.sessions, [null]);
+  assert.equal(fixture.calls.locks, 0);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+});
+
+test("a late failed session restore cannot show an error over a newer login", async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const fixture = await startupLifecycleFixture({ requestVault: async () => { throw new Error("unexpected_request"); },
+    onRestore: async () => { entered(); await held; throw new Error("authentication_required"); } });
+  await started;
+  fixture.replaceSession(); release();
+  await fixture.pending;
+  assert.equal(fixture.client.session().id, "b");
+  assert.deepEqual(fixture.calls.sessions, []);
+  assert.deepEqual(fixture.calls.modes, []);
+  assert.deepEqual(fixture.calls.accountMessages, []);
+});
+
+for (const failed of [false, true]) test(`an old Team list ${failed ? "error" : "response"} cannot replace the newer session's Team`, async () => {
+  assert.equal(typeof application.captureTeamWorkspaceContext, "function");
+  assert.equal(typeof application.teamWorkspaceContextMatches, "function");
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadTeams(");
+  const end = source.indexOf("\n  createTeamForm.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  let session = { id: "a" }, deviceID = "device-a", generation = "1", identity = { deviceID }, epoch = 1;
+  let entered, release, locked = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => session, deviceID: () => deviceID, sessionGeneration: () => generation,
+    async listTeams() {
+      const account = session.id;
+      if (account === "a") { entered(); await held; if (failed) throw new Error("synthetic_stale_failure"); }
+      return [{ id: `team-${account}`, name: `Synthetic ${account}`, role: "owner" }];
+    } };
+  const select = { value: "", options: [], replaceChildren() { this.options = []; this.value = ""; },
+    append(option) { this.options.push(option); if (!this.value) this.value = option.value; } };
+  const context = { client, teams: [], selectedTeam: null, controller: null, teamListRequestGeneration: 0,
+    teamSelect: select, teamInvitations: [], selectedPanel: {}, message: {}, documentValue: { createElement: () => ({}) },
+    renderOverviewSummary() {}, renderTeamInvitations() {}, teamRoleLabel: () => "owner", setText() {},
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }),
+    async loadSelectedTeam(captured) {
+      if (!context.workspaceContextCurrent(captured)) return;
+      context.controller?.lock();
+      context.selectedTeam = context.teams.find(team => team.id === select.value);
+    } };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCapturedTeams = loadTeams;`, context);
+  const old = context.loadCapturedTeams();
+  await started;
+  session = { id: "b" }; deviceID = "device-b"; generation = "2"; identity = { deviceID }; epoch++;
+  await context.loadCapturedTeams();
+  context.controller = { lock() { locked++; } };
+  release();
+  await old;
+  assert.equal(context.selectedTeam.id, "team-b");
+  assert.deepEqual(select.options.map(value => value.value), ["team-b"]);
+  assert.equal(locked, 0);
+});
+
+for (const failed of [false, true]) test(`an old selected-Team ${failed ? "error" : "response"} cannot update a newer session of the same Team`, async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadSelectedTeam(");
+  const end = source.indexOf("\n  async function loadTeams(", start);
+  assert.ok(start >= 0 && end > start);
+  let session = { id: "a" }, deviceID = "device-a", generation = "1", identity = { deviceID }, epoch = 1;
+  let entered, release, backgroundStarted = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => session, deviceID: () => deviceID, sessionGeneration: () => generation,
+    async listTeamMembersPage() { entered(); await held; if (failed) throw new Error("synthetic_stale_failure"); return { members: [], nextCursor: null, total: 0 }; },
+    async listSharedVaults() { return [{ id: "vault-a" }]; }, async listTeamInvitations() { return []; },
+    async getTeamDeviceAdmissionPolicy() { return {}; } };
+  const element = () => ({ hidden: false, disabled: false, value: "", reset() {}, replaceChildren() {}, querySelector: () => element() });
+  const shared = { id: "shared-team", role: "owner", name: "Synthetic" };
+  const context = { client, teams: [shared], selectedTeam: null, selectedVault: null, memberRequestGeneration: 0, selectedTeamRequestGeneration: 0,
+    accessManager: null, activeView: "teams", teamSelect: { value: shared.id }, lockCurrentVault() {},
+    teamMembers: [], ownershipMembers: [], memberNextCursor: null, memberTotal: 0, renderMembers() {},
+    teamInvitations: [], renderTeamInvitations() {}, selectedPanel: element(), deviceAdmissionPolicy: null,
+    renderDeviceAdmissionPolicy() {}, deviceAdmissionPolicyPanel: element(), teamRole: element(), teamRoleLabel: () => "owner",
+    inviteForm: { hidden: false, elements: { role: { value: "viewer", options: [{ value: "admin" }] } } },
+    canManage: () => true, createVaultForm: element(), lifecyclePanel: element(), renameTeamForm: { elements: { name: element() } },
+    archiveTeamForm: element(), archiveTeamMessage: element(), transferOwnershipForm: element(), transferOwnershipMember: element(),
+    memberSearch: element(), memberRoleFilter: element(), vaults: [], populateVaults() {}, updateTeamMessage() {},
+    startBackgroundSync() { backgroundStarted++; }, runBackgroundTeamVaultSync: async () => {}, setText() {},
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }) };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCapturedTeam = loadSelectedTeam;`, context);
+  const old = context.loadCapturedTeam();
+  await started;
+  session = { id: "b" }; deviceID = "device-b"; generation = "2"; identity = { deviceID }; epoch++;
+  context.selectedTeam = { ...shared, name: "Synthetic B" };
+  context.memberRequestGeneration++;
+  context.vaults = [{ id: "vault-b" }];
+  release();
+  await old;
+  assert.equal(context.selectedTeam.name, "Synthetic B");
+  assert.equal(context.vaults[0].id, "vault-b");
+  assert.equal(backgroundStarted, 0);
+});
+
+test("a member search does not cancel the current Team's vault-list load", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadSelectedTeam("), end = source.indexOf("\n  async function loadTeams(", start);
+  let entered, release, backgroundStarted = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const identity = { deviceID: "device" }, client = { session: () => ({ id: "a" }), deviceID: () => "device", sessionGeneration: () => "1",
+    async listTeamMembersPage() { entered(); await held; return { members: [], nextCursor: null, total: 0 }; },
+    async listSharedVaults() { return [{ id: "vault-a" }]; }, async listTeamInvitations() { return []; },
+    async getTeamDeviceAdmissionPolicy() { return {}; } };
+  const element = () => ({ hidden: false, disabled: false, value: "", reset() {}, replaceChildren() {}, querySelector: () => element() });
+  const team = { id: "team-a", role: "owner", name: "Synthetic" };
+  const context = { client, teams: [team], selectedTeam: null, selectedVault: null, memberRequestGeneration: 0, selectedTeamRequestGeneration: 0,
+    accessManager: null, activeView: "teams", teamSelect: { value: team.id }, lockCurrentVault() {},
+    teamMembers: [], ownershipMembers: [], memberNextCursor: null, memberTotal: 0, renderMembers() {}, teamInvitations: [],
+    renderTeamInvitations() {}, selectedPanel: element(), deviceAdmissionPolicy: null, renderDeviceAdmissionPolicy() {},
+    deviceAdmissionPolicyPanel: element(), teamRole: element(), teamRoleLabel: () => "owner",
+    inviteForm: { hidden: false, elements: { role: { value: "viewer", options: [{ value: "admin" }] } } }, canManage: () => true,
+    createVaultForm: element(), lifecyclePanel: element(), renameTeamForm: { elements: { name: element() } }, archiveTeamForm: element(),
+    archiveTeamMessage: element(), transferOwnershipForm: element(), transferOwnershipMember: element(), memberSearch: element(), memberRoleFilter: element(),
+    vaults: [], populateVaults() {}, updateTeamMessage() {}, startBackgroundSync() { backgroundStarted++; }, runBackgroundTeamVaultSync: async () => {}, setText() {},
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: 1 }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: 1 }) };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCapturedTeam = loadSelectedTeam;`, context);
+  const pending = context.loadCapturedTeam();
+  await started;
+  context.memberRequestGeneration++;
+  release();
+  await pending;
+  assert.equal(context.vaults[0]?.id, "vault-a");
+  assert.equal(backgroundStarted, 1);
+});
+
+for (const kind of ["devices", "invitations"]) for (const failed of [false, true]) {
+  test(`old Team ${kind} ${failed ? "error" : "response"} cannot repaint the newer session`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const startMarker = kind === "devices" ? "  async function loadDevices(" : "  async function loadPendingInvitations(";
+    const endMarker = kind === "devices" ? "\n  function renderMembers(" : "\n  async function refreshWorkspaceActivity(";
+    const start = source.indexOf(startMarker), end = source.indexOf(endMarker, start);
+    assert.ok(start >= 0 && end > start);
+    let generation = "1", identity = { deviceID: "same-device" }, epoch = 1, entered, release, paints = 0;
+    const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+    const delayed = async () => { entered(); await held; if (failed) throw new Error("synthetic_stale_failure"); return []; };
+    const client = { session: () => ({ id: "same-account" }), deviceID: () => "same-device", sessionGeneration: () => generation,
+      listDevices: delayed, listPendingTeamInvitations: delayed };
+    const context = { client, identity, notificationSourceSequence: 0, documentValue: {}, deviceTrustContainer: null,
+      deviceTrustRepository: null, devices: { replaceChildren() { paints++; } }, deviceOrbit: null,
+      accountInvitations: [{ id: "new" }], renderPendingInvitations() { paints++; }, renderOverviewSummary() { paints++; },
+      activeInterfaceLocale: () => "ru",
+      captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+      workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }) };
+    runInNewContext(`${source.slice(start, end)}\nthis.loadCaptured = ${kind === "devices" ? "loadDevices" : "loadPendingInvitations"};`, context);
+    const old = context.loadCaptured();
+    await started;
+    generation = "2"; identity = { deviceID: "same-device" }; context.identity = identity; epoch++;
+    release();
+    await old;
+    assert.equal(paints, 0);
+    if (kind === "invitations") assert.equal(context.accountInvitations[0].id, "new");
+  });
+}
+
+test("a delayed old device-trust panel can only render into its detached container", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function loadDevices("), end = source.indexOf("\n  function renderMembers(", start);
+  let generation = "1", identity = { deviceID: "device" }, epoch = 1, entered, release, reloads = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const client = { session: () => ({ id: "account" }), deviceID: () => "device", sessionGeneration: () => generation, async listDevices() { return []; } };
+  const panel = { children: [], replaceChildren(...items) { this.children = items; } };
+  const context = { client, identity, notificationSourceSequence: 0, documentValue: { createElement: () => ({ style: {} }) },
+    deviceTrustContainer: panel, deviceTrustRepository: {}, teamIdentityRepository: {}, trustPanel: null,
+    location: { origin: "https://synthetic.invalid", reload() { reloads++; } },
+    devices: { replaceChildren() {} }, deviceOrbit: null, activeInterfaceLocale: () => "ru",
+    captureWorkspaceContext: () => application.captureTeamWorkspaceContext({ client, identity, activationEpoch: epoch }),
+    workspaceContextCurrent: captured => application.teamWorkspaceContextMatches(captured, { client, identity, activationEpoch: epoch }),
+    createBrowserDeviceTrustPanel({ container, onRekeyCommitted }) { return { async refresh() {
+      entered(); await held; container.value = "old"; onRekeyCommitted();
+    } }; } };
+  runInNewContext(`${source.slice(start, end)}\nthis.loadCaptured = loadDevices;`, context);
+  const old = context.loadCaptured();
+  await started;
+  generation = "2"; identity = { deviceID: "device" }; context.identity = identity; epoch++;
+  const current = { value: "new" };
+  panel.replaceChildren(current);
+  release();
+  await old;
+  assert.equal(panel.children[0], current);
+  assert.equal(panel.children[0].value, "new");
+  assert.equal(reloads, 0);
+});
+
+for (const stage of ["confirmation", "revoke", "selection", "maintenance", "vaults"]) {
+  for (const failed of stage === "confirmation" ? [false] : [false, true]) {
+    test(`Team revoke ${stage} ${failed ? "error" : "response"} cannot affect a replacement session`, async () => {
+      const { runInNewContext } = await import("node:vm");
+      const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+      const start = source.indexOf('      revoke.addEventListener("click", async () => {', source.indexOf("  function renderMembers("));
+      const end = source.indexOf("\n      actions.className", start);
+      assert.ok(start >= 0 && end > start);
+      let entered, release, switched = false, callback, messagesAfterSwitch = 0, selectionsAfterSwitch = 0;
+      const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+      const gate = async name => {
+        if (name !== stage) return;
+        entered(); await held;
+        if (failed) throw new Error("synthetic_stale_failure");
+      };
+      const requests = [], revoke = { disabled: false, addEventListener(_type, handler) { callback = handler; } };
+      const teamA = { id: "team-a" }, teamB = { id: "team-b" };
+      const context = { revoke, member: { id: "member-a", username: "synthetic" }, selectedTeam: teamA,
+        selectedTeamRequestGeneration: 1, activeSession: "a", ownershipMembers: ["a"], vaults: [{ id: "a" }],
+        message: {}, editableByActor: true, self: false,
+        captureWorkspaceContext() { return context.activeSession; }, workspaceContextCurrent: captured => captured === context.activeSession,
+        async requestConfirmation() { await gate("confirmation"); return true; },
+        client: { async revokeTeamMember(input) { requests.push(input); await gate("revoke"); return { rotationRequiredVaults: 1 }; },
+          async listSharedVaults(id) { requests.push({ list: id }); await gate("vaults"); return [{ id: "a", rotationRequired: false }]; } },
+        async loadSelectedTeam() { context.selectedTeamRequestGeneration++; if (switched) selectionsAfterSwitch++; await gate("selection"); },
+        async maintainSelectedTeamVaults() { await gate("maintenance"); return { rotated: 1 }; },
+        populateVaults() { if (switched) messagesAfterSwitch++; }, setText() { if (switched) messagesAfterSwitch++; } };
+      runInNewContext(source.slice(start, end), context);
+      const operation = callback();
+      await started;
+      switched = true; context.activeSession = "b"; context.selectedTeam = teamB; context.selectedTeamRequestGeneration++;
+      context.ownershipMembers = ["b"]; context.vaults = [{ id: "b" }];
+      release();
+      await operation;
+      assert.equal(context.selectedTeam, teamB);
+      assert.deepEqual(context.ownershipMembers, ["b"]);
+      assert.equal(context.vaults[0].id, "b");
+      assert.equal(selectionsAfterSwitch, 0);
+      assert.equal(messagesAfterSwitch, 0);
+      assert.equal(requests.some(request => request.teamID === "team-b" || request.list === "team-b"), false);
+    });
+  }
+}
+
+for (const stage of ["format", "synchronize"]) test(`Team maintenance stops after its ${stage} result becomes stale`, async () => {
+  let current = true, entered, release, controllers = 0, provisions = 0, locks = 0;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const gate = async name => { if (name === stage) { entered(); await held; } };
+  const client = { accessClient() { return { async getContext() { await gate("format"); return { formatState: "V1_ACTIVE" }; } }; } };
+  const operation = application.maintainAccessibleTeamVaultWrappers({ client, identity: {}, team: { id: "team-a", role: "owner" },
+    vaults: [{ id: "vault-a", rotationRequired: false }], isCurrent: () => current,
+    repositoryFactory: () => ({}), controllerFactory() { controllers++; return { lock() { locks++; } }; },
+    async synchronize() { await gate("synchronize"); return { status: "up_to_date" }; },
+    async provision() { provisions++; return { granted: 1 }; } });
+  await started;
+  current = false; release();
+  await operation;
+  assert.equal(provisions, 0);
+  assert.equal(controllers, stage === "format" ? 0 : 1);
+  assert.equal(locks, stage === "format" ? 0 : 1);
+});
+
+test("a previous Team maintenance promise is not reused by a newer session", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function maintainSelectedTeamVaults("), end = source.indexOf("\n  async function synchronizeAndProvision(", start);
+  assert.ok(start >= 0 && end > start);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const calls = [];
+  const teamA = { id: "shared-team", role: "owner", account: "a" }, teamB = { ...teamA, account: "b" };
+  const context = { activeSession: "a", identity: {}, selectedTeam: teamA, selectedVault: null,
+    selectedTeamRequestGeneration: 1, teamVaultLockEpoch: 0, teamVaultManuallyLocked: false,
+    createTrackedTeamVaultController() {}, vaults: [{ id: "vault-a", rotationRequired: true }], vaultSelect: {},
+    backgroundMaintenanceOperation: null, captureWorkspaceContext() { return context.activeSession; },
+    workspaceContextCurrent: captured => captured === context.activeSession,
+    async maintainAccessibleTeamVaultWrappers({ team }) {
+      calls.push(`maintenance-${team.account}`);
+      if (team.account === "a") { entered(); await held; }
+      return { rotated: 1 };
+    },
+    client: { async listSharedVaults() { calls.push(`refresh-${context.activeSession}`); return [{ id: `vault-${context.activeSession}` }]; } },
+    populateVaults() {} };
+  runInNewContext(`${source.slice(start, end)}\nthis.maintainCaptured = maintainSelectedTeamVaults;`, context);
+  const old = context.maintainCaptured();
+  await started;
+  context.activeSession = "b"; context.selectedTeam = teamB; context.selectedTeamRequestGeneration++;
+  context.vaults = [{ id: "vault-b", rotationRequired: true }];
+  await context.maintainCaptured();
+  release();
+  await old;
+  assert.deepEqual(calls, ["maintenance-a", "maintenance-b", "refresh-b"]);
+  assert.equal(context.vaults[0].id, "vault-b");
+});
+
+for (const outcome of ["success", "post-confirm-failure", "unconfirmed"]) {
+  test(`current Team revoke reports ${outcome} without crossing accounts`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const start = source.indexOf('      revoke.addEventListener("click", async () => {', source.indexOf("  function renderMembers("));
+    const end = source.indexOf("\n      actions.className", start);
+    assert.ok(start >= 0 && end > start);
+    let callback, lastMessage = "", loadedTeam = "";
+    const revoke = { disabled: false, addEventListener(_type, handler) { callback = handler; } };
+    const team = { id: "team-a" };
+    const context = { revoke, member: { id: "member-a", username: "synthetic" }, selectedTeam: team,
+      selectedTeamRequestGeneration: 1, ownershipMembers: ["old"], vaults: [], message: {}, editableByActor: true, self: false,
+      captureWorkspaceContext: () => "a", workspaceContextCurrent: captured => captured === "a",
+      requestConfirmation: async () => true,
+      client: { async revokeTeamMember(input) {
+        assert.equal(input.teamID, "team-a");
+        if (outcome === "unconfirmed") throw new Error("synthetic_failure");
+        return { rotationRequiredVaults: 1 };
+      }, async listSharedVaults(id) { loadedTeam = id; return [{ id: "vault-a", rotationRequired: false }]; } },
+      async loadSelectedTeam() { context.selectedTeamRequestGeneration++; },
+      async maintainSelectedTeamVaults() { if (outcome === "post-confirm-failure") throw new Error("synthetic_failure"); return { rotated: 1 }; },
+      populateVaults() {}, setText(_element, value) { lastMessage = value; } };
+    runInNewContext(source.slice(start, end), context);
+    await callback();
+    if (outcome === "success") { assert.equal(loadedTeam, "team-a"); assert.match(lastMessage, /доступ отозван.*ключи обновлены/iu); }
+    else if (outcome === "post-confirm-failure") assert.match(lastMessage, /доступ отозван.*не удалось подтвердить/iu);
+    else assert.match(lastMessage, /не удалось подтвердить отзыв/iu);
+  });
+}
+
+test("Team sync reports an up-to-date Vault without requiring conflict details", async () => {
+  const { teamSyncOutcomeMessage } = await import("../public/app.js");
+  assert.equal(typeof teamSyncOutcomeMessage, "function");
+  assert.equal(teamSyncOutcomeMessage({ status: "up_to_date", revision: 5 }),
+    "Shared Vault синхронизирован · ревизия 5.");
+  assert.equal(teamSyncOutcomeMessage({ status: "downloaded", revision: 6 }),
+    "Team-ревизия 6 загружена и объединена локально.");
+  assert.equal(teamSyncOutcomeMessage({ status: "conflict", conflicts: [{}, {}] }),
+    "Обнаружено конфликтов: 2. Выберите версии явно.");
+});
+
+test("Team admission failures distinguish committed devices from an unconfirmed result", async () => {
+  const { teamDeviceAdmissionErrorMessage } = await import("../public/app.js");
+  assert.equal(typeof teamDeviceAdmissionErrorMessage, "function");
+  const committed = teamDeviceAdmissionErrorMessage(1);
+  assert.match(committed, /Допущено устройств: 1/u);
+  assert.match(committed, /синхронизац|ключ/u);
+  assert.doesNotMatch(committed, /не допущены/u);
+  const unknown = teamDeviceAdmissionErrorMessage(0);
+  assert.match(unknown, /не удалось подтвердить/iu);
+  assert.doesNotMatch(unknown, /не допущены/u);
 });
 
 test("Team archive failures provide specific actionable feedback", () => {
@@ -70,7 +954,7 @@ test("Team locale rerender refreshes pending invitations and Team switches clear
   const localeRerender = application.match(/renderLocaleSensitive\(\) \{([\s\S]*?)\n    \},\n    async activate/u)?.[1] ?? "";
   assert.match(localeRerender, /renderPendingInvitations\(\)/u);
 
-  const selectedTeamLoad = application.match(/async function loadSelectedTeam\(\) \{([\s\S]*?)\n  async function loadTeams/u)?.[1] ?? "";
+  const selectedTeamLoad = application.match(/async function loadSelectedTeam\([^\n]*\) \{([\s\S]*?)\n  async function loadTeams/u)?.[1] ?? "";
   assert.match(selectedTeamLoad, /archiveTeamForm\.reset\(\);\s*setText\(archiveTeamMessage, ""\)/u);
 });
 
@@ -80,6 +964,7 @@ function memoryVaultRepository() {
   let deviceID = null;
   let sessionDeviceKey = null;
   let sessionUnlock = null;
+  let ownership = null;
   return {
     async load() { return snapshot ? structuredClone(snapshot) : null; },
     async save(value) { snapshot = structuredClone(value); },
@@ -92,6 +977,8 @@ function memoryVaultRepository() {
     async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
     async saveSessionUnlock(value) { sessionUnlock = structuredClone(value); },
     async deleteSessionUnlock() { sessionUnlock = null; },
+    async loadOwnershipBinding() { return ownership ? structuredClone(ownership) : null; },
+    async saveOwnershipBinding(value) { ownership = structuredClone(value); },
     rememberedSession() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
   };
 }
@@ -140,6 +1027,28 @@ test("interactive browser bootstrap creates exactly one encrypted r1 for an unin
   assert.equal(result.revision, 1);
   assert.equal(uploads, 1);
   assert.equal(await vault.status(), "unlocked");
+});
+
+test("a new account can retry its own initial upload after a failed connection and reload", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const repository = memoryVaultRepository();
+  let attempts = 0;
+  const client = {
+    session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 0, envelope: null }; },
+    async putVault() {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network_unavailable");
+      return { conflict: false, revision: 1 };
+    },
+  };
+  const first = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await assert.rejects(bootstrapPersonalVault({ vault: first, client, passphrase }), /network_unavailable/u);
+  first.lock();
+  const reloaded = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  assert.deepEqual(await bootstrapPersonalVault({ vault: reloaded, client, passphrase }), { status: "uploaded", revision: 1 });
+  assert.equal(attempts, 2);
 });
 
 test("fresh-account interactive login uses one credential flow, persists trusted unlock, and restores after reload", async () => {
@@ -240,6 +1149,20 @@ test("interactive login stays unlocked but reports when trusted-browser persiste
   assert.deepEqual(rejectedPersistence, { result: { status: "downloaded", revision: 1 }, remembered: false });
 });
 
+test("interactive login does not initialize or sync an unowned legacy local Vault", async () => {
+  let synchronizationCalls = 0;
+  let rememberCalls = 0;
+  await assert.rejects(completeInteractivePersonalVaultLogin({
+    user: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+    password: "synthetic account password",
+    activateAccountVault: async () => ({ legacyOwnershipUnverified: true }),
+    unlockAndSyncPersonalVault: async () => { synchronizationCalls += 1; },
+    rememberSession: async () => { rememberCalls += 1; },
+  }), /legacy_vault_owner_unverified/u);
+  assert.equal(synchronizationCalls, 0);
+  assert.equal(rememberCalls, 0);
+});
+
 test("an existing remote Vault is imported instead of being replaced with an empty r1", async () => {
   const passphrase = accountVaultPassphrase("account B password is long enough");
   const source = testVault(memoryVaultRepository(), ["11111111-1111-4111-8111-111111111111"]);
@@ -261,6 +1184,549 @@ test("an existing remote Vault is imported instead of being replaced with an emp
   assert.equal(target.document().records[0].data.address, "remote.invalid");
 });
 
+test("failed local unlock cannot replace an inaccessible encrypted Vault during login", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const oldPassphrase = accountVaultPassphrase("old synthetic account password");
+  const newPassphrase = accountVaultPassphrase("new synthetic account password");
+  const repository = memoryVaultRepository();
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]);
+  await local.create(oldPassphrase);
+  await local.upsert({ type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  local.lock();
+  const before = await repository.load();
+
+  const remote = testVault(memoryVaultRepository(), ["22222222-2222-4222-8222-222222222222"]);
+  await remote.create(newPassphrase);
+  const remoteEnvelope = (await remote.prepareUpload(4)).envelope;
+  let uploads = 0;
+  const client = {
+    session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 5, envelope: remoteEnvelope }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); },
+  };
+  await assert.rejects(bootstrapPersonalVault({ vault: local, client, passphrase: newPassphrase }), /local_vault_recovery_required/u);
+  assert.deepEqual(await repository.load(), before);
+  assert.equal(uploads, 0);
+  await local.unlock(oldPassphrase);
+  assert.equal(local.document().records[0].data.address, "offline.invalid");
+});
+
+test("a new login password does not replace an inaccessible remote Vault on an empty device", async () => {
+  const oldPassphrase = accountVaultPassphrase("old synthetic account password");
+  const newPassphrase = accountVaultPassphrase("new synthetic account password");
+  const remote = testVault(memoryVaultRepository(), ["11111111-1111-4111-8111-111111111111"]);
+  await remote.create(oldPassphrase);
+  const original = (await remote.prepareUpload(4)).envelope;
+  const serverEnvelope = structuredClone(original);
+  const repository = memoryVaultRepository();
+  const local = testVault(repository, ["22222222-2222-4222-8222-222222222222"]);
+  let uploads = 0;
+  const client = {
+    session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 5, envelope: structuredClone(serverEnvelope) }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); },
+  };
+  await assert.rejects(bootstrapPersonalVault({ vault: local, client, passphrase: newPassphrase }), /remote_vault_recovery_required/u);
+  assert.equal(await repository.load(), null);
+  assert.equal(uploads, 0);
+  assert.deepEqual(serverEnvelope, original);
+});
+
+test("Personal Vault recovery messages distinguish stored local and Cloud copies", async () => {
+  const local = application.personalVaultRecoveryMessage("local_vault_recovery_required");
+  const remote = application.personalVaultRecoveryMessage("remote_vault_recovery_required");
+  assert.equal(application.personalVaultRecoveryMessage("legacy_vault_unlock_failed"), local);
+  assert.match(local, /локальный.*копия сохранена/iu);
+  assert.match(remote, /Cloud.*не изменён/iu);
+  assert.notEqual(local, remote);
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  const browser = { window: {}, document: { addEventListener() {} }, location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(source, browser);
+  assert.match(browser.window.SelectiveRemoteI18n.t(local), /encrypted copy is preserved/iu);
+  assert.match(browser.window.SelectiveRemoteI18n.t(remote), /Cloud.*not been changed/iu);
+  const integrity = application.personalVaultRecoveryMessage("remote_same_revision_changed");
+  assert.match(integrity, /Cloud.*синхронизация остановлена/iu);
+  assert.equal(application.personalVaultRecoveryMessage("vault_content_hash_mismatch"), integrity);
+  assert.equal(application.personalVaultRecoveryMessage("vault_decryption_failed"), integrity);
+  assert.match(browser.window.SelectiveRemoteI18n.t(integrity), /Cloud.*synchronization has stopped/iu);
+});
+
+test("corrupted encrypted local and remote copies are preserved and reported as recovery", async () => {
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const repository = memoryVaultRepository();
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await local.create(passphrase);
+  const broken = await repository.load();
+  broken.envelope.ciphertext = (broken.envelope.ciphertext[0] === "A" ? "B" : "A") + broken.envelope.ciphertext.slice(1);
+  await repository.save(broken);
+  local.lock();
+  let uploads = 0;
+  const client = {
+    session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 1, envelope: structuredClone(broken.envelope) }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); },
+  };
+  await assert.rejects(bootstrapPersonalVault({ vault: local, client, passphrase }), /local_vault_recovery_required/u);
+  assert.deepEqual(await repository.load(), broken);
+
+  const emptyRepository = memoryVaultRepository();
+  const empty = testVault(emptyRepository, ["22222222-2222-4222-8222-222222222222"]);
+  await assert.rejects(bootstrapPersonalVault({ vault: empty, client, passphrase }), /remote_vault_recovery_required/u);
+  assert.equal(await emptyRepository.load(), null);
+  assert.equal(uploads, 0);
+});
+
+test("duplicate record IDs in encrypted copies require recovery without replacing either copy", async () => {
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const repository = memoryVaultRepository();
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await local.create(passphrase);
+  await local.upsert({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", type: "host", data: { title: "Test", address: "test.invalid" } });
+  const broken = await repository.load();
+  const payload = local.document();
+  payload.records.push(structuredClone(payload.records[0]));
+  broken.envelope = await encryptVaultPayload({ vaultKey: local.sessionKey(), payload,
+    baseRevision: broken.revision - 1, wrappedKey: broken.envelope.wrappedKey, cryptoValue: webcrypto });
+  await repository.save(broken);
+  local.lock();
+  let uploads = 0;
+  const remoteEnvelope = { ...structuredClone(broken.envelope), baseRevision: 0 };
+  const client = { session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 1, envelope: remoteEnvelope }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); } };
+  await assert.rejects(bootstrapPersonalVault({ vault: local, client, passphrase }), /local_vault_recovery_required/u);
+  assert.deepEqual(await repository.load(), broken);
+  const emptyRepository = memoryVaultRepository();
+  const empty = testVault(emptyRepository, ["22222222-2222-4222-8222-222222222222"]);
+  await assert.rejects(bootstrapPersonalVault({ vault: empty, client, passphrase }), /remote_vault_recovery_required/u);
+  assert.equal(await emptyRepository.load(), null);
+  assert.equal(uploads, 0);
+});
+
+test("an invalid newer Cloud document is reported without replacing an unlocked local copy", async () => {
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const repository = memoryVaultRepository();
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await local.create(passphrase);
+  await local.upsert({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", type: "host", data: { title: "Test", address: "test.invalid" } });
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  const before = await repository.load();
+  const payload = local.document();
+  payload.records.push(structuredClone(payload.records[0]));
+  const envelope = await encryptVaultPayload({ vaultKey: local.sessionKey(), payload, baseRevision: 1,
+    wrappedKey: initial.envelope.wrappedKey, cryptoValue: webcrypto });
+  let uploads = 0;
+  const client = { session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 2, envelope }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); } };
+  await assert.rejects(bootstrapPersonalVault({ vault: local, client, passphrase }), /remote_vault_recovery_required/u);
+  assert.deepEqual(await repository.load(), before);
+  assert.equal(uploads, 0);
+});
+
+test("unverified Cloud history still exposes the decrypted local copy without uploading", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const repository = memoryVaultRepository();
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await local.upsert({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  local.lock();
+  let uploads = 0;
+  const client = { session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 1, envelope: initial.envelope }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); } };
+  const modes = [], observations = [];
+  const context = { vault: local, client, capturePersonalVaultSession, bootstrapPersonalVault,
+    synchronizePersonalVault: ({ recoveryPassphrase, targetVault }) => synchronizeVault({ client, vault: targetVault, recoveryPassphrase }),
+    vaultUI: { mode: value => modes.push(value), render() {} },
+    documentValue: {}, publishSyncObservation: (_document, value) => observations.push(value) };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function unlockAndSyncPersonalVault("), end = source.indexOf("\n  async function synchronizePersonalVault(", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  const result = await context.unlockAndSyncPersonalVault(passphrase, local);
+  assert.equal(result.status, "local_only");
+  assert.equal(result.issue, "remote_history_unverified");
+  assert.equal(local.document().records[0].data.address, "offline.invalid");
+  assert.deepEqual(modes, ["unlocked"]);
+  assert.equal(uploads, 0);
+});
+
+test("damaged sync metadata does not hide an otherwise readable local Vault", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const passphrase = accountVaultPassphrase("synthetic account password"), repository = memoryVaultRepository();
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await local.create(passphrase);
+  await local.upsert({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", type: "host", data: { title: "Offline", address: "offline.invalid" } });
+  const initial = await local.prepareUpload(0), before = await repository.load();
+  await repository.saveSync({ serverRevision: 1, localRevision: "invalid" });
+  local.lock();
+  let uploads = 0;
+  const client = { session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 1, envelope: initial.envelope }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); } };
+  const modes = [], context = { vault: local, client, capturePersonalVaultSession, bootstrapPersonalVault,
+    synchronizePersonalVault: ({ recoveryPassphrase, targetVault }) => synchronizeVault({ client, vault: targetVault, recoveryPassphrase }),
+    vaultUI: { mode: value => modes.push(value), render() {} }, documentValue: {}, publishSyncObservation() {} };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function unlockAndSyncPersonalVault("), end = source.indexOf("\n  async function synchronizePersonalVault(", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  const result = await context.unlockAndSyncPersonalVault(passphrase, local);
+  assert.equal(result.status, "local_only");
+  assert.equal(result.issue, "local_sync_recovery_required");
+  assert.equal(local.document().records[0].data.address, "offline.invalid");
+  assert.deepEqual(await repository.load(), before);
+  assert.deepEqual(modes, ["unlocked"]);
+  assert.equal(uploads, 0);
+});
+
+test("local-only recovery cannot display a Vault after the account session changes", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const accountA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", accountB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  let account = accountA;
+  const client = { session: () => ({ id: account }) };
+  const vault = { status: async () => "unlocked" }, modes = [];
+  const context = { vault, client, capturePersonalVaultSession,
+    bootstrapPersonalVault: async () => { account = accountB; throw new Error("remote_history_unverified"); },
+    vaultUI: { mode: value => modes.push(value), render() {} } };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function unlockAndSyncPersonalVault("), end = source.indexOf("\n  async function synchronizePersonalVault(", start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  await assert.rejects(context.unlockAndSyncPersonalVault("synthetic passphrase", vault), /authentication_required/u);
+  assert.deepEqual(modes, []);
+});
+
+test("local-only login does not establish a remembered browser key", async () => {
+  let rememberCalls = 0;
+  const outcome = await completeInteractivePersonalVaultLogin({ user: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    password: "synthetic account password", activateAccountVault: async () => ({ vault: {} }),
+    unlockAndSyncPersonalVault: async () => ({ status: "local_only", issue: "remote_history_unverified" }),
+    rememberSession: async () => { rememberCalls++; return true; } });
+  assert.equal(outcome.result.status, "local_only");
+  assert.equal(outcome.remembered, false);
+  assert.equal(rememberCalls, 0);
+});
+
+for (const outcome of ["success", "failure"]) for (const replacement of ["account", "epoch", "conflicts"]) {
+  test(`an old conflict resolution ${outcome} cannot change a replacement ${replacement} view`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    const first = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", second = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let account = first, epoch = "1", enter, release, submit;
+    const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+    const client = { session: () => ({ id: account }), publicationIdentity: () => ({ accountID: account,
+      deviceID: "11111111-1111-4111-8111-111111111111", sessionEpoch: epoch }) };
+    const originalConflict = { revision: 1, ids: ["cccccccc-cccc-4ccc-8ccc-cccccccccccc"] };
+    const replacementConflict = { revision: 2, ids: ["dddddddd-dddd-4ddd-8ddd-dddddddddddd"] };
+    const events = [], conflictForm = { addEventListener(name, callback) { if (name === "submit") submit = callback; },
+      querySelector() { return { value: "local" }; } };
+    const syncButton = { disabled: true }, conflictApply = { disabled: false };
+    const context = { client, capturePersonalVaultSession, conflictForm, conflictApply, syncButton,
+      activeConflicts: originalConflict,
+      vault: { async resolveConflicts() { enter(); await held; if (outcome === "failure") throw new Error("stale");
+        return { conflictsResolved: 1 }; } },
+      hideConflicts() { events.push("hide"); context.activeConflicts = null; },
+      vaultUI: { render() { events.push("render"); } }, vaultMessage: {},
+      setText() { events.push("message"); }, updateConflictApplyState() {} };
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const start = source.indexOf('  conflictForm.addEventListener("change", updateConflictApplyState);');
+    const end = source.indexOf('\n  setAuthMode("login");', start);
+    assert.ok(start >= 0 && end > start);
+    runInNewContext(source.slice(start, end), context);
+    const pending = submit({ preventDefault() {} });
+    await started;
+    if (replacement === "account") { account = second; epoch = "2"; context.vault = {}; }
+    if (replacement === "epoch") epoch = "2";
+    context.activeConflicts = replacementConflict;
+    syncButton.disabled = true;
+    release();
+    await pending;
+    assert.equal(context.activeConflicts, replacementConflict);
+    assert.equal(syncButton.disabled, true);
+    assert.deepEqual(events, []);
+  });
+}
+
+for (const outcome of ["success", "failure"]) {
+  test(`an old Team conflict resolution ${outcome} cannot alter the replacement workspace`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    let epoch = "1", enter, release, submit;
+    const started = new Promise(resolve => { enter = resolve; }), held = new Promise(resolve => { release = resolve; });
+    const originalConflict = { revision: 1, ids: ["cccccccc-cccc-4ccc-8ccc-cccccccccccc"] };
+    const replacementConflict = { revision: 2, ids: ["dddddddd-dddd-4ddd-8ddd-dddddddddddd"] };
+    const events = [], conflictForm = { addEventListener(name, callback) { if (name === "submit") submit = callback; },
+      querySelector() { return { value: "local" }; } };
+    const context = { conflictForm, conflictApply: {}, rotateButton: {}, activeConflicts: originalConflict,
+      controller: { async resolveConflicts() { enter(); await held; if (outcome === "failure") throw new Error("stale"); } },
+      captureWorkspaceContext: () => ({ epoch }), workspaceContextCurrent: captured => captured.epoch === epoch,
+      clearConflicts() { events.push("clear"); context.activeConflicts = null; },
+      renderRecords() { events.push("render"); }, selectedVault: {}, canManage: () => true,
+      setText() { events.push("message"); }, workspaceStatus: {} };
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const start = source.indexOf('  conflictForm.addEventListener("change", () => {');
+    const end = source.indexOf("\n  for (const button of smartFilterButtons)", start);
+    assert.ok(start >= 0 && end > start);
+    runInNewContext(source.slice(start, end), context);
+    const pending = submit({ preventDefault() {} });
+    await started;
+    epoch = "2"; context.controller = {}; context.activeConflicts = replacementConflict;
+    release();
+    await pending;
+    assert.equal(context.activeConflicts, replacementConflict);
+    assert.deepEqual(events, []);
+  });
+}
+
+test("Personal reauthentication deactivates the old Team workspace before changing session", async () => {
+  const { runInNewContext } = await import("node:vm");
+  let submit;
+  const events = [], password = { value: "synthetic password", addEventListener() {} };
+  const form = { elements: { password }, querySelector() { return { disabled: false }; },
+    addEventListener(name, callback) { if (name === "submit") submit = callback; } };
+  const client = { session: () => ({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", email: "a@example.invalid" }),
+    sessionGeneration: () => "1", deviceID: () => "11111111-1111-4111-8111-111111111111",
+    async login() { events.push("login"); throw new Error("synthetic_failure"); } };
+  const context = { vaultReauthenticateForm: form, client, reauthenticationAttempt: 0, reauthenticationInputRevision: 0,
+    teamDeviceRepository: {}, ensureTeamDeviceIdentity: async () => null,
+    teamWorkspace: { deactivate() { events.push("deactivate"); } }, vaultUI: { mode() {} }, vaultMessage: {},
+    setText() {}, vaultStorageCompatibilityMessage: () => null, personalVaultRecoveryMessage: () => null,
+    personalVaultOwnershipError: () => false, sessionRetiredByError: () => false };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  vaultReauthenticateForm?.addEventListener("submit", async (event) => {');
+  const end = source.indexOf('\n  logoutButton.addEventListener', start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  await submit({ preventDefault() {} });
+  assert.deepEqual(events.slice(0, 2), ["deactivate", "login"]);
+});
+
+test("a corrupt Team Cloud revision during rotation produces the integrity warning", async () => {
+  const { runInNewContext } = await import("node:vm");
+  let click;
+  const messages = [], context = { controller: {}, selectedVault: { id: "vault", rotationRequired: true },
+    selectedTeam: { id: "team", role: "owner" }, canManage: () => true, vaultOperation: null,
+    captureWorkspaceContext: () => ({ generation: "1" }), workspaceContextCurrent: () => true,
+    teamVaultLockEpoch: 1, teamSyncTargetMatches: () => true, requestConfirmation: async () => true,
+    stopBackgroundSync() {}, startBackgroundSync() {}, setRecoveryControls() {}, setWorkspaceControls() {},
+    rotateButton: { hidden: false, addEventListener(_event, handler) { click = handler; } }, lockButton: {},
+    client: {}, rotateTeamVault: async () => { throw new Error("team_vault_content_hash_mismatch"); },
+    sessionRetiredByError: () => false, workspaceStatus: {}, setText(_element, value) { messages.push(value); },
+    teamVaultSynchronizationErrorMessage: application.teamVaultSynchronizationErrorMessage, activeConflicts: null };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  rotateButton.addEventListener("click", async () => {');
+  const end = source.indexOf('\n  grantWrappersButton.addEventListener', start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  await click();
+  assert.equal(messages.at(-1), application.teamVaultSynchronizationErrorMessage("team_vault_content_hash_mismatch"));
+});
+
+test("loss of Team access during rotation clears the displayed Vault", async () => {
+  const { runInNewContext } = await import("node:vm");
+  let click, locks = 0, lockOptions;
+  const context = { controller: {}, selectedVault: { id: "vault", rotationRequired: true },
+    selectedTeam: { id: "team", role: "owner" }, canManage: () => true, vaultOperation: null,
+    captureWorkspaceContext: () => ({ generation: "1" }), workspaceContextCurrent: () => true,
+    teamVaultLockEpoch: 1, teamSyncTargetMatches: () => true, requestConfirmation: async () => true,
+    stopBackgroundSync() {}, startBackgroundSync() {}, setRecoveryControls() {}, setWorkspaceControls() {},
+    rotateButton: { hidden: false, addEventListener(_event, handler) { click = handler; } }, lockButton: {},
+    client: {}, rotateTeamVault: async () => { throw new Error("team_vault_key_unavailable"); },
+    sessionRetiredByError: () => false, workspaceStatus: {}, message: {}, setText() {},
+    lockCurrentVault(options) { locks++; lockOptions = options; context.teamVaultLockEpoch++; },
+    teamVaultSynchronizationErrorMessage: application.teamVaultSynchronizationErrorMessage, activeConflicts: null };
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  rotateButton.addEventListener("click", async () => {');
+  const end = source.indexOf('\n  grantWrappersButton.addEventListener', start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  await click();
+  assert.equal(locks, 1);
+  assert.equal(lockOptions?.preserveUnsavedEditor, true);
+});
+
+for (const preserveUnsavedEditor of [true, false]) {
+  test(`locking Team Vault ${preserveUnsavedEditor ? 'preserves an open draft for copying' : 'normally clears the editor'}`, async () => {
+    const { runInNewContext } = await import('node:vm');
+    let value = 'synthetic unsaved edit', controllerLocks = 0, recordClears = 0, alerts = 0;
+    const submit = { disabled: false }, cancel = { disabled: false }, input = { disabled: false };
+    const workspace = { hidden: false, dataset: {} };
+    const context = { teamVaultLockEpoch: 1, teamVaultManuallyLocked: false, inviteOperationGeneration: 1,
+      inviteForm: { querySelector: () => null }, recordSavePending: false, recordSaveOperation: null,
+      recordForm: { querySelector: () => submit, querySelectorAll: () => [input] },
+      recordCancel: cancel, lockTransientTeamControllers() {}, stopBackgroundSync() {},
+      vaultOperation: null, resetRecordEditor() { value = ''; }, resetSnippetBrowser() {}, publicationSelection: 0,
+      publicationClient: null, publicationAccessDriver: null, publicationAccessTeamID: null,
+      publishSyncObservation() {}, documentValue: {}, selectedVault: { id: 'synthetic' },
+      client: { session: () => ({ id: 'synthetic' }) }, controller: { lock() { controllerLocks++; } },
+      workspace, recordEditor: { open: true }, recordCreate: {}, lockButton: {}, rotateButton: {},
+      setRecoveryControls() {}, records: { replaceChildren() { recordClears++; } },
+      clearConflicts() { submit.disabled = false; input.disabled = true; cancel.disabled = true; }, workspaceStatus: {},
+      showTeamVaultRecordSaveError({ error }) { assert.equal(error.message, 'team_vault_access_lost_draft'); alerts++; } };
+    const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+    const start = source.indexOf('  function lockCurrentVault('), end = source.indexOf('\n  function setView(', start);
+    assert.ok(start >= 0 && end > start);
+    runInNewContext(source.slice(start, end), context);
+    context.lockCurrentVault({ preserveUnsavedEditor });
+    assert.equal(controllerLocks, 1);
+    assert.equal(recordClears, 1);
+    assert.equal(context.controller, null);
+    assert.equal(value, preserveUnsavedEditor ? 'synthetic unsaved edit' : '');
+    assert.equal(workspace.hidden, !preserveUnsavedEditor);
+    assert.equal(workspace.dataset.draftRecovery, preserveUnsavedEditor ? 'true' : undefined);
+    assert.equal(submit.disabled, preserveUnsavedEditor);
+    if (preserveUnsavedEditor) {
+      assert.equal(input.disabled, false);
+      assert.equal(cancel.disabled, false);
+    }
+    assert.equal(alerts, preserveUnsavedEditor ? 1 : 0);
+  });
+}
+
+test('closing a recovery-only Team draft clears its form and hides the workspace', async () => {
+  const { runInNewContext } = await import('node:vm');
+  let close, resets = 0;
+  const workspace = { hidden: false, dataset: { draftRecovery: 'true' } };
+  const context = { workspace, recordEditor: { addEventListener(name, handler) { if (name === 'close') close = handler; } },
+    resetRecordEditor() { resets++; } };
+  const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('  recordEditor?.addEventListener("close", () => {');
+  const end = source.indexOf('\n  syncButton.addEventListener', start);
+  assert.ok(start >= 0 && end > start);
+  runInNewContext(source.slice(start, end), context);
+  close();
+  assert.equal(resets, 1);
+  assert.equal(workspace.hidden, true);
+  assert.equal(workspace.dataset.draftRecovery, undefined);
+  close();
+  assert.equal(resets, 1);
+});
+
+for (const status of [404, 503]) {
+  test(`Team format check ${status} ${status === 404 ? "clears revoked access" : "does not discard local data on a temporary error"}`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    let locks = 0, lockOptions;
+    const controller = {}, team = { id: "team" }, vault = { id: "vault" };
+    const error = Object.assign(new Error(status === 404 ? "team_not_found" : "access_request_failed"), { status });
+    const context = { controller, selectedTeam: team, selectedVault: vault, teamVaultManuallyLocked: false,
+      publicationClient: null, captureWorkspaceContext: () => ({ generation: "1" }), teamVaultLockEpoch: 1,
+      workspaceContextCurrent: () => true, teamSyncTargetMatches: () => true,
+      resolveTeamVaultFormat: async () => { throw error; }, client: {}, sessionRetiredByError: () => false,
+      isPublicationAccessLoss: value => value.message === "team_not_found",
+      lockCurrentVault(options) { locks++; lockOptions = options; }, setText() {}, message: {} };
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const start = source.indexOf("  async function synchronizeAndProvision("), end = source.indexOf("\n  function applySynchronizationOutcome", start);
+    assert.ok(start >= 0 && end > start);
+    runInNewContext(source.slice(start, end), context);
+    if (status === 404) assert.equal(await context.synchronizeAndProvision(), null);
+    else await assert.rejects(context.synchronizeAndProvision(), /access_request_failed/u);
+    assert.equal(locks, status === 404 ? 1 : 0);
+    assert.equal(lockOptions?.preserveUnsavedEditor, status === 404 ? true : undefined);
+  });
+}
+
+for (const code of ["team_vault_key_unavailable", "team_vault_membership_changed", "team_vault_history_unverified", "team_vault_download_failed"]) {
+  test(`Team sync ${code} ${code === "team_vault_download_failed" ? "keeps the existing view" : "clears an already displayed Vault"}`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    let locks = 0;
+    const controller = {}, team = { id: "team" }, vault = { id: "vault" };
+    const context = { controller, selectedTeam: team, selectedVault: vault, teamVaultManuallyLocked: false,
+      publicationClient: null, captureWorkspaceContext: () => ({ generation: "1", accountID: "a" }),
+      teamVaultLockEpoch: 1, workspaceContextCurrent: () => true, teamSyncTargetMatches: () => true,
+      resolveTeamVaultFormat: async () => "V1_ACTIVE", client: {}, sessionRetiredByError: () => false,
+      isPublicationAccessLoss: () => false, publishSyncObservation() {}, documentValue: {},
+      exclusiveVaultOperation: callback => callback(), synchronizeTeamVault: async () => { throw new Error(code); },
+      lockCurrentVault() { locks++; }, setText() {}, message: {} };
+    const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+    const start = source.indexOf("  async function synchronizeAndProvision("), end = source.indexOf("\n  function applySynchronizationOutcome", start);
+    assert.ok(start >= 0 && end > start);
+    runInNewContext(source.slice(start, end), context);
+    if (code === "team_vault_download_failed") await assert.rejects(context.synchronizeAndProvision(), /team_vault_download_failed/u);
+    else assert.equal(await context.synchronizeAndProvision(), null);
+    assert.equal(locks, code === "team_vault_download_failed" ? 0 : 1);
+  });
+}
+
+test("corrupt local metadata while unlocked is not misreported as Cloud corruption", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const passphrase = accountVaultPassphrase("synthetic account password");
+  const indexedDB = new IDBFactory();
+  const repository = createIndexedDBVaultRepository(indexedDB).forAccount(accountID);
+  const local = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  await local.create(passphrase);
+  const initial = await local.prepareUpload(0);
+  await local.markSynced({ serverRevision: 1, localRevision: initial.localRevision,
+    serverContentHash: initial.envelope.contentHash });
+  const request = indexedDB.open("selective-remote-cloud");
+  const database = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction("local-vault", "readwrite"), store = transaction.objectStore("local-vault");
+    const key = `personal-account:v1:${accountID}:snapshot`, current = store.get(key);
+    current.onsuccess = () => store.put({ ...current.result, revision: 0 }, key);
+    transaction.oncomplete = resolve; transaction.onabort = () => reject(transaction.error);
+  });
+  database.close();
+  let uploads = 0;
+  const client = { session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 1, envelope: initial.envelope }; },
+    async putVault() { uploads++; throw new Error("unexpected_vault_upload"); } };
+  await assert.rejects(bootstrapPersonalVault({ vault: local, client, passphrase }), /local_vault_recovery_required/u);
+  assert.equal(uploads, 0);
+  assert.equal(local.document().records.length, 0);
+});
+
+for (const phase of ["unlock", "synchronize"]) {
+  test(`a stale ${phase} error does not present recovery for a newer session`, async () => {
+    const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const deviceID = "11111111-1111-4111-8111-111111111111";
+    let epoch = "1", entered, release;
+    const started = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+    const client = { session: () => ({ id: accountID }), publicationIdentity: () => ({ accountID, deviceID, sessionEpoch: epoch }) };
+    const failure = async () => { entered(); await held; throw new Error("vault_content_hash_mismatch"); };
+    const vault = { status: async () => phase === "unlock" ? "locked" : "empty", unlock: failure };
+    const pending = bootstrapPersonalVault({ vault, client, passphrase: "synthetic passphrase", synchronize: failure });
+    await started;
+    epoch = "2";
+    release();
+    await assert.rejects(pending, error => error?.message === "authentication_required");
+  });
+}
+
+test("bootstrap preserves the error that retired its current authenticated session", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const deviceID = "11111111-1111-4111-8111-111111111111";
+  let epoch = 1, signedIn = true;
+  const client = { session: () => signedIn ? { id: accountID } : null, sessionGeneration: () => String(epoch),
+    publicationIdentity: () => signedIn ? { accountID, deviceID, sessionEpoch: String(epoch) } : null };
+  const retired = Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "1", retiredAuthenticatedSession: true });
+  const synchronize = async () => { signedIn = false; epoch++; throw retired; };
+  await assert.rejects(bootstrapPersonalVault({ vault: { status: async () => "empty" }, client,
+    passphrase: "synthetic passphrase", synchronize }), error => error === retired);
+});
+
+test("locked Personal Vault copy does not promise key recovery after a password reset", async () => {
+  const presentation = personalVaultStatePresentation("reauthentication_required");
+  assert.match(presentation.description, /После сброса пароля доступ к данным может не восстановиться/u);
+  const [application, i18n] = await Promise.all([
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/i18n.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(application, /Сброс пароля не восстанавливает ключи/u);
+  assert.match(i18n, /After a password reset, access to your data may not be restored/u);
+  assert.match(i18n, /Resetting your password does not recover keys/u);
+});
+
 test("Personal Vault state copy distinguishes authentication from encryption in RU and EN", async () => {
   const [html, i18n] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
@@ -276,7 +1742,7 @@ test("Personal Vault state copy distinguishes authentication from encryption in 
   });
   assert.deepEqual(personalVaultStatePresentation("reauthentication_required"), {
     title: "Требуется восстановление доступа к Personal Vault",
-    description: "Сессия аккаунта активна, но доверенный ключ этого браузера недоступен. Подтвердите пароль аккаунта, чтобы восстановить доступ.",
+    description: "Сессия аккаунта активна, но ключ Personal Vault недоступен. Попробуйте подтвердить пароль или открыть другую вкладку, где Vault уже открыт. После сброса пароля доступ к данным может не восстановиться.",
     action: "Восстановить доступ",
   });
   assert.equal(personalVaultStatePresentation("unlocked"), null);
@@ -704,6 +2170,234 @@ test("Team Vault routine automation exposes controls only for recoverable blocke
   assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_rotation_required" }), "none");
 });
 
+test("a conflicting older browser copy is reported without promising automatic sync", () => {
+  assert.equal(typeof application.teamVaultSynchronizationErrorMessage, "function");
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_legacy_conflict");
+  assert.match(message, /копи/u);
+  assert.doesNotMatch(message, /продолжится автоматически/u);
+});
+
+test("a blocked storage upgrade explains how to keep data and retry in RU and EN", async () => {
+  const message = application.vaultStorageCompatibilityMessage("vault_storage_upgrade_blocked");
+  assert.match(message, /вкладках.*закройте/iu);
+  assert.match(message, /сохранённые данные не изменены/iu);
+  assert.equal(application.vaultStorageCompatibilityMessage("other_error"), null);
+  assert.equal(application.teamVaultSynchronizationErrorMessage("vault_storage_upgrade_blocked"), message);
+
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(source, browser);
+  const english = browser.window.SelectiveRemoteI18n.t(message);
+  assert.match(english, /tabs.*close/iu);
+  assert.match(english, /data.*preserved/iu);
+});
+
+test("a stale Team snapshot explains recovery without claiming two copies", () => {
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_stale_snapshot");
+  assert.match(message, /другой вкладке/iu);
+  assert.match(message, /заблокир.*синхрониз/iu);
+  assert.match(message, /несохранённ.*сбросят.*повторно/iu);
+  assert.doesNotMatch(message, /две локальные копии|буфер обмена/iu);
+  const state = application.reduceSyncPresentationState(application.createSyncPresentationState(), {
+    scope: "team", type: "error", code: "team_vault_stale_snapshot",
+  });
+  assert.equal(state.team.issue, "team_vault_stale_snapshot");
+});
+
+test("a stale Team record save reports inside the editor without resetting its fields", () => {
+  assert.equal(typeof application.showTeamVaultRecordSaveError, "function");
+  let inline = null, resets = 0;
+  const form = {
+    draft: "synthetic draft",
+    querySelector() { return inline; },
+    prepend(element) { inline = element; },
+    reset() { resets += 1; this.draft = ""; },
+  };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute(name, value) { this[name] = value; },
+  }; } };
+  const status = { textContent: "" };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status, error: new Error("team_vault_stale_snapshot") });
+  assert.equal(resets, 0);
+  assert.equal(form.draft, "synthetic draft");
+  assert.equal(inline.role, "alert");
+  assert.match(inline.textContent, /сбросят.*повторно/iu);
+  assert.equal(status.textContent, inline.textContent);
+});
+
+test("a Team draft after access loss warns about unconfirmed saving in Russian and English", async () => {
+  let alert;
+  const form = { querySelector: () => alert, prepend(element) { alert = element; } };
+  const documentValue = { createElement: () => ({ dataset: {}, setAttribute(name, value) { this[name] = value; } }) };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status: {},
+    error: new Error('team_vault_access_lost_draft'), beforeSave: true });
+  assert.equal(alert.role, 'alert');
+  assert.match(alert.textContent, /сохранение не подтверждено.*копирования/iu);
+  const { runInNewContext } = await import('node:vm');
+  const source = await readFile(new URL('../public/i18n.js', import.meta.url), 'utf8');
+  const browser = { window: {}, document: { addEventListener() {} }, location: { search: '?lang=en' }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: 'en' } };
+  runInNewContext(source, browser);
+  assert.match(browser.window.SelectiveRemoteI18n.t(alert.textContent), /saving was not confirmed.*only for copying/iu);
+});
+
+test("an invalid Team Host address is reported before saving without discarding the draft", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  recordForm.addEventListener("submit", async (event) => {', source.indexOf("export function initializeTeamWorkspace"));
+  const end = source.indexOf("\n  recordCreate.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  let submit, inline = null, saves = 0, resets = 0;
+  const button = { disabled: false }, value = (text) => ({ value: text, disabled: false });
+  const recordForm = {
+    addEventListener(_event, handler) { submit = handler; },
+    querySelector(selector) { return selector === 'button[type="submit"]' ? button : inline; },
+    prepend(element) { inline = element; },
+  };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute(name, value) { this[name] = value; },
+  }; } };
+  const controller = { document: () => ({ records: [] }), async applyBatch() { saves++; } };
+  const target = { controller, teamID: "synthetic-team", vaultID: "synthetic-vault",
+    sessionID: "synthetic-account", sessionGeneration: "1" };
+  const status = { textContent: "" };
+  const context = { recordForm, controller, editingPublication: null, canEdit: () => true, activeConflicts: null,
+    selectedVault: { rotationRequired: false }, recordSavePending: false, currentEditTarget: () => target,
+    teamVaultEditTargetMatches: application.teamVaultEditTargetMatches,
+    teamVaultRecordOperations: application.teamVaultRecordOperations, teamRecordEditorMatches: application.teamRecordEditorMatches,
+    teamHostConnectionData: application.teamHostConnectionData, teamHostRecordData: application.teamHostRecordData,
+    recordType: value("host"), recordTitle: value("Synthetic host"), recordTarget: value("bad host"),
+    hostProtocol: value("ssh"), hostPort: value("22"), hostUsername: value("test"), hostFolder: value(""),
+    hostTags: value(""), hostDescription: value(""), hostRemovePassword: { checked: false }, hostPassword: value(""),
+    editingRecordID: null, editingRecordSnapshot: null, draftRecordID: null, draftCredentialID: null,
+    resetRecordEditor() { resets++; }, clearConflicts() {}, rotateButton: {}, canManage: () => true, renderRecords() {},
+    setText() {}, workspaceStatus: status, documentValue,
+    showTeamVaultRecordSaveError: application.showTeamVaultRecordSaveError, crypto: webcrypto };
+  runInNewContext(source.slice(start, end), context);
+  await submit({ preventDefault() {} });
+  assert.equal(saves, 0);
+  assert.equal(resets, 0);
+  assert.equal(context.recordTarget.value, "bad host");
+  assert.match(inline.textContent, /проверьте.*адрес.*порт/iu);
+  assert.doesNotMatch(inline.textContent, /могла сохраниться|закройте редактор/iu);
+  assert.equal(status.textContent, inline.textContent);
+});
+
+test("a save-stage error never claims that an invalid Team record was not saved", () => {
+  let inline = null;
+  const form = { querySelector() { return inline; }, prepend(element) { inline = element; } };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute() {},
+  }; } };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status: {},
+    error: new Error("invalid_team_host_connection"), beforeSave: false });
+  assert.match(inline.textContent, /могла сохраниться/iu);
+  assert.doesNotMatch(inline.textContent, /запись не сохранена/iu);
+});
+
+test("Team input validation errors have English translations", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(source, browser);
+  for (const code of ["invalid_team_host_connection", "invalid_team_host_organization",
+    "advanced_team_host_requires_native_editor", "invalid_local_record", "invalid_snippet_title",
+    "invalid_snippet_body", "invalid_snippet_folder"]) {
+    let inline = null;
+    const form = { querySelector() { return inline; }, prepend(element) { inline = element; } };
+    const documentValue = { createElement() { return { dataset: {}, textContent: "", setAttribute() {} }; } };
+    application.showTeamVaultRecordSaveError({ documentValue, form, status: {}, error: new Error(code), beforeSave: true });
+    const translated = browser.window.SelectiveRemoteI18n.t(inline.textContent);
+    assert.notEqual(translated, inline.textContent, code);
+    assert.match(translated, /not saved/u);
+  }
+});
+
+test("a completed Team save cannot reset an editor from a newer session", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf('  recordForm.addEventListener("submit", async (event) => {', source.indexOf("export function initializeTeamWorkspace"));
+  const end = source.indexOf("\n  recordCreate.addEventListener", start);
+  assert.ok(start >= 0 && end > start);
+  let submit, enter, release, resets = 0, renders = 0;
+  const started = new Promise((resolve) => { enter = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const controller = { document: () => ({ records: [] }), async applyBatch() { enter(); await held; } };
+  let target = { controller, teamID: "synthetic-team", vaultID: "synthetic-vault",
+    sessionID: "synthetic-account", sessionGeneration: "1" };
+  const button = { disabled: false }, value = (text) => ({ value: text, disabled: false });
+  const recordForm = { addEventListener(_event, handler) { submit = handler; }, querySelector() { return button; } };
+  const context = { recordForm, controller, editingPublication: null, canEdit: () => true, activeConflicts: null,
+    selectedVault: { rotationRequired: false }, recordSavePending: false, currentEditTarget: () => target,
+    teamVaultEditTargetMatches: application.teamVaultEditTargetMatches,
+    teamVaultRecordOperations: application.teamVaultRecordOperations, teamRecordEditorMatches: application.teamRecordEditorMatches,
+    teamHostConnectionData: application.teamHostConnectionData, teamHostRecordData: application.teamHostRecordData,
+    recordType: value("host"), recordTitle: value("Old draft"), recordTarget: value("synthetic.invalid"),
+    hostProtocol: value("ssh"), hostPort: value("22"), hostUsername: value("test"), hostFolder: value(""),
+    hostTags: value(""), hostDescription: value(""), hostRemovePassword: { checked: false }, hostPassword: value(""),
+    editingRecordID: null, editingRecordSnapshot: null, draftRecordID: null, draftCredentialID: null,
+    resetRecordEditor() { resets++; }, clearConflicts() {}, rotateButton: {}, canManage: () => true,
+    renderRecords() { renders++; }, setText() {}, workspaceStatus: {}, documentValue: {},
+    showTeamVaultRecordSaveError() { throw new Error("unexpected_save_failure"); }, crypto: webcrypto };
+  runInNewContext(source.slice(start, end), context);
+  const pending = submit({ preventDefault() {} });
+  await started;
+  target = { ...target, sessionGeneration: "2" };
+  context.recordTitle.value = "New draft";
+  release();
+  await pending;
+  assert.equal(resets, 0);
+  assert.equal(renders, 0);
+  assert.equal(context.recordTitle.value, "New draft");
+});
+
+test("a changed Team record explains that reopening clears the unfinished editor", () => {
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_editor_changed");
+  assert.match(message, /запись.*credential.*изменились/iu);
+  assert.match(message, /закройте редактор.*сбросятся.*повторно/iu);
+  assert.doesNotMatch(message, /буфер обмена|две локальные копии/iu);
+});
+
+test("an unconfirmed Team save remains visible in the editor without claiming it failed", () => {
+  let inline = null, resets = 0;
+  const form = { draft: "synthetic draft", querySelector() { return inline; }, prepend(element) { inline = element; },
+    reset() { resets += 1; this.draft = ""; } };
+  const documentValue = { createElement() { return {
+    dataset: {}, textContent: "", setAttribute(name, value) { this[name] = value; },
+  }; } };
+  application.showTeamVaultRecordSaveError({ documentValue, form, status: {}, error: new Error("storage_failed") });
+  assert.equal(resets, 0);
+  assert.equal(form.draft, "synthetic draft");
+  assert.ok(inline);
+  assert.equal(inline.role, "alert");
+  assert.match(inline.textContent, /не удалось подтвердить.*могла сохраниться/iu);
+  assert.doesNotMatch(inline.textContent, /запись не сохранена/iu);
+});
+
+test("a stale Team snapshot recovery warning is translated to English", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(source, browser);
+  const message = browser.window.SelectiveRemoteI18n.t(application.teamVaultSynchronizationErrorMessage("team_vault_stale_snapshot"));
+  assert.match(message, /another tab.*Lock.*Synchronize/iu);
+  assert.match(message, /unsaved fields.*cleared.*entered again/iu);
+  assert.doesNotMatch(message, /clipboard|two local Team Vault copies/iu);
+});
+
+test("an overlapping Team operation asks the user to retry", () => {
+  const message = application.teamVaultSynchronizationErrorMessage("team_vault_operation_in_progress");
+  assert.match(message, /дождитесь.*повторите/iu);
+  assert.doesNotMatch(message, /продолжится автоматически/u);
+});
+
 test("trusted browser automatically rotates and maintains accessible Team Vaults outside the active view", async () => {
   const scopes = [];
   const locked = [];
@@ -768,6 +2462,9 @@ test("username invitation preprovisioning wraps every snapshotted Vault and devi
   };
   const result = await preprovisionTeamInvitationWrappers({
     client: {
+      session: () => ({ id: "account-1" }),
+      deviceID: () => "device-1",
+      sessionGeneration: () => "1",
       async preprovisionTeamInvitationWrappers(value) { uploaded = value; return { ready: true, wrappers: 2 }; },
     },
     identity: { deviceID: "device-1" },
@@ -876,7 +2573,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=196">/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=197">/u);
   assert.match(html, /\/app\.js\?v=196/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
@@ -1049,7 +2746,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=196/u);
+  assert.match(html, /styles\.css\?v=197/u);
   assert.match(html, /app\.js\?v=196/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
@@ -1095,7 +2792,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /initializeHeroPreview/u);
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
   assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
-  assert.match(application, /vault\.rememberSession\(user\.id\)/u);
+  assert.match(application, /targetVault\.hasAccountOwnership\(user\.id\)/u);
+  assert.match(application, /targetVault\.rememberSession\(user\.id\)/u);
   assert.doesNotMatch(application, /try \{ await vault\.rememberSession\(user\.id\); \} catch \{\}/u);
   assert.match(application, /vault\.forgetRememberedSession\(\)/u);
   assert.match(application, /visibilitychange/u);
@@ -1207,9 +2905,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /completeInteractivePersonalVaultLogin/u);
   assert.match(application, /backgroundPersonalVaultSync/u);
-  assert.match(application, /newestVaultConflictChoice/u);
+  assert.match(application, /renderConflicts\(result\)/u);
   assert.match(application, /async function synchronizePersonalVault/u);
-  assert.match(application, /automaticallyResolved: conflictsResolved/u);
   assert.doesNotMatch(
     application.match(/syncButton\.addEventListener\("click"[\s\S]*?conflictForm\.addEventListener/u)?.[0] ?? "",
     /renderConflicts\(result\)/u,
@@ -1218,7 +2915,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /vault\.lock\(\)/u);
   assert.doesNotMatch(application, /accountVaultMigrationPassphrase|account_password_required/u);
   assert.doesNotMatch(application, /cloud-vault-recovery-form|vaultUI\.showRecovery/u);
-  assert.match(application, /replaceLockedWithRemote/u);
+  assert.doesNotMatch(application, /vault\.replaceLockedWithRemote\(/u);
   assert.match(application, /Personal Vault открыт паролем аккаунта/u);
   assert.doesNotMatch(application, /Legacy Personal Vault|Recovery-фраза|секретная фраза/iu);
   assert.match(application, /vaultUI\.mode\("locked", \{ allowReauthentication: true \}\)/u);
@@ -1242,7 +2939,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
   assert.match(html, /app\.js\?v=196/u);
-  assert.match(html, /styles\.css\?v=196/u);
+  assert.match(html, /styles\.css\?v=197/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
@@ -1268,7 +2965,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /createIndexedDBTeamVaultRepository[\s\S]*\.remove\(\)/u);
   assert.match(application, /resolveConflicts/u);
   assert.match(application, /recoveryPassphrase/u);
-  assert.doesNotMatch(`${application}\n${synchronization}\n${teamSynchronization}`, /localStorage|sessionStorage/u);
+  assert.doesNotMatch(`${application}\n${teamSynchronization}`, /localStorage|sessionStorage/u);
+  assert.doesNotMatch(synchronization, /localStorage/u);
   assert.match(synchronization, /unsupported_vault_scope/u);
   assert.match(synchronization, /credentials: "same-origin"/u);
   assert.match(teamSynchronization, /team_vault_rotation_required/u);

@@ -1,0 +1,17 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "channel": "chrome",
+      "headless": true
+    },
+    "contextOptions": {
+      "viewport": {"width": 1280, "height": 800}
+    }
+  },
+  "network": {
+    "allowedOrigins": ["http://127.0.0.1:8765"]
+  },
+  "outputMode": "stdout"
+}

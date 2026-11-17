@@ -7,6 +7,7 @@ import {projectPublicationSnapshot,publicationUUID,wholeHash} from './whole-publ
 import {isUUID} from './security.mjs';
 import {prepareAdministrativeSidecarCommitment} from '../public/vault-publication-v1.js';
 import {VaultPublicationStore} from './vault-publication-store.mjs';
+import {createPublicationFenceTransaction} from './publication-fence-coordinator.mjs';
 const same=(a,b)=>canonicalMigrationJSON(a)===canonicalMigrationJSON(b);
 function fail(code){const e=Error(code);e.code=code;throw e;}
 export class WholePublicationStore extends VaultMigrationStore{
@@ -28,6 +29,7 @@ export class WholePublicationStore extends VaultMigrationStore{
     this.gate(input);
     for(let retry=0;;retry++){
       const c=await this.pool.connect();
+      const fenced=createPublicationFenceTransaction({query:(text,values)=>c.query(text,values),fence:this.fence,coordinator:this.fenceCoordinator});
       try{
         await c.query(write?'BEGIN':'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');await this.authenticate(c,input);
         if(write){
@@ -36,8 +38,12 @@ export class WholePublicationStore extends VaultMigrationStore{
           await c.query(`LOCK TABLE ${[...migrationLockTables,'sessions','team_publication_operations','team_publication_generations','team_publication_receipts','team_publication_outbox','team_publication_upload_chunks','team_publication_operation_keys','team_publication_cancellations'].join(',')} IN SHARE ROW EXCLUSIVE MODE`);
           await this.authenticate(c,input);
         }
-        const result=await work(c);await this.authenticate(c,input);await c.query('COMMIT');return result;
-      }catch(e){await c.query('ROLLBACK').catch(()=>{});if(retry>=3||!['40P01','40001'].includes(e.code))throw e;}
+        const result=await work(c,fenced);await this.authenticate(c,input);
+        if(fenced.intentID)await this.faultAt('before_commit');
+        await fenced.commit();if(fenced.intentID)await this.faultAt('after_commit');await fenced.confirm();return result;
+      }catch(e){let rollbackError;try{await fenced.rollback();}catch(error){rollbackError=error;}
+        if(fenced.commitDispatched)throw e;if(rollbackError&&fenced.intentID)throw rollbackError;
+        if(rollbackError||retry>=3||!['40P01','40001'].includes(e.code))throw e;}
       finally{c.release();}
       await new Promise(resolve=>setTimeout(resolve,20*(retry+1)));
     }
@@ -328,7 +334,7 @@ export class WholePublicationStore extends VaultMigrationStore{
     }
   }
   commit(input,operationID,token,request){
-    return this.transaction(input,async c=>{
+    return this.transaction(input,async(c,fenced)=>{
       const op=await this.operation(c,input,operationID);
       if(request?.operationID!==operationID)fail('publication_replay_conflict');
       // Receipt recovery remains possible after preview expiry, session renewal
@@ -346,7 +352,20 @@ export class WholePublicationStore extends VaultMigrationStore{
         if(a.state!=='V2_READY')fail('publication_not_ready');
         await this.verify(c,a,s,a.manifest);generations.push({g,a});
       }
-      await this.faultAt('commit_precondition');await this.installMutation(c,input,p);
+      await this.faultAt('commit_precondition');
+      const fenceVaults=[];
+      for(const {g,a} of generations){
+        const projection=(await c.query('SELECT header_hash FROM vault_publication_projections WHERE attempt_id=$1',[a.id])).rows[0];
+        if(!projection)fail('publication_invalid');
+        fenceVaults.push({teamID:input.teamID,vaultID:g.vaultID,generationID:a.id,sequence:g.sequence,headerHash:projection.header_hash,manifestHash:a.manifest_hash});
+      }
+      if(typeof this.activationGuard==='function'){
+        const vaultMetadata=(await c.query('SELECT id,team_id,name,format_state FROM shared_vaults WHERE team_id=$1 AND id=ANY($2::uuid[]) ORDER BY id',[input.teamID,fenceVaults.map(v=>v.vaultID)])).rows;
+        await this.activationGuard({kind:'PUBLICATION',input,operationID,vaults:fenceVaults,
+          manifests:generations.map(({g,a})=>({vaultID:g.vaultID,manifest:a.manifest})),snapshots:generations.map(({g})=>({vaultID:g.vaultID,snapshot:g.snapshot})),vaultMetadata});
+      }
+      await fenced.beforeCommit({kind:'PUBLICATION',operationID,schemaFloor:22,vaults:fenceVaults});
+      await this.installMutation(c,input,p);
       for(const {g} of generations)await c.query('UPDATE shared_vaults SET access_policy_version=$3 WHERE id=$1 AND team_id=$2',[g.vaultID,input.teamID,g.scope.policyVersion]);
       await this.faultAt('policy_installed');
       // The database's exact committed successor, including group trigger

@@ -37,6 +37,7 @@ enum SelectiveRemoteCloudProfileShareError: LocalizedError {
 
 struct SelectiveRemoteCloudProfileShareView: View {
     let profile: ConnectionProfile
+    let openingDelivery: SelectiveRemoteTeamMutationDelivery
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -52,6 +53,8 @@ struct SelectiveRemoteCloudProfileShareView: View {
     @State private var message: String?
     @State private var messageIsError = false
     @State private var needsDeviceWrapper = false
+    @State private var loadedDelivery: SelectiveRemoteTeamMutationDelivery?
+    @State private var loadGeneration = UUID()
     @State private var teamSearch = ""
     @State private var includeUsername = true
     @State private var includePassword = false
@@ -62,8 +65,9 @@ struct SelectiveRemoteCloudProfileShareView: View {
     private let client = SelectiveRemoteCloudAPIClient()
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
 
-    init(profile: ConnectionProfile) {
+    init(profile: ConnectionProfile, openingDelivery: SelectiveRemoteTeamMutationDelivery) {
         self.profile = profile
+        self.openingDelivery = openingDelivery
         _sharedFolder = State(initialValue: profile.group)
     }
 
@@ -262,21 +266,34 @@ struct SelectiveRemoteCloudProfileShareView: View {
 
     @MainActor
     private func load() async {
+        let generation = UUID()
+        loadGeneration = generation
         isLoading = true
-        defer { isLoading = false }
+        loadedDelivery = nil
+        defer { if loadGeneration == generation { isLoading = false } }
         do {
+            try openingDelivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
             let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
             guard await client.hasStoredSession(endpoint: url) else {
                 throw SelectiveRemoteCloudProfileShareError.signInRequired
             }
+            let delivery = openingDelivery
+            try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
             _ = try await client.currentUser(endpoint: url)
-            teams = try await client.teams(endpoint: url)
+            try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+            let loadedTeams = try await client.teams(endpoint: url)
                 .filter { $0.role != .viewer }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+            guard loadGeneration == generation else { throw CancellationError() }
+            teams = loadedTeams
             guard !teams.isEmpty else { throw SelectiveRemoteCloudProfileShareError.noWritableTeam }
+            loadedDelivery = delivery
             selectedTeamID = teams[0].id
             await loadVaults()
         } catch {
+            guard loadGeneration == generation else { return }
+            loadedDelivery = nil
             message = error.localizedDescription
             messageIsError = true
         }
@@ -285,13 +302,20 @@ struct SelectiveRemoteCloudProfileShareView: View {
     @MainActor
     private func loadVaults() async {
         guard let teamID = selectedTeamID,
-              let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
+              let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
+              let delivery = loadedDelivery
         else { return }
         do {
-            vaults = try await client.sharedVaults(endpoint: url, teamID: teamID)
+            try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+            let loadedVaults = try await client.sharedVaults(endpoint: url, teamID: teamID)
+            try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+            guard selectedTeamID == teamID else { throw CancellationError() }
+            vaults = loadedVaults
             selectedVaultID = vaults.first?.id
             if vaults.isEmpty { throw SelectiveRemoteCloudProfileShareError.noVault }
         } catch {
+            guard selectedTeamID == teamID,
+                  (try? delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())) != nil else { return }
             vaults = []
             selectedVaultID = nil
             message = error.localizedDescription
@@ -303,20 +327,33 @@ struct SelectiveRemoteCloudProfileShareView: View {
     private func share() {
         guard let team = teams.first(where: { $0.id == selectedTeamID }),
               let vaultID = selectedVaultID,
+              let loadedDelivery,
               let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
         else { return }
         isSharing = true
         message = nil
         needsDeviceWrapper = false
+        let pendingDelivery = Result {
+            try loadedDelivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+            return loadedDelivery
+        }
         Task { @MainActor in
             defer { isSharing = false }
             do {
-                let deviceID = try resolvedDeviceID()
+                let delivery = try pendingDelivery.get()
+                let deviceID = delivery.deviceID
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                guard let session = try await client.publicationSession(endpoint: url, deviceID: deviceID)
+                else { throw SelectiveRemoteCloudError.authenticationRequired }
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                let boundClient = await client.bound(to: session)
                 let identity = try await identityManager.identity(endpoint: url, deviceID: deviceID)
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
                 let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
                     endpoint: url,
-                    remote: client,
-                    snapshots: SelectiveRemoteTeamVaultFileSnapshotStore()
+                    remote: boundClient,
+                    snapshots: SelectiveRemoteTeamVaultFileSnapshotStore(),
+                    session: session
                 )
                 let refreshed = try await coordinator.refresh(teamID: team.id, vaultID: vaultID, identity: identity)
                 var sharedProfile = profile
@@ -341,7 +378,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
                     guard team.role == .owner || team.role == .admin else {
                         throw SelectiveRemoteCloudProfileShareError.initializationRequiresManager
                     }
-                    let devices = try await client.teamKeyDevices(endpoint: url, teamID: team.id, vaultID: vaultID)
+                    let devices = try await boundClient.teamKeyDevices(endpoint: url, teamID: team.id, vaultID: vaultID)
                     let document = try SelectiveRemoteVaultDocument(records: sharedRecords)
                     outcome = try await coordinator.initialize(
                         payload: document.encoded(), teamID: team.id, vaultID: vaultID,
@@ -365,18 +402,25 @@ struct SelectiveRemoteCloudProfileShareView: View {
                         tombstones: current.tombstones.filter { !sharedIDs.contains($0.id) }
                     )
                     _ = try await coordinator.stage(
-                        document.encoded(), teamID: team.id, vaultID: vaultID, identity: identity
+                        document.encoded(), expected: snapshot.snapshot, teamID: team.id, vaultID: vaultID, identity: identity
                     )
                     outcome = try await coordinator.push(teamID: team.id, vaultID: vaultID, identity: identity)
                 case .conflict:
                     throw SelectiveRemoteCloudProfileShareError.conflict
                 }
                 guard case .uploaded = outcome else { throw SelectiveRemoteCloudProfileShareError.conflict }
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
                 message = UpdateLocalization.text(
                     ru: "Копия Host зашифрована и добавлена в Team Vault. Исходный Host сохранён. Для адресного доступа потребуется регистрация ресурса V2 и публикация ключей.",
                     en: "An encrypted Host copy was added to the Team Vault. The original Host remains. Resource-specific access requires V2 registration and key publication."
                 )
                 messageIsError = false
+            } catch is CancellationError {
+                message = UpdateLocalization.text(
+                    ru: "Сеанс Cloud изменился. Закройте и откройте окно, затем выберите Team заново.",
+                    en: "The Cloud session changed. Close and reopen this window, then choose a Team again."
+                )
+                messageIsError = true
             } catch SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper {
                 message = SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper.localizedDescription
                 messageIsError = true

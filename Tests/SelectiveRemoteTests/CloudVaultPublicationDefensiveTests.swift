@@ -3,6 +3,16 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+private func reauthenticatedSession(_ fixture: PublicationFixture, tokens: SelectiveRemoteCloudMemoryTokenStore) throws -> SelectiveRemotePublicationSession {
+    let endpoint = fixture.scope.endpoint, token = String(repeating: "c", count: 40)
+    let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+    try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+        tokens.saveToken(token, for: endpoint)
+    }
+    return SelectiveRemotePublicationSession(endpoint: endpoint, accountID: fixture.scope.accountID,
+                                             deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+}
+
 @Suite("native publication defensive correctness")
 struct CloudVaultPublicationDefensiveTests {
     @MainActor
@@ -98,7 +108,8 @@ struct CloudVaultPublicationDefensiveTests {
         try current.prepareAuthenticationLossRetirement()
         #expect(try store.retireScopes(session: current, selection: .all) == [fixture.scope])
         tokens.saveToken(token, for: fixture.scope.endpoint)
-        let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+        #expect(throws: CancellationError.self) { try current.checkAuthorization() }
+        let checking = try reauthenticatedSession(fixture, tokens: tokens)
         #expect(try store.load(scope: fixture.scope, session: checking) == nil)
         #expect(try store.highWater(scope: fixture.scope) == highWater)
     }
@@ -145,8 +156,7 @@ struct CloudVaultPublicationDefensiveTests {
             }
         }
         #expect(tokens.token(for: fixture.scope.endpoint) == nil)
-        tokens.saveToken(token, for: fixture.scope.endpoint)
-        let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+        let checking = try reauthenticatedSession(fixture, tokens: tokens)
         for (index, value) in [fixture, other].enumerated() {
             #expect(try store.load(scope: value.scope, session: checking) == nil)
             #expect(try store.highWater(scope: value.scope) == waters[index])
@@ -209,7 +219,7 @@ struct CloudVaultPublicationDefensiveTests {
         await remote.includeTeam(other)
         await remote.setListFault(stage)
         await #expect(throws: Error.self) { try await auto.synchronizeOnce(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) }
-        await remote.restoreAuthentication()
+        try await remote.restoreAuthentication()
         let checking = try #require(try await remote.publicationSession(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID))
         #expect(try store.cachedScopes(session: checking).isEmpty)
         for (index, value) in [fixture, other].enumerated() {
@@ -244,8 +254,7 @@ struct CloudVaultPublicationDefensiveTests {
             if stage == "load" { _ = try await reader.load(teamName: "Team", vaultName: "Vault", role: .viewer) }
             else { _ = try await reader.secretRecord(resourceID: fixture.resourceID) }
         }
-        tokens.saveToken(token, for: fixture.scope.endpoint)
-        let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+        let checking = try reauthenticatedSession(fixture, tokens: tokens)
         #expect(try store.cachedScopes(session: checking).isEmpty)
         for (index, value) in [fixture, other].enumerated() {
             #expect(try store.load(scope: value.scope, session: checking) == nil)
@@ -268,8 +277,7 @@ struct CloudVaultPublicationDefensiveTests {
             (Data(#"{"error":"authentication_required"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
         }, publicationStore: { store })
         await #expect(throws: SelectiveRemoteCloudError.authenticationRequired) { try await client.publicationSession(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) }
-        tokens.saveToken(token, for: fixture.scope.endpoint)
-        let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+        let checking = try reauthenticatedSession(fixture, tokens: tokens)
         #expect(try store.load(scope: fixture.scope, session: checking) == cache)
         #expect(try store.cachedScopes(session: checking) == [fixture.scope])
     }
@@ -299,8 +307,7 @@ struct CloudVaultPublicationDefensiveTests {
         try store.captureRetirementOwners(session: session)
         await gate.release()
         await #expect(throws: SelectiveRemoteCloudError.authenticationRequired) { try await pending.value }
-        tokens.saveToken(token, for: fixture.scope.endpoint)
-        let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+        let checking = try reauthenticatedSession(fixture, tokens: tokens)
         #expect(try store.load(scope: fixture.scope, session: checking) == cache)
         #expect(try store.cachedScopes(session: checking) == [fixture.scope])
         #expect(try store.highWater(scope: fixture.scope) == water)

@@ -582,8 +582,8 @@ enum SelectiveRemotePersonalVaultCrypto {
 }
 
 extension SelectiveRemoteCloudAPIClient {
-    func personalVault(endpoint: URL) async throws -> SelectiveRemoteCloudPersonalVault {
-        let (data, response) = try await authorizedResponse(endpoint: endpoint, path: "v1/vault")
+    func personalVault(endpoint: URL, session: SelectiveRemoteCloudSessionBinding? = nil) async throws -> SelectiveRemoteCloudPersonalVault {
+        let (data, response) = try await authorizedResponse(endpoint: endpoint, path: "v1/vault", session: session)
         guard (200..<300).contains(response.statusCode),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == [
@@ -651,15 +651,27 @@ extension SelectiveRemoteCloudAPIClient {
 
     func putPersonalVault(
         endpoint: URL,
-        envelope: SelectiveRemotePersonalVaultEnvelope
+        envelope: SelectiveRemotePersonalVaultEnvelope,
+        session: SelectiveRemoteCloudSessionBinding
     ) async throws -> SelectiveRemoteCloudPersonalVaultWriteResult {
-        let body = try JSONEncoder().encode(envelope)
+        try await requireV1WriteFence(endpoint: endpoint, session: session)
+        let body = try JSONEncoder().encode(SelectiveRemoteV1WriteFrame(envelope: envelope))
         let (data, response) = try await authorizedResponse(
             endpoint: endpoint,
             path: "v1/vault",
             method: "PUT",
-            body: body
+            body: body,
+            headers: ["X-Selective-V1-Write-Fence": "1"],
+            session: session
         )
+        if response.statusCode == 426 || (response.statusCode == 400 &&
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String == "invalid_vault_envelope") {
+            throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required")
+        }
+        if response.statusCode == 503 &&
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String == "vault_write_temporarily_unavailable" {
+            throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+        }
         guard response.statusCode == 200 || response.statusCode == 409,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["conflict", "revision"],

@@ -51,17 +51,44 @@ remain pending.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
-synchronize opaque revisions through the personal-Vault API. The bearer session
-exists only in page memory. IndexedDB contains ciphertext, a random device UUID
-and non-secret revision acknowledgement metadata, never the session token,
-recovery passphrase, raw Vault key or decrypted records. Concurrent record
+synchronize opaque revisions through the personal-Vault API. A bearer token is
+kept in page memory; the browser can also restore the session using an HttpOnly,
+SameSite=Strict cookie, marked Secure when the configured origin uses HTTPS.
+Each tab retains only a non-authenticating session identifier in sessionStorage
+to verify that the shared cookie still represents that tab's login. A new tab
+without that identifier, an older tab upgraded from a previous client, or a tab
+whose cookie changed must sign in again. The identifier is not a bearer token.
+IndexedDB contains ciphertext, a random device UUID and revision metadata. If
+trusted-browser unlock is enabled, it also holds a non-extractable device key
+and an account-bound encrypted Vault-key unlock record. It does not hold the
+session token, recovery passphrase, raw Vault key or decrypted records. Concurrent record
 conflicts and server revision conflicts stop upload instead of overwriting.
+Legacy browser snapshots without an independently established account binding
+are preserved but are not automatically imported or uploaded: a matching
+password, remembered unlock, or server copy is insufficient because an older
+client may already have copied a different account's data. A safe recovery
+and upgrade flow for such snapshots remains a release blocker.
+An already open older browser tab can still write the prior IndexedDB format
+without the newer client's conditional checks. A mixed-version cutover that
+isolates both Personal and Team data remains a release blocker; do not treat
+same-version concurrency tests as proof of safe concurrent upgrades.
+Old browser bearer sessions can still reach the server without the newer tab
+binding, so separating local keys alone would not prevent late Cloud writes.
+A legacy ownership marker containing only a wrapped key also does not prove
+the provenance of a particular ciphertext or revision: an older client can
+change that snapshot without changing the wrapped key. Synthetic tests have
+demonstrated this limitation; no production issuance of such a marker has
+been established. A previously contaminated remote copy, including one with
+a rewrapped key, likewise cannot be safely attributed using only the password
+and server account. Independently established provenance, a supported recovery
+flow and a reviewed server-side cutover remain required before release.
 The browser requires an explicit choice for every concurrent record or
 tombstone, joins both causal histories locally, and leaves the resolution dirty
 until the next conditional upload. A clean browser can import the encrypted
 remote Vault through a dedicated recovery form; the phrase is cleared after
-each attempt and never sent or persisted. Registration remains disabled in the
-closed-staging configuration.
+each attempt and never sent or persisted. Closed staging disables general
+registration; a valid invitation can still permit registration when the
+configured email allowlist and mailer allow it.
 
 The mandatory Team/shared-Vault security contract is documented in
 `docs/cloud-v0.32-team-threat-model.md`. It fixes the four-role matrix,

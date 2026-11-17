@@ -410,13 +410,16 @@ struct SelectiveRemoteTeamHostMovePlan {
 final class SelectiveRemoteTeamHostMutationService {
     private let remote: any SelectiveRemoteTeamVaultRemote
     private let snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+    private let session: SelectiveRemotePublicationSession?
 
     init(
         remote: any SelectiveRemoteTeamVaultRemote = SelectiveRemoteCloudAPIClient(),
-        snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+        snapshots: any SelectiveRemoteTeamVaultSnapshotStore,
+        session: SelectiveRemotePublicationSession? = nil
     ) {
         self.remote = remote
         self.snapshots = snapshots
+        self.session = session
     }
 
     convenience init() throws {
@@ -436,7 +439,8 @@ final class SelectiveRemoteTeamHostMutationService {
         let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
             endpoint: endpoint,
             remote: remote,
-            snapshots: snapshots
+            snapshots: snapshots,
+            session: session
         )
         let refreshed = try await coordinator.refresh(
             teamID: context.teamID,
@@ -457,6 +461,7 @@ final class SelectiveRemoteTeamHostMutationService {
             )
             _ = try await coordinator.stage(
                 document.encoded(),
+                expected: snapshot.snapshot,
                 teamID: context.teamID,
                 vaultID: context.vaultID,
                 identity: identity

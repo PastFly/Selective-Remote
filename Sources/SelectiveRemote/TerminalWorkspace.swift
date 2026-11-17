@@ -440,7 +440,7 @@ struct TerminalWorkspaceTab: Identifiable {
     }
 }
 
-private struct StoredTerminalWorkspace: Codable {
+struct StoredTerminalWorkspace: Codable {
     struct Tab: Codable {
         let id: UUID
         var title: String
@@ -499,7 +499,7 @@ final class TerminalWorkspaceModel: ObservableObject {
     private var appearanceObservers: [UUID: AnyCancellable] = [:]
     private var isRestoring = true
     private var storageKey: String {
-        "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
+        NativeStorageMigration.workspaceKey(for: profileID)
     }
 
     init(
@@ -513,7 +513,7 @@ final class TerminalWorkspaceModel: ObservableObject {
         self.defaults = defaults
         self.language = language
 
-        let initialStorageKey = "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
+        let initialStorageKey = NativeStorageMigration.workspaceKey(for: profileID)
         let stored = defaults.data(forKey: initialStorageKey)
             .flatMap { try? JSONDecoder().decode(StoredTerminalWorkspace.self, from: $0) }
         let primaryMetadata = stored?.tabs.first(where: \.isPrimary)

@@ -20,7 +20,8 @@ const scope = { type: "team", teamID, vaultID };
 function jsonResponse(status, value) {
   return new Response(value === null ? null : JSON.stringify(value), {
     status,
-    headers: value === null ? {} : { "Content-Type": "application/json" },
+    headers: value === null ? {} : { "Content-Type": "application/json",
+      ...(status === 200 && value.token && value.user && value.deviceID ? { "X-Selective-Session-Binding": deviceID } : {}) },
   });
 }
 
@@ -315,6 +316,7 @@ test("Team writes carry idempotency and distinguish conflict from committed rota
   const client = createAuthenticatedVaultClient({
     fetchValue: async (path, options = {}) => {
       calls.push({ path, options });
+      if (path === "/v1/meta") return Response.json({}, { headers: { "X-Selective-V1-Write-Fence": "1" } });
       if (path === "/v1/auth/login") {
         return jsonResponse(200, {
           token: "t".repeat(43),

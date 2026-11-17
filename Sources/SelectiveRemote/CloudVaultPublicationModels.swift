@@ -86,20 +86,24 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
     private var bindings: [String: ReaderBinding] = [:]
     func detach(scope: SelectiveRemotePublicationScope, expectedSession: SelectiveRemotePublicationSession? = nil) {
         if let expectedSession, sessions[scope.key]?.sameAuthorization(as: expectedSession) != true { return }
+        let owner = expectedSession ?? sessions[scope.key]
         caches.removeAll { $0.scope == scope }; secrets = secrets.filter { !$0.key.hasPrefix(scope.key) }; sessions.removeValue(forKey: scope.key); readers.removeValue(forKey: scope.key); bindings.removeValue(forKey: scope.key); PublishedAccessWindows.closeInvalid(); SelectiveRemotePublisherVerificationSheet.closeAll()
-        SelectiveRemoteTeamHostStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID)
-        SelectiveRemoteTeamSnippetStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID)
-        SelectiveRemoteTeamCredentialStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID)
+        SelectiveRemoteTeamHostStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID, expectedSession: owner)
+        SelectiveRemoteTeamSnippetStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID, expectedSession: owner)
+        SelectiveRemoteTeamCredentialStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID, expectedSession: owner)
     }
     func clear() {
         sessions.values.forEach { $0.invalidate() }; caches = []; secrets = [:]; sessions = [:]; readers = [:]; bindings = [:]; PublishedAccessWindows.closeInvalid(); SelectiveRemotePublisherVerificationSheet.closeAll()
         SelectiveRemoteTeamHostStore.shared.clear(); SelectiveRemoteTeamSnippetStore.shared.clear(); SelectiveRemoteTeamCredentialStore.shared.clear()
     }
     func clearInvalidSessions(endpoint: URL? = nil) {
-        for (key, session) in sessions where (endpoint == nil || session.endpoint == endpoint) && (try? session.check()) == nil {
+        for (key, session) in sessions where (endpoint == nil || session.endpoint == endpoint) && (try? session.checkAuthorization()) == nil {
             if let cache = caches.first(where: { $0.scope.key == key }) { detach(scope: cache.scope, expectedSession: session) }
             else { sessions.removeValue(forKey: key); readers.removeValue(forKey: key); bindings.removeValue(forKey: key) }
         }
+        SelectiveRemoteTeamHostStore.shared.clearInvalidSessions(endpoint: endpoint)
+        SelectiveRemoteTeamSnippetStore.shared.clearInvalidSessions(endpoint: endpoint)
+        SelectiveRemoteTeamCredentialStore.shared.clearInvalidSessions(endpoint: endpoint)
         SelectiveRemotePublisherVerificationSheet.closeInvalid()
     }
     func bind(reader: SelectiveRemoteVaultPublicationCoordinator, session: SelectiveRemotePublicationSession, scope: SelectiveRemotePublicationScope, cache: SelectiveRemotePublicationCache) throws {
@@ -117,7 +121,10 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
         secrets = [:]
     }
     func valid(_ reference: SelectiveRemotePublishedModelReference) -> Bool {
-        guard let session = sessions[reference.scope.key], (try? session.check()) != nil,
+        !Task.isCancelled && validIgnoringTaskCancellation(reference)
+    }
+    func validIgnoringTaskCancellation(_ reference: SelectiveRemotePublishedModelReference) -> Bool {
+        guard let session = sessions[reference.scope.key], (try? session.checkAuthorization()) != nil,
               let binding = bindings[reference.scope.key], let cache = caches.first(where: { $0.scope == reference.scope }),
               binding.header == cache.header, binding.headerHash == cache.headerHash, cache.headerHash == reference.headerHash,
               (try? SelectiveRemoteVaultPublicationV1.headerPayload(cache.header)["generationID"]?.publicationString()) == reference.generationID else { return false }

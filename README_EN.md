@@ -48,7 +48,15 @@ The command library is shared by SSH and the local terminal. The capture contain
 
 ## Coming in 0.32
 
-Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are planned for 0.32. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. These are upcoming capabilities, not part of the current v0.31.0 download. Local work remains available without an account.
+Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are part of the 0.32 candidate. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. These capabilities are not yet part of the current v0.31.0 download. Local work remains available without an account.
+
+**Sync Center** separates Personal and Team Vault state. Notifications lead to device, invitation, or error review; reading a notification does not resolve its source. Copying a Personal Host to a Team Vault preserves the original.
+
+The first public Cloud release is being prepared with V1 Vaults: approved members share access to a Team Vault. Individual-record permissions and V2 migration are excluded from this release. Public registration is planned to open only after post-deployment V1 end-to-end acceptance succeeds.
+
+Account password changes are temporarily unavailable to preserve access to encrypted Personal Vault data. Trust-root recovery is planned **after 0.32**.
+
+[0.32 candidate notes in Russian and English](releases/0.32.0-notes.md). 0.32 is being prepared for manual installation without Developer ID signing or Apple notarization. The app uses an ad-hoc signature; this build is not eligible for the in-app update installer. Installation, upgrade acceptance, and production Cloud deployment are still pending. **v0.31.0** remains the available download.
 
 [Cloud architecture and trust model](docs/cloud-v0.32-architecture.md) · [Open Cloud](https://cloud.pastfly.ru/)
 
@@ -60,7 +68,7 @@ SSH secrets are stored in macOS Keychain; new SSH host keys are not accepted aut
 
 1. Download the DMG from [release v0.31.0](https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0).
 2. Open the image and drag **Selective Remote** into Applications.
-3. Launch the app. If macOS requests approval for a community build without Developer ID, allow it in **System Settings → Privacy & Security** or from Finder's context menu.
+3. Launch the app. If macOS blocks it as an unidentified developer app and you trust the download, use **System Settings → Privacy & Security → Open Anyway**. Follow [Apple’s instructions](https://support.apple.com/en-gb/102445); a managed Mac may restrict this action.
 
 The ready-made DMG targets **Apple Silicon** and **macOS 14 or newer**. Server access and permissions for redirected devices depend on your workflow.
 

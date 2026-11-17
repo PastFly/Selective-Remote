@@ -10,9 +10,9 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=196">
+  <link rel="stylesheet" href="/styles.css?v=197">
   <link rel="stylesheet" href="/access-manager.css">
-  <script src="/i18n.js?v=196"></script>
+  <script src="/i18n.js?v=197"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -23,8 +23,16 @@
         <span>Открываем защищённое пространство…</span>
       </div>
       <span class="app-boot-progress" aria-hidden="true"></span>
+      <button type="button" id="vault-storage-wait-cancel" hidden>Продолжить без локального Vault</button>
     </div>
   </div>
+  <section class="vault-storage-deferred" id="vault-storage-deferred" aria-labelledby="vault-storage-deferred-title" hidden>
+    <div>
+      <h1 id="vault-storage-deferred-title">Локальное хранилище Cloud не открыто</h1>
+      <p id="vault-storage-deferred-detail">Сохраните или скопируйте незавершённые изменения в других вкладках Selective Remote Cloud и закройте их. Затем повторите открытие. Сохранённые данные не изменены; восстановление аккаунта доступно ниже.</p>
+      <button type="button" id="vault-storage-retry">Повторить</button>
+    </div>
+  </section>
   <main class="shell">
     <header class="brand" id="site-brand">
       <div class="mark" aria-hidden="true">SR</div>
@@ -68,9 +76,10 @@
       <p class="eyebrow">СБРОС ПАРОЛЯ</p>
       <h2 id="password-reset-title">Задайте новый пароль</h2>
       <p id="password-reset-message">Минимум 12 символов.</p>
+      <p id="password-reset-vault-warning">Сброс меняет только пароль входа. Он не восстанавливает ключи существующего Personal Vault: для его открытия нужны прежний пароль или сохранённые ключи. Сохраните данные с устройства, на котором Vault ещё открывается, прежде чем продолжить.</p>
       <form id="password-reset-form" method="post" action="/v1/auth/reset-password">
         <label for="new-password">Новый пароль</label>
-        <input id="new-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+        <input id="new-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="password-reset-message password-reset-vault-warning" required>
         <label for="confirm-password">Повторите пароль</label>
         <input id="confirm-password" name="confirmation" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
         <button type="submit">Сохранить пароль</button>

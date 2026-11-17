@@ -31,6 +31,9 @@ struct CloudSettingsView: View {
     @State private var errorMessage: String?
     @State private var accountPhase = AccountPhase.signedOut
     @State private var accountUser: SelectiveRemoteCloudUser?
+    @State private var accountSession: SelectiveRemoteCloudSessionBinding?
+    @State private var accountPresentationGeneration = UUID()
+    @State private var signInPriorSessionLoss: SelectiveRemoteCloudSessionLoss?
     @State private var teams: [SelectiveRemoteCloudTeam] = []
     @State private var vaultsByTeam: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
     @State private var accountErrorMessage: String?
@@ -393,6 +396,13 @@ struct CloudSettingsView: View {
         .task {
             await loadCloudStateIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionLost)) { notification in
+            guard let loss = notification.object as? SelectiveRemoteCloudSessionLoss,
+                  let session = accountSession, loss.matches(session) else { return }
+            let priorSessionLost = accountPhase == .signingIn && signInPriorSessionLoss == loss
+            resetAccountPresentation(endpoint: session.endpoint, preservingSignIn: priorSessionLost)
+            if !priorSessionLost { accountErrorMessage = SelectiveRemoteCloudError.authenticationRequired.localizedDescription }
+        }
         .onChange(of: accountUser?.id) { _, _ in
             showsTeamManagement = false
             SelectiveRemoteCloudSessionTransition.notify()
@@ -487,7 +497,9 @@ struct CloudSettingsView: View {
     @MainActor
     private func loadCloudStateIfNeeded() async {
         guard phase == .idle else { return }
+        let generation = accountPresentationGeneration
         guard let url = await refreshCloudMetadata() else { return }
+        guard accountPresentationGeneration == generation, !accountPhase.isBusy else { return }
         await restoreStoredSession(at: url)
     }
 
@@ -584,25 +596,40 @@ struct CloudSettingsView: View {
     private func restoreStoredSession(at url: URL) async {
         if accountEndpoint == url.absoluteString, accountUser != nil { return }
         resetAccountPresentation(endpoint: url)
-        guard await client.hasStoredSession(endpoint: url) else { return }
+        let generation = accountPresentationGeneration
+        let hasSession = await client.hasStoredSession(endpoint: url)
+        guard accountPresentationGeneration == generation, hasSession else { return }
         accountPhase = .restoring
         do {
-            accountUser = try await client.currentUser(endpoint: url)
+            let session = try await client.sessionBinding(endpoint: url)
+            guard accountPresentationGeneration == generation else { return }
+            let user = try await client.currentUser(endpoint: url)
+            try await client.checkSession(session)
+            guard accountPresentationGeneration == generation else { return }
+            accountSession = session
+            accountUser = user
             SyncPresentationStore.shared.invalidateSession()
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
+            guard isCurrentPresentation(generation, session: session) else { return }
             NotificationCenter.default.post(
                 name: .selectiveRemoteTeamVaultSyncNow,
                 object: nil
             )
         } catch {
+            guard accountPresentationGeneration == generation else { return }
             resetAccountPresentation(endpoint: url)
+            if error is CancellationError { return }
             accountErrorMessage = error.localizedDescription
         }
     }
 
     private func signIn(email: String, password: String, endpoint url: URL) {
         SelectiveRemoteCloudSessionTransition.notify()
+        signInPriorSessionLoss = accountSession.map { .init(endpoint: $0.endpoint, epoch: $0.epoch) }
+        accountPresentationGeneration = UUID()
+        let generation = accountPresentationGeneration
+        accountEndpoint = url.absoluteString
         accountPhase = .signingIn
         accountErrorMessage = nil
         inventoryErrorMessage = nil
@@ -610,12 +637,16 @@ struct CloudSettingsView: View {
             do {
                 let deviceID = resolvedDeviceID()
                 let identity = try await identityManager.identity(endpoint: url, deviceID: deviceID)
-                accountUser = try await client.login(
+                guard accountPresentationGeneration == generation else { return }
+                let signedIn = try await client.loginWithSession(
                     endpoint: url,
                     email: email,
                     password: password,
                     device: .thisMac(id: deviceID, publicKey: identity.publicKey)
                 )
+                guard accountPresentationGeneration == generation else { return }
+                accountUser = signedIn.user
+                accountSession = signedIn.session
                 SyncPresentationStore.shared.invalidateSession()
                 accountEndpoint = url.absoluteString
                 var enrollmentError: String?
@@ -636,6 +667,7 @@ struct CloudSettingsView: View {
                     _ = try await enrollment.enrollOrCreate(
                         endpoint: url,
                         deviceID: deviceID,
+                        session: signedIn.session,
                         password: password,
                         profiles: model.profiles,
                         snippets: TerminalCommandHistoryStore.shared.templates(),
@@ -646,21 +678,27 @@ struct CloudSettingsView: View {
                 } catch {
                     enrollmentError = error.localizedDescription
                 }
+                try await client.checkSession(signedIn.session)
+                guard isCurrentPresentation(generation, session: signedIn.session) else { return }
                 accountPhase = .signedIn
+                signInPriorSessionLoss = nil
                 showsAccountSheet = false
                 await loadInventory(endpoint: url)
+                guard isCurrentPresentation(generation, session: signedIn.session) else { return }
                 NotificationCenter.default.post(
                     name: .selectiveRemoteTeamVaultSyncNow,
                     object: nil
                 )
                 if enrollmentError == nil {
                     do {
-                        try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID)
+                        try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID, session: signedIn.session)
+                        guard isCurrentPresentation(generation, session: signedIn.session) else { return }
                         await loadInventory(endpoint: url)
                     } catch {
                         enrollmentError = error.localizedDescription
                     }
                 }
+                guard isCurrentPresentation(generation, session: signedIn.session) else { return }
                 if let enrollmentError {
                     personalVaultLoadErrorMessage = UpdateLocalization.text(
                         ru: "Вход выполнен, но Personal Vault не подключён автоматически: \(enrollmentError)",
@@ -668,6 +706,21 @@ struct CloudSettingsView: View {
                     )
                 }
             } catch {
+                guard accountPresentationGeneration == generation else { return }
+                let interrupted = UpdateLocalization.text(
+                    ru: "Вход не завершён: сеанс изменился. Повторите попытку.",
+                    en: "Sign-in did not complete because the session changed. Please try again."
+                )
+                if let session = accountSession, isCurrentPresentation(generation, session: session) {
+                    await recoverCancelledPresentation(generation, session: session,
+                                                       message: error is CancellationError ? interrupted : error.localizedDescription)
+                    return
+                }
+                if error is CancellationError {
+                    resetAccountPresentation(endpoint: url)
+                    accountErrorMessage = interrupted
+                    return
+                }
                 accountPhase = .signedOut
                 accountErrorMessage = error.localizedDescription
             }
@@ -707,18 +760,27 @@ struct CloudSettingsView: View {
 
     private func refreshInventory() {
         guard let accountUser,
+              let originalSession = accountSession,
               let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
         else { return }
+        let generation = accountPresentationGeneration
         Task { @MainActor in
             do {
                 let refreshedUser = try await client.currentUser(endpoint: url)
+                try await client.checkSession(originalSession)
+                guard isCurrentPresentation(generation, session: originalSession) else { return }
                 if refreshedUser.id != accountUser.id {
                     SyncPresentationStore.shared.invalidateSession()
                 }
                 self.accountUser = refreshedUser
                 await loadInventory(endpoint: url)
             } catch {
-                if error as? SelectiveRemoteCloudError == .authenticationRequired {
+                guard isCurrentPresentation(generation, session: originalSession) else { return }
+                if error is CancellationError {
+                    await recoverCancelledPresentation(generation, session: originalSession)
+                    return
+                }
+                if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
                     resetAccountPresentation(endpoint: url)
                 } else {
                     self.accountUser = accountUser
@@ -731,11 +793,15 @@ struct CloudSettingsView: View {
 
     @MainActor
     private func loadInventory(endpoint url: URL) async {
+        guard let session = accountSession else { return }
+        let generation = accountPresentationGeneration
         accountPhase = .refreshing
         inventoryErrorMessage = nil
         personalVaultLoadErrorMessage = nil
         do {
-            let personalVault = try await client.personalVault(endpoint: url)
+            let personalVault = try await client.personalVault(endpoint: url, session: session)
+            try await client.checkSession(session)
+            guard isCurrentPresentation(generation, session: session) else { return }
             personalVaultRevision = personalVault.revision
             if let deviceID = UUID(uuidString: storedDeviceID), deviceID.isSelectiveRemoteCloudUUID {
                 let material = try? personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
@@ -744,7 +810,12 @@ struct CloudSettingsView: View {
                     && material?.allowsUpload == true
             }
         } catch {
-            if error as? SelectiveRemoteCloudError == .authenticationRequired {
+            guard isCurrentPresentation(generation, session: session) else { return }
+            if error is CancellationError {
+                await recoverCancelledPresentation(generation, session: session)
+                return
+            }
+            if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
                 resetAccountPresentation(endpoint: url)
                 accountErrorMessage = error.localizedDescription
                 return
@@ -755,16 +826,25 @@ struct CloudSettingsView: View {
 
         do {
             let loadedTeams = try await client.teams(endpoint: url)
+            try await client.checkSession(session)
+            guard isCurrentPresentation(generation, session: session) else { return }
             var loadedVaults: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
             for team in loadedTeams {
                 loadedVaults[team.id] = try await client.sharedVaults(endpoint: url, teamID: team.id)
+                try await client.checkSession(session)
+                guard isCurrentPresentation(generation, session: session) else { return }
             }
             teams = loadedTeams.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             vaultsByTeam = loadedVaults.mapValues {
                 $0.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             }
         } catch {
-            if error as? SelectiveRemoteCloudError == .authenticationRequired {
+            guard isCurrentPresentation(generation, session: session) else { return }
+            if error is CancellationError {
+                await recoverCancelledPresentation(generation, session: session)
+                return
+            }
+            if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
                 resetAccountPresentation(endpoint: url)
                 accountErrorMessage = error.localizedDescription
                 return
@@ -779,18 +859,26 @@ struct CloudSettingsView: View {
     }
 
     private func signOut() {
-        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return }
+        guard let session = accountSession else { return }
+        let url = session.endpoint
+        let generation = accountPresentationGeneration
         accountPhase = .signingOut
         accountErrorMessage = nil
         Task { @MainActor in
             do {
-                try await client.logout(endpoint: url)
+                try await client.logout(endpoint: url, session: session)
+                guard isCurrentPresentation(generation, session: session) else { return }
                 resetAccountPresentation(endpoint: url)
                 NotificationCenter.default.post(
                     name: .selectiveRemoteTeamVaultSyncNow,
                     object: nil
                 )
             } catch {
+                guard isCurrentPresentation(generation, session: session) else { return }
+                if error is CancellationError {
+                    await recoverCancelledPresentation(generation, session: session)
+                    return
+                }
                 resetAccountPresentation(endpoint: url)
                 NotificationCenter.default.post(
                     name: .selectiveRemoteTeamVaultSyncNow,
@@ -802,11 +890,12 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
-    private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID) async throws {
+    private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID, session: SelectiveRemoteCloudSessionBinding) async throws {
         guard var material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
               material.requiresInitialDownload == true
         else { return }
-        let remote = try await client.personalVault(endpoint: url)
+        let expectedMaterial = material
+        let remote = try await client.personalVault(endpoint: url, session: session)
         guard remote.id == material.vaultID, remote.revision == material.revision,
               let envelope = remote.envelope
         else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
@@ -823,21 +912,31 @@ struct CloudSettingsView: View {
         guard plan.canApply else {
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
-        try KeychainService.savePasswords(plan.credentials)
-        model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
-        model.profiles.append(contentsOf: plan.profiles)
-        model.independentPortForwards.append(contentsOf: plan.forwarding)
-        history.importTemplates(plan.snippets)
         material.requiresInitialDownload = false
-        try personalVaultKeyStore.save(material, endpoint: url, deviceID: deviceID)
+        _ = try session.commitPersonalVault(
+            tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID,
+            expected: expectedMaterial, material: material
+        ) {
+            try KeychainService.savePasswords(plan.credentials)
+            model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
+            model.profiles.append(contentsOf: plan.profiles)
+            model.independentPortForwards.append(contentsOf: plan.forwarding)
+            history.importTemplates(plan.snippets)
+            return true
+        }
     }
 
     @MainActor
-    private func resetAccountPresentation(endpoint url: URL) {
+    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false) {
+        if !preservingSignIn { accountPresentationGeneration = UUID() }
         SyncPresentationStore.shared.invalidateSession()
-        accountEndpoint = url.absoluteString
-        accountPhase = .signedOut
+        if !preservingSignIn {
+            accountEndpoint = url.absoluteString
+            accountPhase = .signedOut
+            signInPriorSessionLoss = nil
+        }
         accountUser = nil
+        accountSession = nil
         teams = []
         vaultsByTeam = [:]
         personalVaultRevision = nil
@@ -847,6 +946,36 @@ struct CloudSettingsView: View {
         accountErrorMessage = nil
         inventoryErrorMessage = nil
         personalVaultLoadErrorMessage = nil
+    }
+
+    @MainActor
+    private func isCurrentPresentation(_ generation: UUID, session: SelectiveRemoteCloudSessionBinding) -> Bool {
+        accountPresentationGeneration == generation && accountSession?.endpoint == session.endpoint
+            && accountSession?.epoch == session.epoch
+    }
+
+    @MainActor
+    private func recoverCancelledPresentation(_ generation: UUID, session: SelectiveRemoteCloudSessionBinding,
+                                              message: String? = nil) async {
+        guard isCurrentPresentation(generation, session: session) else { return }
+        do {
+            try await client.checkSessionAuthorization(session)
+            guard isCurrentPresentation(generation, session: session) else { return }
+            accountPhase = .signedIn
+            accountErrorMessage = message
+        } catch {
+            guard isCurrentPresentation(generation, session: session) else { return }
+            if error is CancellationError {
+                resetAccountPresentation(endpoint: session.endpoint)
+                accountErrorMessage = message
+            } else {
+                accountPhase = .signedIn
+                accountErrorMessage = UpdateLocalization.text(
+                    ru: "Не удалось проверить текущий сеанс Cloud. Повторите попытку.",
+                    en: "The current Cloud session could not be checked. Please try again."
+                )
+            }
+        }
     }
 
     private var registrationURL: URL? {
@@ -968,7 +1097,9 @@ struct CloudSettingsView: View {
         guard recoveryPhrase == personalVaultRecoveryConfirmation,
               (16...1_024).contains(recoveryPhrase.precomposedStringWithCanonicalMapping.utf8.count),
               let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
-              accountUser != nil
+              accountUser != nil,
+              let session = accountSession,
+              session.endpoint == url
         else {
             personalVaultMessage = SelectiveRemotePersonalVaultError.invalidRecoveryPhrase.localizedDescription
             personalVaultMessageIsError = true
@@ -980,7 +1111,9 @@ struct CloudSettingsView: View {
         personalVaultMessageIsError = false
         Task { @MainActor in
             do {
-                let remote = try await client.personalVault(endpoint: url)
+                let deviceID = resolvedDeviceID()
+                let expectedMaterial = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
+                let remote = try await client.personalVault(endpoint: url, session: session)
                 guard remote.revision == 0 else {
                     throw SelectiveRemotePersonalVaultError.remoteVaultNotEmpty(remote.revision)
                 }
@@ -990,7 +1123,7 @@ struct CloudSettingsView: View {
                     credentials: credentials,
                     snippets: TerminalCommandHistoryStore.shared.templates(),
                     forwarding: model.independentPortForwards,
-                    deviceID: resolvedDeviceID()
+                    deviceID: deviceID
                 )
                 let setup = try await Task.detached(priority: .userInitiated) {
                     try SelectiveRemotePersonalVaultCrypto.createSetup(
@@ -999,7 +1132,7 @@ struct CloudSettingsView: View {
                         baseRevision: 0
                     )
                 }.value
-                let result = try await client.putPersonalVault(endpoint: url, envelope: setup.envelope)
+                let result = try await client.putPersonalVault(endpoint: url, envelope: setup.envelope, session: session)
                 guard !result.conflict else {
                     throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
                 }
@@ -1012,7 +1145,7 @@ struct CloudSettingsView: View {
                     documentHash: documentHash,
                     includesCredentials: !credentials.isEmpty
                 )
-                try personalVaultKeyStore.save(material, endpoint: url, deviceID: resolvedDeviceID())
+                try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: personalVaultKeyStore, replacing: expectedMaterial)
                 personalVaultAutoSyncConfigured = true
                 personalVaultRevision = result.revision
                 personalVaultMessage = UpdateLocalization.text(

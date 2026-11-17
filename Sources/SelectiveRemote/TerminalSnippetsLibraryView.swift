@@ -113,6 +113,17 @@ struct TerminalSnippetsLibraryView: View {
         VStack(spacing: 0) {
             header
             if scope == .personal {
+                if store.snippetPersistenceFailed {
+                    Label(
+                        UpdateLocalization.text(
+                            ru: "Не удалось безопасно сохранить сниппеты. Перезапустите приложение для восстановления.",
+                            en: "Could not save snippets safely. Restart the app to recover your data."
+                        ),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.red)
+                    .padding()
+                }
                 if let summary = model.latestSnippetRun {
                     runStatus(summary)
                 }
@@ -492,11 +503,19 @@ struct TerminalSnippetsLibraryView: View {
                     if visibleChildGroups.isEmpty && snippets.isEmpty {
                         VStack(spacing: 14) {
                             ContentUnavailableView(
-                                selectedGroup == nil ? "Сниппетов пока нет" : "Группа пуста",
+                                selectedGroup == nil
+                                    ? UpdateLocalization.text(ru: "Сниппетов пока нет", en: "No snippets yet")
+                                    : UpdateLocalization.text(ru: "Группа пуста", en: "Group is empty"),
                                 systemImage: "folder",
                                 description: Text(selectedGroup.map {
-                                    "Добавьте вложенную группу или первый сниппет в «\($0.name)»."
-                                } ?? "Создайте группу или добавьте первый сниппет.")
+                                    UpdateLocalization.text(
+                                        ru: "Добавьте вложенную группу или первый сниппет в «\($0.name)».",
+                                        en: "Add a subgroup or the first snippet to “\($0.name)”."
+                                    )
+                                } ?? UpdateLocalization.text(
+                                    ru: "Создайте группу или добавьте первый сниппет.",
+                                    en: "Create a group or add your first snippet."
+                                ))
                             )
                             HStack {
                                 Button("Новая группа", systemImage: "folder.badge.plus") {
@@ -1211,16 +1230,16 @@ private struct TerminalSnippetGroupEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(group == nil ? "Новая группа" : "Переименовать группу")
+            Text(group == nil ? UpdateLocalization.text(ru: "Новая группа", en: "New Group") : UpdateLocalization.text(ru: "Переименовать группу", en: "Rename Group"))
                 .font(.title2.bold())
-            TextField("Путь группы", text: $name)
-            Text("Используйте / для вложенности, например Production/Deploy.")
+            TextField(UpdateLocalization.text(ru: "Путь группы", en: "Group Path"), text: $name)
+            Text(UpdateLocalization.text(ru: "Используйте / для вложенности, например Production/Deploy.", en: "Use / for nesting, for example Production/Deploy."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Отмена") { dismiss() }
-                Button("Сохранить") {
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { dismiss() }
+                Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
                     onSave(name)
                     dismiss()
                 }

@@ -10,6 +10,7 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
     case remoteRevisionRollback
     case remoteRevisionDivergence
     case invalidWriteAcknowledgement
+    case localAcknowledgementUnconfirmed
     case invalidWrapperGrantAcknowledgement
     case invalidConflictResponse
     case staleConflict
@@ -56,8 +57,13 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
             )
         case .invalidWriteAcknowledgement, .invalidConflictResponse:
             UpdateLocalization.text(
-                ru: "Cloud не подтвердил безопасную запись в Team Vault. Данные не были перезаписаны.",
-                en: "Cloud did not confirm a safe Team Vault write. No data was overwritten."
+                ru: "Cloud не подтвердил результат записи в Team Vault. Запись могла сохраниться; проверьте состояние Vault перед повтором.",
+                en: "Cloud did not confirm the Team Vault write result. The write may have succeeded; check the Vault before retrying."
+            )
+        case .localAcknowledgementUnconfirmed:
+            UpdateLocalization.text(
+                ru: "Cloud подтвердил запись Team Vault, но Mac не сохранил её подтверждение. Сохраните локальные копии и проверьте текущую ревизию перед повтором.",
+                en: "Cloud confirmed the Team Vault write, but this Mac could not save the acknowledgement. Keep the local copies and check the current revision before retrying."
             )
         case .invalidWrapperGrantAcknowledgement:
             UpdateLocalization.text(
@@ -150,15 +156,36 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
     private let endpoint: URL
     private let remote: any SelectiveRemoteTeamVaultRemote
     private let snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+    private let session: SelectiveRemotePublicationSession?
 
     init(
         endpoint: URL,
         remote: any SelectiveRemoteTeamVaultRemote,
-        snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+        snapshots: any SelectiveRemoteTeamVaultSnapshotStore,
+        session: SelectiveRemotePublicationSession? = nil
     ) throws {
         self.endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
         self.remote = remote
         self.snapshots = snapshots
+        self.session = session
+    }
+
+    private func commit(_ next: SelectiveRemoteTeamVaultSnapshot, replacing expected: SelectiveRemoteTeamVaultSnapshot?) throws {
+        if let session {
+            let authorization = try session.requestAuthorization(endpoint: endpoint)
+            try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: endpoint, expectedEpoch: authorization.epoch) {
+                try session.checkAuthorization()
+                try snapshots.saveIfCurrent(next, endpoint: endpoint, replacing: expected)
+            }
+        } else {
+            try snapshots.saveIfCurrent(next, endpoint: endpoint, replacing: expected)
+        }
+    }
+
+    private func commitAcknowledged(_ next: SelectiveRemoteTeamVaultSnapshot, replacing expected: SelectiveRemoteTeamVaultSnapshot?) throws {
+        do { try commit(next, replacing: expected) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw SelectiveRemoteTeamVaultSyncError.localAcknowledgementUnconfirmed }
     }
 
     private func requireLegacy(teamID: UUID, vaultID: UUID) async throws {
@@ -301,7 +328,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             envelope: envelope,
             wrapper: currentWrapper
         )
-        try snapshots.save(prepared, endpoint: endpoint)
+        try commit(prepared, replacing: nil)
 
         let write = try await remote.putSharedVault(
             endpoint: endpoint,
@@ -337,7 +364,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             envelope: envelope,
             wrapper: currentWrapper
         )
-        try snapshots.save(uploaded, endpoint: endpoint)
+        try commitAcknowledged(uploaded, replacing: prepared)
         return .uploaded(.init(snapshot: uploaded, payload: payload))
     }
 
@@ -428,6 +455,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
 
     func stage(
         _ payload: Data,
+        expected: SelectiveRemoteTeamVaultSnapshot,
         teamID: UUID,
         vaultID: UUID,
         identity: SelectiveRemoteTeamDeviceIdentity
@@ -436,6 +464,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         guard let current = try snapshots.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) else {
             throw SelectiveRemoteTeamVaultSyncError.noLocalSnapshot
         }
+        guard current == expected else { throw SelectiveRemoteTeamVaultSnapshotError.concurrentChange }
         guard current.deviceID == identity.deviceID else {
             throw SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper
         }
@@ -468,7 +497,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             envelope: envelope,
             wrapper: current.wrapper
         )
-        try snapshots.save(staged, endpoint: endpoint)
+        try commit(staged, replacing: current)
         return .init(snapshot: staged, payload: payload)
     }
 
@@ -526,7 +555,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             envelope: local.envelope,
             wrapper: local.wrapper
         )
-        try snapshots.save(uploaded, endpoint: endpoint)
+        try commitAcknowledged(uploaded, replacing: local)
         return .uploaded(.init(snapshot: uploaded, payload: localVersion.payload))
     }
 
@@ -624,7 +653,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             envelope: resolvedEnvelope,
             wrapper: latestRemote.wrapper
         )
-        try snapshots.save(prepared, endpoint: endpoint)
+        try commit(prepared, replacing: current)
         return try await push(teamID: teamID, vaultID: vaultID, identity: identity)
     }
 
@@ -651,7 +680,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             envelope: remoteVersion.envelope,
             wrapper: remoteVersion.wrapper
         )
-        try snapshots.save(accepted, endpoint: endpoint)
+        try commit(accepted, replacing: local)
         return .init(snapshot: accepted, payload: remoteVersion.payload)
     }
 

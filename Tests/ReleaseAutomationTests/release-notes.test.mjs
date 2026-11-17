@@ -11,8 +11,8 @@ test("0.32.0 release page renders both detailed languages", () => {
     cwd: root,
     encoding: "utf8",
   });
-  assert.match(notes, /Selective Remote Cloud впервые входит в публичный релиз/u);
-  assert.match(notes, /Selective Remote Cloud appears in a public release for the first time/u);
+  assert.match(notes, /Кандидат Selective Remote 0\.32 готовит первый публичный выпуск с Cloud/u);
+  assert.match(notes, /The Selective Remote 0\.32 candidate prepares the first public release with Cloud/u);
   assert.match(notes, /Jump Host/u);
   assert.match(notes, /Keychain/u);
   assert.doesNotMatch(notes, /FINAL_DETAILED_RELEASE_NOTES|SHORT_GITHUB_RELEASE_NOTES/u);

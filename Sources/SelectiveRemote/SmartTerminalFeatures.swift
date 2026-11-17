@@ -632,7 +632,7 @@ final class TerminalNamedWorkspaceStore: ObservableObject {
 
     @Published private(set) var workspaces: [NamedTerminalWorkspace]
     private let defaults: UserDefaults
-    private let key = "SelectiveRemote.terminal.namedWorkspaces.v1"
+    private let key = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.namedWorkspaces.v1")!
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

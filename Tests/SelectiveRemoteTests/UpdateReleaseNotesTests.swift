@@ -34,8 +34,8 @@ struct UpdateReleaseNotesTests {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         for (file, expectedTitles) in [
-            ("CHANGELOG.md", ["Selective Remote Cloud", "Personal Vault", "Team Vaults", "Быстрее к нужному Host", "Надёжнее ежедневная работа"]),
-            ("CHANGELOG_EN.md", ["Selective Remote Cloud", "Personal Vault", "Team Vaults", "Find Hosts faster", "More reliable daily work"])
+            ("CHANGELOG.md", ["Selective Remote Cloud", "Personal Vault", "Team Vaults", "Быстрее к нужному Host", "Ежедневная работа"]),
+            ("CHANGELOG_EN.md", ["Selective Remote Cloud", "Personal Vault", "Team Vaults", "Find Hosts faster", "Daily work"])
         ] {
             let markdown = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
             let sections = try UpdateReleaseNotesParser.parseInstalledHistory(markdown, currentVersion: "0.32.0")

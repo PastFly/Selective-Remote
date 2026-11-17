@@ -17,18 +17,47 @@ extension SelectiveRemoteCloudTokenStore {
 struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
     static let legacyService = "local.selectiveremote.cloud.session.v1"
     static let service = legacyService
-    private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
+    private let envelopeStore: SelectiveRemoteCloudSecureEnvelopeStore
+    private let legacyReader: (@Sendable (URL) throws -> String?)?
+    private let legacyRemover: (@Sendable (URL) throws -> Void)?
+
+    init() {
+        envelopeStore = .init()
+        legacyReader = nil
+        legacyRemover = nil
+    }
+
+    init(
+        envelopeStore: SelectiveRemoteCloudSecureEnvelopeStore,
+        legacyReader: @escaping @Sendable (URL) throws -> String?,
+        legacyRemover: @escaping @Sendable (URL) throws -> Void
+    ) {
+        self.envelopeStore = envelopeStore
+        self.legacyReader = legacyReader
+        self.legacyRemover = legacyRemover
+    }
     func publicationAccountBinding(key: String) throws -> Data? { try UnifiedCredentialVault.shared.readProtectedData(namespace: "publication-session-account.v1", key: key) }
     func savePublicationAccountBinding(_ data: Data, key: String) throws { try UnifiedCredentialVault.shared.saveProtectedData(data, namespace: "publication-session-account.v1", key: key) }
 
     func token(for endpoint: URL) throws -> String? {
-        if let token = try envelopeStore.envelope(for: endpoint)?.sessionToken {
+        let existing = try envelopeStore.envelope(for: endpoint)
+        if let token = existing?.sessionToken {
             return token
         }
-        guard let legacy = try legacyToken(for: endpoint) else { return nil }
-        try saveToken(legacy, for: endpoint)
-        try? removeLegacyToken(for: endpoint)
-        return legacy
+        if existing?.legacySessionRetired == true { return nil }
+        var selected: String?
+        var migrated = false
+        try envelopeStore.update(for: endpoint) { envelope in
+            if let current = envelope.sessionToken {
+                selected = current
+            } else if !envelope.legacySessionRetired, let legacy = try legacyToken(for: endpoint) {
+                envelope.sessionToken = legacy
+                selected = legacy
+                migrated = true
+            }
+        }
+        if migrated { try? removeLegacyToken(for: endpoint) }
+        return selected
     }
 
     func saveToken(_ token: String, for endpoint: URL) throws {
@@ -41,11 +70,15 @@ struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
     func removeToken(for endpoint: URL) throws {
         try envelopeStore.update(for: endpoint) {
             $0.sessionToken = nil
+            $0.legacySessionRetired = true
         }
-        try? removeLegacyToken(for: endpoint)
+        // The tombstone protects current versions; old versions do not know
+        // it, so a legacy deletion failure must still be reported to the user.
+        try removeLegacyToken(for: endpoint)
     }
 
     private func legacyToken(for endpoint: URL) throws -> String? {
+        if let legacyReader { return try legacyReader(endpoint) }
         var query = legacyQuery(for: endpoint)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -62,6 +95,7 @@ struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
     }
 
     private func removeLegacyToken(for endpoint: URL) throws {
+        if let legacyRemover { return try legacyRemover(endpoint) }
         let status = SecItemDelete(legacyQuery(for: endpoint) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)

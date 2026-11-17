@@ -1,0 +1,15 @@
+# Required only for the reviewed closed staging publication rollout. The retained
+# controller exports these protected settings after checking their pinned hashes.
+services:
+  cloud:
+    build: !reset null
+    image: ${PUBLICATION_IMAGE_DIGEST:?PUBLICATION_IMAGE_DIGEST is required}
+    pull_policy: never
+    environment:
+      PUBLICATION_FENCE_PATH: /publication-fence/journal
+    volumes: !override
+      - type: bind
+        source: ${PUBLICATION_FENCE_DIRECTORY:?PUBLICATION_FENCE_DIRECTORY is required}
+        target: /publication-fence
+        bind:
+          create_host_path: false

@@ -65,6 +65,12 @@ struct SyncCenterView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if let message = snapshot.issue?.message(english: english) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if snapshot.lifecycle == .unknown {
                 Text(english
                      ? "This Mac has no confirmation of the current sync state. Retry, or open Cloud Settings to check sign-in and Vault access."

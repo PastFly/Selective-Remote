@@ -348,13 +348,16 @@ enum SelectiveRemoteTeamCredentialDocumentMutation {
 final class SelectiveRemoteTeamCredentialMutationService {
     private let remote: any SelectiveRemoteTeamVaultRemote
     private let snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+    private let session: SelectiveRemotePublicationSession?
 
     init(
         remote: any SelectiveRemoteTeamVaultRemote = SelectiveRemoteCloudAPIClient(),
-        snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+        snapshots: any SelectiveRemoteTeamVaultSnapshotStore,
+        session: SelectiveRemotePublicationSession? = nil
     ) {
         self.remote = remote
         self.snapshots = snapshots
+        self.session = session
     }
 
     convenience init() throws {
@@ -372,7 +375,8 @@ final class SelectiveRemoteTeamCredentialMutationService {
         let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
             endpoint: endpoint,
             remote: remote,
-            snapshots: snapshots
+            snapshots: snapshots,
+            session: session
         )
         let refreshed = try await coordinator.refresh(
             teamID: credential.teamID,
@@ -400,6 +404,7 @@ final class SelectiveRemoteTeamCredentialMutationService {
         )
         _ = try await coordinator.stage(
             document.encoded(),
+            expected: snapshot.snapshot,
             teamID: credential.teamID,
             vaultID: credential.vaultID,
             identity: identity
@@ -460,8 +465,19 @@ final class SelectiveRemoteTeamCredentialStore: ObservableObject {
         rebuild(now: now)
     }
 
-    func removeVault(teamID: UUID, vaultID: UUID) {
+    func removeVault(teamID: UUID, vaultID: UUID, expectedSession: SelectiveRemotePublicationSession? = nil) {
+        if let expectedSession, let current = snapshots[scopeKey(teamID: teamID, vaultID: vaultID)]?.publicationSession,
+           !current.sameAuthorization(as: expectedSession) { return }
         snapshots.removeValue(forKey: scopeKey(teamID: teamID, vaultID: vaultID)); rebuild(now: Date())
+    }
+
+    func session(teamID: UUID, vaultID: UUID) -> SelectiveRemotePublicationSession? {
+        snapshots[scopeKey(teamID: teamID, vaultID: vaultID)]?.publicationSession
+    }
+
+    func clearInvalidSessions(endpoint: URL?) {
+        let kept = snapshots.values.filter { $0.hasValidSession(for: endpoint) }
+        if kept.count != snapshots.count { replace(with: Array(kept)) }
     }
 
     func clear() {
@@ -1085,15 +1101,25 @@ struct SelectiveRemoteTeamCredentialsView: View {
     ) {
         guard !isOrganizing else { return }
         isOrganizing = true
+        let pendingDelivery = Result {
+            guard let owner = store.session(teamID: credential.teamID, vaultID: credential.vaultID)
+            else { throw SelectiveRemoteCloudError.authenticationRequired }
+            return try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint, deviceID: resolvedDeviceID(), owner: owner)
+        }
         Task { @MainActor in
             defer { isOrganizing = false }
             do {
-                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let delivery = try pendingDelivery.get()
+                guard let owner = delivery.owner else { throw SelectiveRemoteCloudError.authenticationRequired }
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                let url = delivery.endpoint
                 let identity = try await identityManager.identity(
                     endpoint: url,
-                    deviceID: resolvedDeviceID()
+                    deviceID: delivery.deviceID
                 )
-                let service = try SelectiveRemoteTeamCredentialMutationService()
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                let service = try SelectiveRemoteTeamCredentialMutationService(
+                    remote: SelectiveRemoteCloudAPIClient(boundPublicationSession: owner), snapshots: SelectiveRemoteTeamVaultFileSnapshotStore(), session: owner)
                 let snapshot = try await service.organize(
                     credential,
                     folder: folder,
@@ -1101,16 +1127,19 @@ struct SelectiveRemoteTeamCredentialsView: View {
                     endpoint: url,
                     identity: identity
                 )
-                store.replaceVault(with: snapshot)
-                selectedCredentialID = SelectiveRemoteTeamCredentialMaterializer.scopedID(
-                    teamID: credential.teamID,
-                    vaultID: credential.vaultID,
-                    recordID: credential.recordID
-                )
-                feedback = UpdateLocalization.text(
-                    ru: "Папка и теги синхронизированы",
-                    en: "Folder and tags synchronized"
-                )
+                let boundSnapshot = try delivery.bind(snapshot)
+                try delivery.commit(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID()) {
+                    store.replaceVault(with: boundSnapshot)
+                    selectedCredentialID = SelectiveRemoteTeamCredentialMaterializer.scopedID(
+                        teamID: credential.teamID,
+                        vaultID: credential.vaultID,
+                        recordID: credential.recordID
+                    )
+                    feedback = UpdateLocalization.text(
+                        ru: "Папка и теги синхронизированы",
+                        en: "Folder and tags synchronized"
+                    )
+                }
             } catch {
                 feedback = error.localizedDescription
             }

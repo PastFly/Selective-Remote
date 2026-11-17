@@ -1,9 +1,295 @@
+import CryptoKit
+import Darwin
 import Foundation
 import Testing
 @testable import SelectiveRemote
 
 @Suite("macOS Cloud session and Team crypto foundation")
 struct CloudMacOSFoundationTests {
+    @Test("A background 401 identifies only its own session for UI invalidation")
+    func authenticationLossNoticeIsBoundToOriginalSession() async throws {
+        let endpoint = URL(string: "https://loss-notice-\(UUID()).example.invalid")!
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        store.saveToken(String(repeating: "a", count: 43), for: endpoint)
+        let notices = CloudSessionNoticeSink()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: {}, sessionLost: { await notices.append($0) },
+           publicationStore: { throw CancellationError() })
+        let old = try await client.sessionBinding(endpoint: endpoint)
+        _ = try? await client.currentUser(endpoint: endpoint)
+        let event = try #require(await notices.events.first)
+        #expect(event.matches(old))
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+            store.saveToken(String(repeating: "b", count: 43), for: endpoint)
+        }
+        let next = try await client.sessionBinding(endpoint: endpoint)
+        #expect(!event.matches(next))
+        #expect(await notices.events.count == 1)
+    }
+    @Test("A background authentication failure reports incomplete token cleanup")
+    func backgroundAuthenticationLossReportsCleanupFailure() async throws {
+        let endpoint = URL(string: "https://background-warning-\(UUID()).example.invalid")!
+        let calls = CloudLogoutCallCounter()
+        let store = CloudFailingRemovalTokenStore(value: String(repeating: "t", count: 43))
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: { await calls.record() }, publicationStore: { throw CancellationError() })
+        _ = try? await client.currentUser(endpoint: endpoint) // background caller may discard the error
+        #expect(await calls.value == 1)
+    }
+
+    @Test("A successfully removed expired session does not produce a cleanup warning")
+    func successfulAuthenticationCleanupHasNoWarning() async throws {
+        let endpoint = URL(string: "https://background-clean-\(UUID()).example.invalid")!
+        let calls = CloudLogoutCallCounter()
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        store.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: { await calls.record() }, publicationStore: { throw CancellationError() })
+        _ = try? await client.currentUser(endpoint: endpoint)
+        #expect(await calls.value == 0)
+    }
+
+    @Test("A delayed cleanup warning leaves the new account and its sync state intact", .timeLimit(.minutes(1)))
+    @MainActor
+    func delayedWarningDoesNotResetNewAccount() async throws {
+        let endpoint = URL(string: "https://delayed-warning-\(UUID()).example.invalid")!
+        let store = CloudFailingRemovalTokenStore(value: String(repeating: "a", count: 43))
+        let presentation = SyncPresentationStore()
+        let barrier = CloudLoginResponseBarrier()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: {
+            await barrier.suspendResponse()
+            await MainActor.run { presentation.reportUnconfirmedSessionCleanup() }
+        }, publicationStore: { throw CancellationError() })
+        let pending = Task { _ = try? await client.currentUser(endpoint: endpoint) }
+        guard await barrier.waitForRequest() else { await barrier.resumeResponse(); Issue.record("Timed out waiting for warning"); return }
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+            try store.saveToken(String(repeating: "b", count: 43), for: endpoint)
+        }
+        presentation.setAccount(endpoint: endpoint.absoluteString, deviceID: UUID().uuidString)
+        presentation.recordPersonalSuccess(revision: 9)
+        let newGeneration = presentation.generation
+        await barrier.resumeResponse()
+        await pending.value
+        #expect(try store.token(for: endpoint) == String(repeating: "b", count: 43))
+        #expect(presentation.generation == newGeneration)
+        #expect(presentation.personal.appliedRevision == 9)
+        #expect(presentation.unconfirmedSessionCleanup)
+    }
+
+    @Test("A stale 401 cannot warn for or clear the newer account", .timeLimit(.minutes(1)))
+    func staleUnauthorizedResponseDoesNotWarn() async throws {
+        let endpoint = URL(string: "https://stale-warning-\(UUID()).example.invalid")!
+        let store = CloudFailingRemovalTokenStore(value: String(repeating: "a", count: 43))
+        let barrier = CloudLoginResponseBarrier(), calls = CloudLogoutCallCounter()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            await barrier.suspendResponse()
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: { await calls.record() }, publicationStore: { throw CancellationError() })
+        let pending = Task { try await client.currentUser(endpoint: endpoint) }
+        guard await barrier.waitForRequest() else { await barrier.resumeResponse(); Issue.record("Timed out waiting for request"); return }
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+        try store.saveToken(String(repeating: "b", count: 43), for: endpoint)
+        await barrier.resumeResponse()
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(await calls.value == 0)
+        #expect(try store.token(for: endpoint) == String(repeating: "b", count: 43))
+    }
+
+    @Test("A delayed sign-out never revokes a later account")
+    func delayedBoundLogoutDoesNotRevokeNewAccount() async throws {
+        let endpoint = URL(string: "https://bound-logout-\(UUID()).example.invalid")!
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        let calls = CloudLogoutCallCounter()
+        tokens.saveToken(String(repeating: "a", count: 43), for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            await calls.record()
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+        }, publicationStore: { throw CancellationError() })
+        let old = try await client.sessionBinding(endpoint: endpoint)
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+        tokens.saveToken(String(repeating: "b", count: 43), for: endpoint)
+        await #expect(throws: CancellationError.self) { try await client.logout(endpoint: endpoint, session: old) }
+        #expect(await calls.value == 0)
+        #expect(tokens.token(for: endpoint) == String(repeating: "b", count: 43))
+    }
+
+    @Test("Bound logout still revokes its known session when Keychain cannot be read")
+    func boundLogoutReadFailureStillRevokes() async throws {
+        let endpoint = URL(string: "https://bound-unreadable-\(UUID()).example.invalid")!
+        let token = String(repeating: "a", count: 43), calls = CloudLogoutCallCounter()
+        let store = CloudIntermittentReadTokenStore(value: token)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            await calls.record()
+            #expect(request.url?.path == "/v1/auth/logout")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: {}, publicationStore: { throw CancellationError() })
+        let session = try await client.sessionBinding(endpoint: endpoint)
+        store.setUnreadable(true)
+        await #expect(throws: SelectiveRemoteCloudError.logoutUnconfirmed) {
+            try await client.logout(endpoint: endpoint, session: session)
+        }
+        store.setUnreadable(false)
+        #expect(await calls.value == 1)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+    }
+
+    @Test("A known old token remains quarantined after the next login")
+    func boundLogoutQuarantinesKnownTokenAcrossNextLogin() async throws {
+        let endpoint = URL(string: "https://bound-quarantine-\(UUID()).example.invalid")!
+        let oldToken = String(repeating: "a", count: 43)
+        let store = CloudIntermittentReadTokenStore(value: oldToken)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { _ in
+            throw URLError(.notConnectedToInternet)
+        }, cleanupWarning: {}, publicationStore: { throw CancellationError() })
+        let old = try await client.sessionBinding(endpoint: endpoint)
+        store.setUnreadable(true)
+        _ = try? await client.logout(endpoint: endpoint, session: old)
+        store.setUnreadable(false)
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+            try store.saveToken(String(repeating: "b", count: 43), for: endpoint)
+        }
+        #expect(await client.hasStoredSession(endpoint: endpoint))
+        try store.saveToken(oldToken, for: endpoint) // Simulate an older process restoring its envelope.
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+    }
+
+    @Test("Failed local logout warns before waiting for the network", .timeLimit(.minutes(1)))
+    func logoutWarningDoesNotWaitForNetwork() async throws {
+        let endpoint = URL(string: "https://logout-warning-\(UUID()).example.invalid")!
+        let store = CloudFailingRemovalTokenStore(value: String(repeating: "a", count: 43))
+        let calls = CloudLogoutCallCounter(), barrier = CloudLoginResponseBarrier()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            await barrier.suspendResponse()
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+        }, cleanupWarning: { await calls.record() }, publicationStore: { throw CancellationError() })
+        let pending = Task { try? await client.logout(endpoint: endpoint) }
+        guard await barrier.waitForRequest() else { await barrier.resumeResponse(); Issue.record("Timed out waiting for logout"); return }
+        #expect(await calls.value == 1)
+        await barrier.resumeResponse()
+        await pending.value
+        #expect(await calls.value == 1)
+    }
+
+    @Test("A session-bound Team request never switches to a later account", .timeLimit(.minutes(1)))
+    func boundTeamRequestDoesNotUseNewAccount() async throws {
+        let endpoint = URL(string: "https://bound-team-\(UUID()).example.invalid")!
+        let oldToken = String(repeating: "a", count: 43), newToken = String(repeating: "b", count: 43)
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        tokens.saveToken(oldToken, for: endpoint)
+        let session = SelectiveRemotePublicationSession(endpoint: endpoint, accountID: UUID(), deviceID: UUID(),
+                                                        token: oldToken, tokenStore: tokens)
+        let barrier = CloudLoginResponseBarrier(), calls = CloudLogoutCallCounter()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            await calls.record()
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(oldToken)")
+            await barrier.suspendResponse()
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, boundPublicationSession: session, publicationStore: { throw CancellationError() })
+        let pending = Task { try await client.authorizedResponse(endpoint: endpoint, path: "v1/teams", method: "PUT") }
+        guard await barrier.waitForRequest() else { await barrier.resumeResponse(); Issue.record("Timed out waiting for request"); return }
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+        tokens.saveToken(newToken, for: endpoint)
+        await barrier.resumeResponse()
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        await #expect(throws: CancellationError.self) {
+            try await client.authorizedResponse(endpoint: endpoint, path: "v1/teams", method: "PUT")
+        }
+        #expect(await calls.value == 1)
+    }
+
+    @Test("Logout revokes and quarantines a session when local token removal fails")
+    func failedTokenRemovalStillRevokesAndQuarantines() async throws {
+        let endpoint = URL(string: "https://logout-failure-\(UUID()).example.invalid")!
+        let token = String(repeating: "t", count: 43)
+        let calls = CloudLogoutCallCounter()
+        let tokenStore = CloudFailingRemovalTokenStore(value: token)
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: tokenStore,
+            dataLoader: { request in
+                await calls.record()
+                #expect(request.url?.path == "/v1/auth/logout")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+            },
+            publicationStore: { throw CancellationError() }
+        )
+        do {
+            try await client.logout(endpoint: endpoint)
+            Issue.record("Local token removal failure must be reported")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .logoutUnconfirmed)
+        }
+        #expect(await calls.value == 1)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+        try tokenStore.saveToken(String(repeating: "n", count: 43), for: endpoint)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == true)
+    }
+
+    @Test("Offline logout with a storage failure warns that the old session may survive restart")
+    func offlineLogoutAndStorageFailureAreNotReportedAsSafe() async throws {
+        let endpoint = URL(string: "https://offline-logout-\(UUID()).example.invalid")!
+        let store = CloudFailingRemovalTokenStore(value: String(repeating: "t", count: 43))
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { _ in
+            throw URLError(.notConnectedToInternet)
+        }, publicationStore: { throw CancellationError() })
+        do {
+            try await client.logout(endpoint: endpoint)
+            Issue.record("A failed local and remote logout must not be reported as successful")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .logoutUnconfirmed)
+            #expect(error.localizedDescription.contains("Cloud"))
+        }
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+    }
+
+    @Test("Logout blocks a formerly readable token when credential storage temporarily fails")
+    func logoutReadFailureQuarantinesEndpointUntilNewLogin() async throws {
+        let endpoint = URL(string: "https://logout-read-failure-\(UUID()).example.invalid")!
+        let oldToken = String(repeating: "o", count: 43)
+        let store = CloudIntermittentReadTokenStore(value: oldToken)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { _ in
+            Issue.record("Cannot revoke an unreadable token")
+            throw CancellationError()
+        }, publicationStore: { throw CancellationError() })
+        let priorEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        store.setUnreadable(true)
+        do { try await client.logout(endpoint: endpoint); Issue.record("Logout must fail closed") }
+        catch { #expect(error as? SelectiveRemoteCloudError == .logoutUnconfirmed) }
+        store.setUnreadable(false)
+        #expect(SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) != priorEpoch)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+            try store.saveToken(String(repeating: "n", count: 43), for: endpoint)
+        }
+        #expect(await client.hasStoredSession(endpoint: endpoint) == true)
+    }
+
+    @Test("A 401 with unreadable credential storage quarantines the session and reports incomplete cleanup")
+    func unauthorizedWithUnreadableStorageStillQuarantines() async throws {
+        let endpoint = URL(string: "https://unauthorized-read-failure-\(UUID()).example.invalid")!
+        let store = CloudIntermittentReadTokenStore(value: String(repeating: "t", count: 43))
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            store.setUnreadable(true)
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }, publicationStore: { throw CancellationError() })
+        do { _ = try await client.currentUser(endpoint: endpoint); Issue.record("A 401 must reject the session") }
+        catch { #expect(error as? SelectiveRemoteCloudError == .logoutUnconfirmed) }
+        store.setUnreadable(false)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+        #expect(SyncIssue.classifyPersonal(SelectiveRemoteCloudError.logoutUnconfirmed) == .sessionExpired)
+        #expect(SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(SelectiveRemoteCloudError.logoutUnconfirmed))
+    }
+
     @Test("login keeps the bearer token in the session store and authenticates later requests")
     func authenticatedFoundation() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://authenticated-foundation.example.invalid")
@@ -82,6 +368,67 @@ struct CloudMacOSFoundationTests {
         #expect(await restoredClient.hasStoredSession(endpoint: endpoint))
         #expect(try await restoredClient.currentUser(endpoint: endpoint) == user)
         try await restoredClient.logout(endpoint: endpoint)
+        #expect(store.token(for: endpoint) == nil)
+    }
+
+    @Test("Logout with an empty store rejects a pending successful login response", .timeLimit(.minutes(1)))
+    func logoutBeforeLoginResponseCannotRestoreSession() async throws {
+        let endpoint = URL(string: "https://pending-login-logout.example.invalid")!
+        let deviceID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        let barrier = CloudLoginResponseBarrier()
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in
+                guard request.httpMethod == "POST", request.url?.path == "/v1/auth/login" else {
+                    Issue.record("Empty-session logout must not send an HTTP request")
+                    return Self.response(request, status: 500, json: nil)
+                }
+                await barrier.suspendResponse()
+                return Self.response(request, status: 200, json: [
+                    "token": String(repeating: "p", count: 43),
+                    "user": ["id": "66666666-6666-4666-8666-666666666666", "email": "pending@example.invalid", "username": "pending", "displayName": "Pending", "createdAt": "2026-10-28T00:00:00.000Z"],
+                    "deviceID": deviceID.uuidString.lowercased()
+                ])
+            },
+            publicationStore: { throw CancellationError() }
+        )
+        let pending = Task {
+            try await client.loginWithSession(
+                endpoint: endpoint, email: "pending@example.invalid", password: "synthetic-password",
+                device: .init(id: deviceID, name: "Synthetic Mac", platform: "macos", appVersion: "test", publicKey: nil)
+            )
+        }
+        guard await barrier.waitForRequest() else { await barrier.resumeResponse(); Issue.record("Timed out waiting for login"); return }
+        #expect(store.token(for: endpoint) == nil)
+        do { try await client.logout(endpoint: endpoint) }
+        catch { Issue.record("Empty-session logout should succeed: \(error)") }
+        #expect(store.token(for: endpoint) == nil)
+        await barrier.resumeResponse()
+        switch await pending.result {
+        case .success: Issue.record("A login response started before logout must not restore the session")
+        case let .failure(error): #expect(error is CancellationError)
+        }
+        #expect(store.token(for: endpoint) == nil)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+    }
+
+    @Test("Logout removes an invalid raw token without a network request")
+    func logoutClearsInvalidRawTokenLocally() async throws {
+        let endpoint = URL(string: "https://invalid-token-logout.example.invalid")!
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        store.saveToken("invalid-short-token", for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in
+                Issue.record("Invalid raw token must not be sent to the logout endpoint")
+                return Self.response(request, status: 500, json: nil)
+            },
+            publicationStore: { throw CancellationError() }
+        )
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+        do { try await client.logout(endpoint: endpoint) }
+        catch { Issue.record("Logout must clear invalid local credentials: \(error)") }
         #expect(store.token(for: endpoint) == nil)
     }
 
@@ -524,6 +871,9 @@ struct CloudMacOSFoundationTests {
         let store = SelectiveRemoteCloudMemoryTokenStore()
         store.saveToken(token, for: endpoint)
         let stub = CloudHTTPStub { request in
+            if request.url?.path == "/v1/meta" {
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
             switch (request.httpMethod, request.url?.path) {
             case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/vaults"):
@@ -582,6 +932,10 @@ struct CloudMacOSFoundationTests {
                 ])
             case ("PUT", "/v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)"):
                 #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == "macos:team:vault:synthetic-1")
+                #expect(request.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1")
+                let body = try #require(request.httpBody)
+                let frame = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                #expect(frame["protocol"] as? String == "framed-v1")
                 #expect(request.httpBody.map { String(decoding: $0, as: UTF8.self) }?.contains("schemaVersion") == false)
                 return Self.response(request, status: 409, json: [
                     "conflict": true, "revision": 6, "keyGeneration": 7
@@ -843,6 +1197,7 @@ struct CloudMacOSFoundationTests {
         let editedPayload = Data("synthetic local edit".utf8)
         let staged = try await coordinator.stage(
             editedPayload,
+            expected: initial.snapshot,
             teamID: teamID,
             vaultID: vaultID,
             identity: identity
@@ -867,6 +1222,327 @@ struct CloudMacOSFoundationTests {
         #expect(writes.count == 1)
         #expect(writes.first?.upload.envelope == staged.snapshot.envelope)
         #expect(writes.first?.idempotencyKey.contains(staged.snapshot.envelope.contentHash) == true)
+    }
+
+    @Test("Concurrent Team snapshot writers preserve one complete version", .timeLimit(.minutes(1)))
+    func teamSnapshotCompareAndSwapPreservesNewerVersion() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = URL(string: "https://cas-\(UUID()).example.invalid")!
+        let teamID = try fixture.wrapper.teamID.uuid, vaultID = try fixture.wrapper.vaultID.uuid
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(deviceID: deviceID,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData)
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let remote = TeamVaultRemoteStub(envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: false, revision: 6, keyGeneration: 7, rotationCompleted: false))
+        let firstMemory = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let firstCoordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: firstMemory)
+        guard case let .synchronized(initial) = try await firstCoordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+        else { Issue.record("Expected an initial synthetic snapshot"); return }
+        let editedA = try await firstCoordinator.stage(Data("edit A".utf8), expected: initial.snapshot, teamID: teamID, vaultID: vaultID, identity: identity)
+        let secondMemory = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        try secondMemory.save(initial.snapshot, endpoint: endpoint)
+        let secondCoordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: secondMemory)
+        let editedB = try await secondCoordinator.stage(Data("edit B".utf8), expected: initial.snapshot, teamID: teamID, vaultID: vaultID, identity: identity)
+        let sharedMemory = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        try sharedMemory.save(initial.snapshot, endpoint: endpoint)
+        let sharedCoordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: sharedMemory)
+        let concurrent = try await sharedCoordinator.stage(Data("concurrent edit".utf8), expected: initial.snapshot, teamID: teamID, vaultID: vaultID, identity: identity)
+        // This payload was built from initial, before the concurrent edit.
+        await #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try await sharedCoordinator.stage(Data("stale edit".utf8), expected: initial.snapshot, teamID: teamID, vaultID: vaultID, identity: identity)
+        }
+        #expect(try sharedMemory.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == concurrent.snapshot)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "sr-team-cas-\(UUID())", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeA = try SelectiveRemoteTeamVaultFileSnapshotStore(root: directory)
+        let storeB = try SelectiveRemoteTeamVaultFileSnapshotStore(root: directory)
+        try storeA.save(initial.snapshot, endpoint: endpoint)
+        let successes = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            group.addTask { (try? storeA.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)) != nil }
+            group.addTask { (try? storeB.saveIfCurrent(editedB.snapshot, endpoint: endpoint, replacing: initial.snapshot)) != nil }
+            var values: [Bool] = []
+            for await value in group { values.append(value) }
+            return values
+        }
+        #expect(successes.filter { $0 }.count == 1)
+        let stored = try #require(try storeA.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID))
+        #expect(stored == editedA.snapshot || stored == editedB.snapshot)
+        let endpointID = SHA256.hash(data: Data(endpoint.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+        let lockPath = directory.appending(path: endpointID).appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).v2.json.lock").path
+        let descriptor = Darwin.open(lockPath, O_RDWR | O_CLOEXEC)
+        guard descriptor >= 0 else { Issue.record("Expected a temporary lockfile"); return }
+        defer { Darwin.close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { Issue.record("Could not lock temporary file"); return }
+        defer { flock(descriptor, LOCK_UN) }
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try storeB.saveIfCurrent(initial.snapshot, endpoint: endpoint, replacing: stored)
+        }
+
+        // A 0.31 process does not use the new lock. Its retained file must not
+        // be overwritten, and a later differing legacy edit must stop sync.
+        let oldRoot = directory.appending(path: "legacy-case", directoryHint: .isDirectory)
+        let oldDir = oldRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        let legacyURL = oldDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let legacyBytes = try encoder.encode(initial.snapshot)
+        try legacyBytes.write(to: legacyURL, options: .atomic)
+        let migrated = try SelectiveRemoteTeamVaultFileSnapshotStore(root: oldRoot)
+        #expect(try migrated.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == initial.snapshot)
+        try migrated.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)
+        #expect(try Data(contentsOf: legacyURL) == legacyBytes)
+        try encoder.encode(editedB.snapshot).write(to: legacyURL, options: .atomic)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try migrated.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+
+        // If the old process writes during the new commit, neither version
+        // may overwrite the other and the result must be reported as uncertain.
+        let raceRoot = directory.appending(path: "legacy-race", directoryHint: .isDirectory)
+        let raceDir = raceRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: raceDir, withIntermediateDirectories: true)
+        let raceLegacy = raceDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        try legacyBytes.write(to: raceLegacy, options: .atomic)
+        let changedLegacy = try encoder.encode(editedB.snapshot)
+        let racedStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: raceRoot, beforeCommit: {
+            try changedLegacy.write(to: raceLegacy, options: .atomic)
+        })
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try racedStore.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)
+        }
+        #expect(try Data(contentsOf: raceLegacy) == changedLegacy)
+        let raceVersioned = raceLegacy.deletingPathExtension().appendingPathExtension("v2.json")
+        #expect(FileManager.default.fileExists(atPath: raceVersioned.path))
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try racedStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+
+        // A failed remove must retain the previously dirty new-version copy,
+        // not just the replacement tombstone and the racing legacy copy.
+        let priorRoot = directory.appending(path: "legacy-prior-dirty", directoryHint: .isDirectory)
+        let priorDir = priorRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: priorDir, withIntermediateDirectories: true)
+        let priorLegacy = priorDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        try legacyBytes.write(to: priorLegacy, options: .atomic)
+        let priorStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: priorRoot)
+        try priorStore.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)
+        let priorVersioned = priorLegacy.deletingPathExtension().appendingPathExtension("v2.json")
+        let dirtyBytes = try Data(contentsOf: priorVersioned)
+        let racingRemove = try SelectiveRemoteTeamVaultFileSnapshotStore(root: priorRoot, beforeCommit: {
+            try changedLegacy.write(to: priorLegacy, options: .atomic)
+        })
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try racingRemove.remove(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+        let recoveryCopy = priorVersioned.appendingPathExtension("previous")
+        let keptPrior = FileManager.default.fileExists(atPath: recoveryCopy.path)
+        #expect(keptPrior)
+        if keptPrior { #expect(try Data(contentsOf: recoveryCopy) == dirtyBytes) }
+        #expect(try Data(contentsOf: priorLegacy) == changedLegacy)
+
+        // A temporary read failure during post-check must leave an explicit
+        // pending marker; restoring the old bytes must not silently erase X.
+        let uncertainRoot = directory.appending(path: "uncertain-commit", directoryHint: .isDirectory)
+        let uncertainDir = uncertainRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: uncertainDir, withIntermediateDirectories: true)
+        let uncertainLegacy = uncertainDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        try legacyBytes.write(to: uncertainLegacy, options: .atomic)
+        let uncertainBase = try SelectiveRemoteTeamVaultFileSnapshotStore(root: uncertainRoot)
+        try uncertainBase.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)
+        let uncertainCurrent = uncertainLegacy.deletingPathExtension().appendingPathExtension("v2.json")
+        let uncertainPriorBytes = try Data(contentsOf: uncertainCurrent)
+        let uncertainStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: uncertainRoot, beforeCommit: {
+            try FileManager.default.removeItem(at: uncertainLegacy)
+            guard Darwin.mkfifo(uncertainLegacy.path, 0o600) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        })
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try uncertainStore.remove(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+        try FileManager.default.removeItem(at: uncertainLegacy)
+        try legacyBytes.write(to: uncertainLegacy, options: .atomic)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try uncertainBase.save(initial.snapshot, endpoint: endpoint)
+        }
+        #expect(try Data(contentsOf: uncertainCurrent.appendingPathExtension("previous")) == uncertainPriorBytes)
+
+        // Removing the new copy must not resurrect the retained old copy.
+        let removedRoot = directory.appending(path: "legacy-tombstone", directoryHint: .isDirectory)
+        let removedDir = removedRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: removedDir, withIntermediateDirectories: true)
+        let removedLegacy = removedDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        try legacyBytes.write(to: removedLegacy, options: .atomic)
+        let removedStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: removedRoot)
+        try removedStore.remove(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        #expect(try Data(contentsOf: removedLegacy) == legacyBytes)
+        #expect(try removedStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == nil)
+        try changedLegacy.write(to: removedLegacy, options: .atomic)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try removedStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+
+        // The server may acknowledge a PUT before an old process changes its
+        // copy. Do not claim the write failed or discard either local copy.
+        let ackRoot = directory.appending(path: "legacy-after-put", directoryHint: .isDirectory)
+        let ackDir = ackRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: ackDir, withIntermediateDirectories: true)
+        let ackLegacy = ackDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        try legacyBytes.write(to: ackLegacy, options: .atomic)
+        let ackStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: ackRoot)
+        try ackStore.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)
+        let ackRemote = TeamVaultRemoteStub(envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: false, revision: 6, keyGeneration: 7, rotationCompleted: false),
+            afterWrite: { try changedLegacy.write(to: ackLegacy, options: .atomic) })
+        let ackCoordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: ackRemote, snapshots: ackStore)
+        await #expect(throws: SelectiveRemoteTeamVaultSyncError.localAcknowledgementUnconfirmed) {
+            try await ackCoordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+        }
+        #expect(await ackRemote.recordedWrites().count == 1)
+        #expect(try Data(contentsOf: ackLegacy) == changedLegacy)
+        #expect(FileManager.default.fileExists(atPath: ackLegacy.deletingPathExtension().appendingPathExtension("v2.json").path))
+
+        // A corrupted new file must not silently fall back to the old copy.
+        let corruptRoot = directory.appending(path: "legacy-corrupt", directoryHint: .isDirectory)
+        let corruptDir = corruptRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: corruptDir, withIntermediateDirectories: true)
+        let corruptLegacy = corruptDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        try legacyBytes.write(to: corruptLegacy, options: .atomic)
+        let corruptStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: corruptRoot)
+        try corruptStore.saveIfCurrent(editedA.snapshot, endpoint: endpoint, replacing: initial.snapshot)
+        try Data("not a snapshot".utf8).write(to: corruptLegacy.deletingPathExtension().appendingPathExtension("v2.json"), options: .atomic)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try corruptStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+        #expect(try Data(contentsOf: corruptLegacy) == legacyBytes)
+
+        // An unreadable or replaced file is not equivalent to an absent file.
+        let fifoRoot = directory.appending(path: "legacy-fifo", directoryHint: .isDirectory)
+        let fifoDir = fifoRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: fifoDir, withIntermediateDirectories: true)
+        let fifo = fifoDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).json")
+        guard Darwin.mkfifo(fifo.path, 0o600) == 0 else { Issue.record("Could not create synthetic FIFO"); return }
+        let fifoStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: fifoRoot)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try fifoStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+
+        let lostRoot = directory.appending(path: "missing-current", directoryHint: .isDirectory)
+        let lostStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: lostRoot)
+        try lostStore.save(initial.snapshot, endpoint: endpoint)
+        let lostDir = lostRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        let lostCurrent = lostDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).v2.json")
+        try FileManager.default.removeItem(at: lostCurrent)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.concurrentChange) {
+            try lostStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+
+        // A valid snapshot from another Team at this path must never be
+        // replaced or tombstoned by any write method.
+        let scopeRoot = directory.appending(path: "wrong-scope", directoryHint: .isDirectory)
+        let scopeDir = scopeRoot.appending(path: endpointID, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: scopeDir, withIntermediateDirectories: true)
+        let scopeCurrent = scopeDir.appending(path: "\(teamID.canonicalCloudString)-\(vaultID.canonicalCloudString).v2.json")
+        var foreign = try #require(try JSONSerialization.jsonObject(with: legacyBytes) as? [String: Any])
+        foreign["teamID"] = UUID().uuidString.lowercased()
+        let foreignBytes = try JSONSerialization.data(withJSONObject: ["version": 1, "legacyDigest": NSNull(), "snapshot": foreign], options: [.sortedKeys])
+        try foreignBytes.write(to: scopeCurrent, options: .atomic)
+        let scopeStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: scopeRoot)
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try scopeStore.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try scopeStore.save(initial.snapshot, endpoint: endpoint)
+        }
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try scopeStore.saveIfCurrent(initial.snapshot, endpoint: endpoint, replacing: nil)
+        }
+        #expect(throws: SelectiveRemoteTeamVaultSnapshotError.invalidSnapshot) {
+            try scopeStore.remove(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        }
+        #expect(try Data(contentsOf: scopeCurrent) == foreignBytes)
+
+        // Independent Vaults share an endpoint directory in production.
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let unrelatedRoot = directory.appending(path: "unrelated-vaults")
+        let blocking = try SelectiveRemoteTeamVaultFileSnapshotStore(root: unrelatedRoot, beforeCommit: {
+            entered.signal()
+            guard release.wait(timeout: .now() + 45) == .success else { throw CocoaError(.fileWriteUnknown) }
+        })
+        let otherStore = try SelectiveRemoteTeamVaultFileSnapshotStore(root: unrelatedRoot)
+        let otherVaultID = UUID()
+        let otherKey = try fixture.keyWrap.vaultKey.base64URLData
+        let otherWrapper = try SelectiveRemoteTeamVaultCrypto.wrapVaultKey(otherKey, for: identity.publicKey,
+            context: .init(teamID: teamID, vaultID: otherVaultID, keyGeneration: fixture.payload.keyGeneration,
+                           membershipID: try fixture.wrapper.membershipID.uuid, membershipEpoch: fixture.wrapper.membershipEpoch,
+                           deviceID: deviceID))
+        let otherEnvelope = try SelectiveRemoteTeamVaultCrypto.encryptPayload(Data("other Vault".utf8), vaultKey: otherKey,
+            teamID: teamID, vaultID: otherVaultID, keyGeneration: fixture.payload.keyGeneration, baseRevision: 0)
+        let otherSnapshot = try SelectiveRemoteTeamVaultSnapshot(teamID: teamID, vaultID: otherVaultID, deviceID: deviceID,
+            keyGeneration: fixture.payload.keyGeneration, localRevision: 1, serverRevision: 0, syncedLocalRevision: 0,
+            envelope: otherEnvelope, wrapper: otherWrapper)
+        let pending = Task {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do { try blocking.save(initial.snapshot, endpoint: endpoint); continuation.resume() }
+                    catch { continuation.resume(throwing: error) }
+                }
+            }
+        }
+        let reached = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(returning: entered.wait(timeout: .now() + 45) == .success) }
+        }
+        guard reached else {
+            release.signal()
+            _ = await pending.result
+            Issue.record("The synthetic writer did not start")
+            return
+        }
+        do { try otherStore.save(otherSnapshot, endpoint: endpoint) }
+        catch {
+            release.signal()
+            _ = await pending.result
+            throw error
+        }
+        release.signal()
+        try await pending.value
+        #expect(try otherStore.load(endpoint: endpoint, teamID: teamID, vaultID: otherVaultID) == otherSnapshot)
+    }
+
+    @Test("A delayed Team stage cannot overwrite a new account's local edit", .timeLimit(.minutes(1)))
+    func delayedTeamStageCannotOverwriteNewAccount() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = URL(string: "https://stage-race-\(UUID()).example.invalid")!
+        let teamID = try fixture.wrapper.teamID.uuid, vaultID = try fixture.wrapper.vaultID.uuid
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(deviceID: deviceID,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData)
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let remote = TeamVaultRemoteStub(envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: false, revision: 6, keyGeneration: 7, rotationCompleted: false))
+        let store = ControlledTeamSnapshotStore(), tokens = SelectiveRemoteCloudMemoryTokenStore()
+        let original = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: store)
+        _ = try await original.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+        let oldToken = String(repeating: "a", count: 43), newToken = String(repeating: "b", count: 43)
+        tokens.saveToken(oldToken, for: endpoint)
+        let oldSession = SelectiveRemotePublicationSession(endpoint: endpoint, accountID: UUID(), deviceID: deviceID,
+                                                            token: oldToken, tokenStore: tokens)
+        let oldCoordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: store, session: oldSession)
+        let expected = try #require(try store.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID))
+        let candidateStore = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        try candidateStore.save(expected, endpoint: endpoint)
+        let next = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: candidateStore)
+        let newer = try await next.stage(Data("new edit".utf8), expected: expected, teamID: teamID, vaultID: vaultID, identity: identity)
+        // Inject the account transition after the old read but before its
+        // commit, without blocking a cooperative executor thread.
+        store.afterNextLoad {
+            SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+            tokens.saveToken(newToken, for: endpoint)
+            try store.saveIfCurrent(newer.snapshot, endpoint: endpoint, replacing: expected)
+        }
+        await #expect(throws: CancellationError.self) {
+            try await oldCoordinator.stage(Data("old edit".utf8), expected: expected, teamID: teamID, vaultID: vaultID, identity: identity)
+        }
+        #expect(try store.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == newer.snapshot)
     }
 
     @Test("Team Vault coordinator initializes encrypted host data for the approved device set")
@@ -935,6 +1611,55 @@ struct CloudMacOSFoundationTests {
         ) == payload)
     }
 
+    @Test("A temporary Team write stop preserves the dirty local snapshot")
+    func temporaryTeamWriteStopPreservesSnapshot() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = URL(string: "https://cutover-\(UUID()).example.invalid")!
+        let teamID = try fixture.wrapper.teamID.uuid, vaultID = try fixture.wrapper.vaultID.uuid
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID, privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let team = SelectiveRemoteCloudTeam(id: teamID, name: "Test", membershipID: try fixture.wrapper.membershipID.uuid,
+            role: .owner, membershipEpoch: fixture.wrapper.membershipEpoch,
+            createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z")
+        let vault = SelectiveRemoteCloudSharedVault(id: vaultID, teamID: teamID, name: "Test",
+            revision: fixture.payload.baseRevision + 1, keyGeneration: fixture.wrapper.keyGeneration,
+            rotationRequired: false, createdAt: "2026-09-09T00:00:00.000Z", updatedAt: "2026-09-09T00:00:00.000Z")
+        let remote = TeamVaultRemoteStub(envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: false, revision: 6, keyGeneration: 7, rotationCompleted: false),
+            teams: [team], vaults: [vault], keyDevices: [.init(
+                membershipID: try fixture.wrapper.membershipID.uuid, membershipEpoch: fixture.wrapper.membershipEpoch,
+                deviceID: deviceID, publicKeyAlgorithm: "p256-ecdh-v1", publicKey: identity.publicKey, hasWrapper: true)])
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(endpoint: endpoint, remote: remote, snapshots: storage)
+        _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+        let staged = try await coordinator.stage(Data("TEST-ONLY-CODEX-LOCAL".utf8),
+            expected: try #require(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)),
+            teamID: teamID, vaultID: vaultID, identity: identity)
+        await remote.setWriteFailure(.temporaryWriteStop)
+        do {
+            _ = try await coordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+            Issue.record("A stopped Team write must not be acknowledged")
+        } catch {
+            #expect(error as? SelectiveRemoteCloudError == .serviceError(503, "vault_write_temporarily_unavailable"))
+        }
+        #expect(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == staged.snapshot)
+        #expect(staged.snapshot.localRevision > staged.snapshot.syncedLocalRevision)
+        let keyStore = SelectiveRemoteTeamDeviceMemoryKeyStore()
+        _ = try keyStore.savePrivateKeyIfAbsent(try fixture.keyWrap.recipientPrivateScalar.base64URLData,
+            for: endpoint, deviceID: deviceID)
+        let autoSync = SelectiveRemoteTeamVaultAutoSync(remote: remote,
+            identityManager: SelectiveRemoteTeamDeviceIdentityManager(store: keyStore),
+            snapshotStore: { storage }, snapshotConsumer: { _ in })
+        let report = try await autoSync.synchronizeOnce(endpoint: endpoint, deviceID: deviceID)
+        #expect(report.failures == 1)
+        #expect(report.writeTemporarilyUnavailable)
+        #expect(report.uploadedVaults == 0)
+        #expect(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == staged.snapshot)
+    }
+
     @Test("Team Vault coordinator preserves the dirty snapshot and both conflict versions")
     func teamVaultSyncConflict() async throws {
         let fixture = try Self.fixture()
@@ -962,6 +1687,7 @@ struct CloudMacOSFoundationTests {
         let localPayload = Data("synthetic local conflict".utf8)
         let staged = try await coordinator.stage(
             localPayload,
+            expected: try #require(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)),
             teamID: teamID,
             vaultID: vaultID,
             identity: identity
@@ -1122,6 +1848,7 @@ struct CloudMacOSFoundationTests {
         _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
         _ = try await coordinator.stage(
             Data("synthetic original local conflict".utf8),
+            expected: try #require(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)),
             teamID: teamID,
             vaultID: vaultID,
             identity: identity
@@ -1174,6 +1901,7 @@ struct CloudMacOSFoundationTests {
         let racingPayload = Data("synthetic racing local edit".utf8)
         let racing = try await coordinator.stage(
             racingPayload,
+            expected: try #require(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)),
             teamID: teamID,
             vaultID: vaultID,
             identity: identity
@@ -1233,6 +1961,7 @@ struct CloudMacOSFoundationTests {
         let remoteDocument = try SelectiveRemoteVaultDocument(records: [remoteRecord])
         _ = try await coordinator.stage(
             localDocument.encoded(),
+            expected: try #require(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)),
             teamID: teamID,
             vaultID: vaultID,
             identity: identity
@@ -1663,6 +2392,7 @@ private final class CloudHTTPStub: @unchecked Sendable {
 
 private enum TeamVaultRemoteStubFailure: Error, Equatable, Sendable {
     case unknownOutcome
+    case temporaryWriteStop
 }
 
 private actor TeamVaultReadBarrier {
@@ -1709,19 +2439,22 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultAutoSyncRemote {
     private var teamValues: [SelectiveRemoteCloudTeam]
     private var vaultValues: [SelectiveRemoteCloudSharedVault]
     private var keyDeviceValues: [SelectiveRemoteCloudTeamKeyDevice]
+    private let afterWrite: @Sendable () throws -> Void
 
     init(
         envelope: SelectiveRemoteCloudSharedVaultEnvelope,
         writeResult: SelectiveRemoteCloudTeamVaultWriteResult,
         teams: [SelectiveRemoteCloudTeam] = [],
         vaults: [SelectiveRemoteCloudSharedVault] = [],
-        keyDevices: [SelectiveRemoteCloudTeamKeyDevice] = []
+        keyDevices: [SelectiveRemoteCloudTeamKeyDevice] = [],
+        afterWrite: @escaping @Sendable () throws -> Void = {}
     ) {
         self.envelope = envelope
         self.writeResult = writeResult
         teamValues = teams
         vaultValues = vaults
         keyDeviceValues = keyDevices
+        self.afterWrite = afterWrite
     }
 
     func hasStoredSession(endpoint _: URL) async -> Bool {
@@ -1798,8 +2531,12 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultAutoSyncRemote {
         #expect(envelope.id == vaultID)
         writes.append(.init(upload: upload, idempotencyKey: idempotencyKey))
         if let writeFailure {
+            if writeFailure == .temporaryWriteStop {
+                throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+            }
             throw writeFailure
         }
+        try afterWrite()
         return writeResult
     }
 
@@ -1953,5 +2690,105 @@ struct CloudSecureEnvelopeModelTests {
         )
         #expect(decoded.sessionToken == "token")
         #expect(decoded.personalVaultKeyMaterials.isEmpty)
+    }
+}
+
+// Two explicit continuation handshakes: request entered and response released.
+// No sleeps, polling, real HTTP, token-store callbacks, or Keychain.
+private actor CloudLoginResponseBarrier {
+    private var entered = false
+    private var released = false
+    private var enteredWaiter: CheckedContinuation<Bool, Never>?
+    private var responseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspendResponse() async {
+        entered = true
+        enteredWaiter?.resume(returning: true)
+        enteredWaiter = nil
+        if released { return }
+        await withCheckedContinuation { continuation in
+            responseWaiter = continuation
+            Task {
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                if responseWaiter != nil {
+                    Issue.record("Timed out waiting to release response")
+                    resumeResponse()
+                }
+            }
+        }
+    }
+    func waitForRequest() async -> Bool {
+        if entered { return true }
+        return await withCheckedContinuation { continuation in
+            enteredWaiter = continuation
+            Task {
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                enteredWaiter?.resume(returning: false)
+                enteredWaiter = nil
+            }
+        }
+    }
+    func resumeResponse() {
+        released = true
+        responseWaiter?.resume()
+        responseWaiter = nil
+    }
+}
+
+private actor CloudLogoutCallCounter {
+    private(set) var value = 0
+    func record() { value += 1 }
+}
+
+private actor CloudSessionNoticeSink {
+    private(set) var events: [SelectiveRemoteCloudSessionLoss] = []
+    func append(_ event: SelectiveRemoteCloudSessionLoss) { events.append(event) }
+}
+
+private final class CloudFailingRemovalTokenStore: SelectiveRemoteCloudTokenStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String
+    init(value: String) { self.value = value }
+    func token(for endpoint: URL) throws -> String? { lock.withLock { value } }
+    func saveToken(_ token: String, for endpoint: URL) throws { lock.withLock { value = token } }
+    func removeToken(for endpoint: URL) throws { throw CocoaError(.fileWriteNoPermission) }
+}
+
+private final class CloudIntermittentReadTokenStore: SelectiveRemoteCloudTokenStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+    private var unreadable = false
+    init(value: String) { self.value = value }
+    func setUnreadable(_ value: Bool) { lock.withLock { unreadable = value } }
+    func token(for endpoint: URL) throws -> String? {
+        try lock.withLock {
+            if unreadable { throw CocoaError(.fileReadNoPermission) }
+            return value
+        }
+    }
+    func saveToken(_ token: String, for endpoint: URL) throws { lock.withLock { value = token } }
+    func removeToken(for endpoint: URL) throws { lock.withLock { value = nil } }
+}
+
+private final class ControlledTeamSnapshotStore: SelectiveRemoteTeamVaultSnapshotStore, @unchecked Sendable {
+    private let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+    private let lock = NSLock()
+    private var nextLoadHook: (@Sendable () throws -> Void)?
+    func afterNextLoad(_ hook: @escaping @Sendable () throws -> Void) { lock.withLock { nextLoadHook = hook } }
+    func load(endpoint: URL, teamID: UUID, vaultID: UUID) throws -> SelectiveRemoteTeamVaultSnapshot? {
+        let value = try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        let hook = lock.withLock { let previous = nextLoadHook; nextLoadHook = nil; return previous }
+        try hook?()
+        return value
+    }
+    func save(_ snapshot: SelectiveRemoteTeamVaultSnapshot, endpoint: URL) throws {
+        try storage.save(snapshot, endpoint: endpoint)
+    }
+    func saveIfCurrent(_ snapshot: SelectiveRemoteTeamVaultSnapshot, endpoint: URL,
+                       replacing expected: SelectiveRemoteTeamVaultSnapshot?) throws {
+        try storage.saveIfCurrent(snapshot, endpoint: endpoint, replacing: expected)
+    }
+    func remove(endpoint: URL, teamID: UUID, vaultID: UUID) throws {
+        try storage.remove(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
     }
 }

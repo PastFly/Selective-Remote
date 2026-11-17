@@ -1,3 +1,5 @@
+import { openVaultStorage } from "./vault-storage.js";
+
 export const teamVaultEnvelopeVersion = 1;
 export const teamVaultWrapperVersion = 1;
 export const teamDevicePublicKeyAlgorithm = "p256-ecdh-v1";
@@ -5,7 +7,6 @@ export const teamDevicePublicKeyAlgorithm = "p256-ecdh-v1";
 const wrapperContextLabel = "selective-remote/team-vault-wrapper/v1";
 const wrapperKeyInfo = new TextEncoder().encode("selective-remote/team-vault-wrapper-key/v1");
 const payloadContextLabel = "selective-remote/team-vault-payload/v1";
-const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
 const identityKeyPrefix = "team-device-key:";
 const pendingRekeyPrefix = "team-device-rekey:";
@@ -499,16 +500,7 @@ export async function decryptTeamVaultPayload({
 }
 
 function openDatabase(indexedDBValue) {
-  if (!indexedDBValue?.open) return Promise.reject(new Error("team_device_storage_unavailable"));
-  return new Promise((resolve, reject) => {
-    const request = indexedDBValue.open(databaseName, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(storeName)) request.result.createObjectStore(storeName);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("team_device_storage_unavailable"));
-    request.onblocked = () => reject(new Error("team_device_storage_unavailable"));
-  });
+  return openVaultStorage(indexedDBValue, "team_device_storage_unavailable");
 }
 
 async function transaction(indexedDBValue, mode, operation) {

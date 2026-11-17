@@ -46,6 +46,120 @@ func encryptedBackupManifestRoundTrip() throws {
     #expect((try? JSONSerialization.jsonObject(with: bytes)) == nil)
 }
 
+@Test("Restoring an older backup preserves the legacy profiles and restores only the new namespace")
+func backupRestorePreservesLegacyProfileStore() throws {
+    let suite = "SelectiveRemote.BackupIsolation.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SR-Backup-Isolation-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let oldKey = "SelectiveRemote.connectionProfiles.v2"
+    let newKey = try #require(NativeStorageMigration.newKey(for: oldKey))
+    var initial = ConnectionProfile()
+    initial.friendlyName = "TEST-ONLY-BEFORE"
+    let initialData = try JSONEncoder().encode([initial])
+    defaults.set(initialData, forKey: oldKey)
+    let service = SelectiveRemoteBackupService(defaults: defaults, exportCredentials: { [:] },
+        replaceCredentials: { _ in }, supportOverride: directory, requireRestoreQuiescence: {}, migrateCredentials: {})
+    let archive = directory.appendingPathComponent("fixture.srbackup")
+    let options = SelectiveRemoteBackupOptions(includeCredentials: false, includePrivateKeys: false,
+        includeSessionLogs: false, includeConnectionActivity: false)
+    _ = try service.exportArchive(to: archive, password: "test-only-password", options: options)
+    try NativeStorageMigration.prepare(defaults)
+    var legacyEdit = initial
+    legacyEdit.friendlyName = "TEST-ONLY-LEGACY-EDIT"
+    let legacyData = try JSONEncoder().encode([legacyEdit])
+    defaults.set(legacyData, forKey: oldKey)
+    var newEdit = initial
+    newEdit.friendlyName = "TEST-ONLY-NEW-EDIT"
+    defaults.set(try JSONEncoder().encode([newEdit]), forKey: newKey)
+    let result = try service.restoreArchive(at: archive, password: "test-only-password")
+    #expect(defaults.data(forKey: oldKey) == legacyData)
+    #expect(defaults.data(forKey: newKey) == initialData)
+    #expect(FileManager.default.fileExists(atPath: result.rollbackURL.path))
+    try NativeStorageMigration.prepare(defaults)
+    #expect(defaults.data(forKey: newKey) == initialData)
+}
+
+@Test("A backup with incompatible shared settings fails before changing any data")
+func backupRestoreRejectsSharedSettingsBeforeMutation() throws {
+    let suite = "SelectiveRemote.BackupPreflight.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SR-Backup-Preflight-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let oldKey = "SelectiveRemote.connectionProfiles.v2"
+    var profile = ConnectionProfile()
+    profile.friendlyName = "TEST-ONLY-RETAIN"
+    let oldData = try JSONEncoder().encode([profile])
+    defaults.set(oldData, forKey: oldKey)
+    defaults.set("old", forKey: "SelectiveRemote.fixture.shared")
+    let service = SelectiveRemoteBackupService(defaults: defaults, exportCredentials: { [:] },
+        replaceCredentials: { _ in Issue.record("Preflight must not replace credentials") },
+        supportOverride: directory, requireRestoreQuiescence: {}, migrateCredentials: {})
+    let archive = directory.appendingPathComponent("fixture.srbackup")
+    let options = SelectiveRemoteBackupOptions(includeCredentials: false, includePrivateKeys: false,
+        includeSessionLogs: false, includeConnectionActivity: false)
+    _ = try service.exportArchive(to: archive, password: "test-only-password", options: options)
+    try NativeStorageMigration.prepare(defaults)
+    defaults.set("new", forKey: "SelectiveRemote.fixture.shared")
+    let newKey = try #require(NativeStorageMigration.newKey(for: oldKey))
+    let before = defaults.data(forKey: newKey)
+    #expect(throws: SelectiveRemoteBackupError.unsafeSharedRestore) {
+        try service.restoreArchive(at: archive, password: "test-only-password")
+    }
+    #expect(defaults.string(forKey: "SelectiveRemote.fixture.shared") == "new")
+    #expect(defaults.data(forKey: oldKey) == oldData)
+    #expect(defaults.data(forKey: newKey) == before)
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("Backups").path))
+}
+
+@Test("Credential backup restore fails closed before changing either Keychain or defaults")
+func backupRestoreRejectsCredentialMutationUntilAtomicRecovery() throws {
+    let suite = "SelectiveRemote.BackupCredentialPreflight.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SR-Backup-Credential-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var replaced = false
+    let service = SelectiveRemoteBackupService(defaults: defaults,
+        exportCredentials: { ["test-only": "synthetic"] }, replaceCredentials: { _ in replaced = true },
+        supportOverride: directory, requireRestoreQuiescence: {}, migrateCredentials: {})
+    let archive = directory.appendingPathComponent("credential.srbackup")
+    let options = SelectiveRemoteBackupOptions(includeCredentials: true, includePrivateKeys: false,
+        includeSessionLogs: false, includeConnectionActivity: false)
+    _ = try service.exportArchive(to: archive, password: "test-only-password", options: options)
+    #expect(throws: SelectiveRemoteBackupError.unsafeSharedRestore) {
+        try service.restoreArchive(at: archive, password: "test-only-password")
+    }
+    #expect(!replaced)
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("Backups").path))
+}
+
+@Test("Production restore is disabled until application writes are quiesced")
+func backupRestoreRequiresProductionQuiescence() throws {
+    let suite = "SelectiveRemote.BackupQuiescence.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SR-Backup-Quiescence-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let service = SelectiveRemoteBackupService(defaults: defaults, exportCredentials: { [:] },
+        replaceCredentials: { _ in Issue.record("Disabled restore must not write credentials") },
+        supportOverride: directory, migrateCredentials: {})
+    let archive = directory.appendingPathComponent("fixture.srbackup")
+    let options = SelectiveRemoteBackupOptions(includeCredentials: false, includePrivateKeys: false,
+        includeSessionLogs: false, includeConnectionActivity: false)
+    _ = try service.exportArchive(to: archive, password: "test-only-password", options: options)
+    #expect(throws: SelectiveRemoteBackupError.restoreTemporarilyUnavailable) {
+        try service.restoreArchive(at: archive, password: "test-only-password")
+    }
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("Backups").path))
+}
+
 @Test("Encrypted backup rejects a wrong password and short passwords")
 func encryptedBackupRejectsInvalidPasswords() throws {
     let suiteName = "SelectiveRemote.BackupTests.\(UUID().uuidString)"

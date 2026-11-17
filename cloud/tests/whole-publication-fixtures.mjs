@@ -73,8 +73,9 @@ export async function uploadWholeFixture(s,f,preview,out){
   return s.validate(f.input,out.request.operationID,out.generations.map(g=>({vaultID:g.vaultID,manifest:g.manifest})));
 }
 
-export async function seedPublishedTeam(pool,count=2){
-  const first=await seedPublishedVault(pool),vaults=[first];
+export async function seedPublishedTeam(pool,count=2,config={}){
+  const initial=await seedMigration(pool);initial.config={...initial.config,...config};
+  const first=await seedPublishedVault(pool,{base:initial}),vaults=[first];
   for(let i=1;i<count;i++){
     const vaultID=uuid(),attemptID=uuid();
     await pool.query("INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,envelope_version,ciphertext,nonce,auth_tag,content_hash,updated_by_device_id) VALUES($1,$2,$6,$3,1,1,'LEGACY_ENCRYPTED_DATA','AAAAAAAAAAAAAAAA','AAAAAAAAAAAAAAAAAAAAAA',$4,$5)",[vaultID,first.input.teamID,first.accountID,'A'.repeat(43),first.deviceID,'synthetic additional '+i]);

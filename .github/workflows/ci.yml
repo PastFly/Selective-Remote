@@ -36,7 +36,12 @@ jobs:
   cloud-postgres:
     name: Team storage on PostgreSQL 16
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --dns-result-order=ipv4first
+      SR_TEST_ANCHOR_DATABASE_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
+      SR_TEST_ANCHOR_TLS_URL: postgresql://sranchor:integration-only-anchor@localhost:55432/postgres
+    # The 1,000-resource migration and publication benchmarks can take 20 minutes.
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
@@ -54,6 +59,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # The in-flight transition regression runs the exact prior server
+          # from git, without fetching executable code during the test.
+          fetch-depth: 0
 
       - name: Select Node 22
         uses: actions/setup-node@v6
@@ -66,32 +75,92 @@ jobs:
         working-directory: cloud
         run: npm ci
 
+      - name: Test separately running TLS fence anchor
+        working-directory: cloud
+        env:
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/fence-anchor-test"
+          mkdir -m 755 "$certdir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout "$certdir/server.key" -out "$certdir/server.crt" >/dev/null 2>&1
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          uid=$(docker run --rm --entrypoint id "$image" -u postgres)
+          chmod 600 "$certdir/server.key"
+          sudo chown "$uid" "$certdir/server.key"
+          docker run -d --name sr-test-fence-anchor -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=sranchor -e POSTGRES_PASSWORD=integration-only-anchor -e POSTGRES_DB=postgres \
+            -v "$certdir:/certs:ro" "$image" -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key >/dev/null
+          for attempt in {1..30}; do
+            if docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d postgres >/dev/null
+          node --test --test-concurrency=1 \
+            tests/v1-anchor-required.test.mjs tests/fence-anchor-config.test.mjs tests/v1-independent-anchor-postgres.test.mjs tests/v1-independent-anchor-tls.test.mjs \
+            tests/migration-fence-anchored-compact.test.mjs tests/migration-fence-retention.test.mjs tests/migration-fence-retention-bounds.test.mjs
+
+      - name: Test mobile Cloud status layout
+        working-directory: cloud
+        run: |
+          browser="$(command -v google-chrome || command -v chromium || true)"
+          test -n "$browser" || { echo "Chrome or Chromium is required"; exit 1; }
+          PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
+            node --test tests/workspace-mobile-sync-status-browser.test.mjs tests/public-mobile-locale-browser.test.mjs
+
       - name: Apply migrations and test Team and device-trust storage
         working-directory: cloud
         env:
           TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
         run: |
+          pg_dump --version
+          pg_restore --version
+          node --test tests/staging-installer-archive-stream.test.mjs
+          sudo "$(command -v node)" --test tests/staging-installer-runtime-owner.test.mjs
           node --test tests/team-postgres-integration.test.mjs
+          node --test tests/account-switch-login-postgres.test.mjs
+          node --test tests/login-reset-race.test.mjs
+          node --test tests/browser-session-binding-postgres.test.mjs
+          node --test tests/legacy-write-preservation-p0.test.mjs
+          node --test tests/legacy-write-preservation-prior-server-p0.test.mjs
+          node --test tests/v1-cutover-stop-http.test.mjs
+          node --test tests/v1-team-revocation-rollback-p0.test.mjs tests/v1-session-rollback-p0.test.mjs
+          node --test --test-concurrency=1 tests/v1-startup-fence-required.test.mjs tests/v1-team-lost-commit.test.mjs
+          node --test --test-concurrency=1 tests/v1-empty-create-p0.test.mjs tests/v1-empty-create-http.test.mjs tests/v1-registration-fence-http.test.mjs
+          node --test --test-concurrency=1 tests/v1-wrapper-journal-p0.test.mjs tests/v1-wrapper-capacity-p0.test.mjs
+          node --test tests/v1-commit-fence-postgres.test.mjs
           node --test tests/device-trust-postgres.test.mjs
+          node --test tests/device-revoke-publication-postgres.test.mjs
+          node --test tests/active-publication-inspection.test.mjs
           node --test tests/groups-grants-postgres.test.mjs
           node --test tests/access-scale-postgres.test.mjs
           node --test tests/access-surface-postgres.test.mjs
           node --test tests/vault-v2-migration-postgres.test.mjs
+          node --test tests/migration-compatibility-postgres.test.mjs
+          node --test --test-concurrency=1 tests/publication-fence-postgres.test.mjs tests/non-test-vault-snapshot-postgres.test.mjs tests/staging-controller-fence.test.mjs tests/staging-migration-command-postgres.test.mjs tests/staging-activation-failure-postgres.test.mjs tests/staging-vault-inventory.test.mjs tests/staging-operator-provisioning-postgres.test.mjs tests/postgres-pool-teardown.test.mjs
           node --test tests/vault-publication-identities-postgres.test.mjs
           node --test tests/vault-publication-store.test.mjs
           node --test --test-concurrency=1 tests/whole-publication-schema-postgres.test.mjs tests/whole-publication-preview-postgres.test.mjs tests/whole-publication-preparation-postgres.test.mjs tests/whole-publication-commit-postgres.test.mjs tests/whole-publication-concurrency-postgres.test.mjs tests/whole-publication-cancellation-postgres.test.mjs tests/whole-publication-delta-postgres.test.mjs tests/whole-publication-http.test.mjs tests/whole-publication-browser-postgres.test.mjs
           WHOLE_PUBLICATION_BENCHMARK=1 WHOLE_PUBLICATION_BENCHMARK_SCENARIOS=resources100,resources1000 node scripts/whole-publication-benchmark.mjs
           node scripts/benchmark-vault-v2-migration.mjs 100 1000
 
+      - name: Remove disposable anchor
+        if: always()
+        run: docker rm -f sr-test-fence-anchor >/dev/null 2>&1 || true
+
   test:
     name: Swift tests on macOS
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Environment
         run: |
@@ -122,6 +191,25 @@ jobs:
       - name: Test
         run: swift test
 
+      - name: Test isolated Keychain writer regressions
+        run: |
+          python3 Tests/IntegrityFixtures/UnifiedVault/run.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/legacy_matrix.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/parallel.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/crash_lock.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/envelope_parallel.py
+          SR_TEST_LOGOUT=1 python3 Tests/IntegrityFixtures/UnifiedVault/envelope_parallel.py
+          python3 Tests/IntegrityFixtures/UnifiedVault/logout.py
+          python3 Tests/IntegrityFixtures/NativeLease/run.py
+          python3 Tests/IntegrityFixtures/NativeStorageMigration/run.py
+          python3 Tests/IntegrityFixtures/NativeCollections/run.py
+          python3 Tests/IntegrityFixtures/SSHKeyRemoval/run.py
+          python3 Tests/IntegrityFixtures/SSHCARecords/run.py
+          python3 Tests/IntegrityFixtures/KeychainRepair/run.py
+
+      - name: Test native host evidence validation
+        run: python3 -m unittest discover -s scripts/tests -p 'test_staging_native_gui_host.py' -v
+
       - name: Test terminal web interactions
         run: node --test Tests/TerminalResourcesTests/*.test.js
 
@@ -136,7 +224,7 @@ jobs:
 
   release-build:
     name: Release build on macOS
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer

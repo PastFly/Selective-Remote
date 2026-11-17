@@ -125,6 +125,7 @@ const operationStatuses = Object.freeze({
 
 export function publicOperationError(error) {
   const code = error?.message;
+  if (code === 'v1_writer_fence_missing') return { status: 503, code: 'vault_write_fence_unavailable' };
   const status = operationStatuses[code];
   return status ? { status, code } : null;
 }

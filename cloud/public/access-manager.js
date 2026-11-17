@@ -228,16 +228,16 @@ export function createAccessManager({
     else if (key === "groupMembers" && group)
       result = await client.listGroupMembers(s.teamID, group.id, options);
     else if (key === "principalResources" && principal)
-      result = await client.resourcesByPrincipal(
+      result = await (wholeDriver?.enabled?wholeDriver:client).resourcesByPrincipal(
         s,
         principal.kind,
         principal.id,
         options,
       );
     else if (key === "who" && resource)
-      result = await client.whoHas(s, resource.id, options);
+      result = await (wholeDriver?.enabled?wholeDriver:client).whoHas(s, resource.id, options);
     else if (key === "devices" && principal?.kind === "USER")
-      result = await client.listDevices(s, principal.id, options);
+      result = await (wholeDriver?.enabled?wholeDriver:client).listDevices(s, principal.id, options);
     if (active(g) && seq === p.sequence && result) {
       p.rows = result.rows;
       p.nextCursor = result.nextCursor;
@@ -826,7 +826,7 @@ export function createAccessManager({
               const g = generation,
                 principalID = selectedPrincipal.id,
                 deviceID = selectedDevice;
-              const result = await client.effective(
+              const result = await (wholeDriver?.enabled?wholeDriver:client).effective(
                 { ...scope },
                 r.resourceID,
                 principalID,

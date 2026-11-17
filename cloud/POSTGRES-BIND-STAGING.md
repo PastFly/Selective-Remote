@@ -32,31 +32,41 @@ unpublished, and the existing image/security/backup gates still apply.
 4. Run `validate-postgres-storage.sh --prepare` once. It creates only a missing
    direct-child directory after all mount checks pass. It never recursively
    changes the mount root.
-5. Use `start-staging-guarded.sh` for every allowed start. Put the storage
-   profile after `compose.yaml` so `!override` replaces the named volume.
-   The wrapper parses the rendered model without printing it and refuses to
-   start unless the bind, restart policy, closed registration and unpublished
-   PostgreSQL/API ports match the contract. It runs both JavaScript validators
-   in the pinned Node 22 image with no network, a read-only filesystem and
-   bounded resources; host Node.js is not a prerequisite. Pull and verify that
-   exact image before invoking the wrapper; the wrapper uses `--pull=never`.
+5. Provision the reviewed controller separately at
+   `/opt/selective-remote-controller`, with its protected Node runtime, retained
+   checker/dependencies, checksum manifest and root-owned `settings.json`.
+   Settings pin the exact source, image, controller, environment-file digest,
+   six storage values and ordered Compose paths/digests. The checkout launcher
+   accepts no arbitrary Compose inputs. `--help` is safe before provisioning.
+6. Put the reviewed Compose files into the protected settings in this order:
+   `compose.yaml`, the applicable ingress/resource overlays,
+   `compose.publication-fence.yaml`, then `compose.postgres-bind.yaml` last.
+   The storage profile must appear exactly once. Explicitly provision the
+   independent journal outside the checkout, PostgreSQL data and backup roots;
+   startup never initializes missing history.
+7. Use the retained controller for every allowed start. It checks the pinned
+   image metadata, storage/source/rendered model and DB/journal compatibility,
+   closes traffic, migrates the exact image, repeats compatibility checks and
+   starts only the pinned cloud/caddy services. It uses the separately retained
+   Node runtime and pinned checker image; no system Node installation is needed.
 
-Example order for a new host with ordinary 80/443 ingress:
+Normal start, using only the reviewed protected settings:
 
 ```bash
-scripts/start-staging-guarded.sh \
-  compose.yaml \
-  compose.postgres-bind.yaml
+scripts/start-staging-guarded.sh
 ```
 
-Add other reviewed overlays after `compose.yaml` and before the storage
-profile as their documentation requires. The exact storage profile must be
-included once and must always be the final Compose file.
+An initial schema12/V1 upgrade additionally requires the explicit
+`--maintenance-upgrade` argument. This closes traffic before checking that the
+existing independent journal is pristine and permits the forward migration.
+It does not allow an old image, unresolved intent or retained newer history to
+be bypassed. See `docs/security/pr-c-staging-acceptance.md` for the scope and
+limits of the local controller/restore evidence.
 
 ## Acceptance before real data
 
 - The final Compose input is the exact reviewed storage profile containing
-  `create_host_path: false`; its digest is verified before storage checks.
+  `create_host_path: false`; its digest is verified before any startup.
 - Rendered model contains exactly one PostgreSQL mount at
   `/var/lib/postgresql/data`, of type `bind`, with the reviewed source and no
   unsafe bind options.

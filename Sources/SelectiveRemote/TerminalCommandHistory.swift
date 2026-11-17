@@ -229,13 +229,14 @@ final class TerminalCommandHistoryStore: ObservableObject {
 
     @Published private(set) var snippetRevision = 0
     @Published private(set) var historyRevision = 0
+    @Published private(set) var snippetPersistenceFailed = false
 
     private enum Key {
-        static let entries = "SelectiveRemote.terminal.commandHistory.v1"
-        static let enabled = "SelectiveRemote.terminal.commandHistory.enabled.v1"
-        static let favorites = "SelectiveRemote.terminal.commandFavorites.v1"
-        static let templates = "SelectiveRemote.terminal.commandTemplates.v1"
-        static let snippetGroups = "SelectiveRemote.terminal.snippetGroups.v1"
+        static let entries = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandHistory.v1")!
+        static let enabled = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandHistory.enabled.v1")!
+        static let favorites = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandFavorites.v1")!
+        static let templates = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.commandTemplates.v1")!
+        static let snippetGroups = NativeStorageMigration.newKey(for: "SelectiveRemote.terminal.snippetGroups.v1")!
     }
 
     private let defaults: UserDefaults
@@ -250,6 +251,13 @@ final class TerminalCommandHistoryStore: ObservableObject {
     }
 
     init(defaults: UserDefaults = .standard, maximumEntries: Int = 1_000) {
+        let recoveryFailed: Bool
+        do {
+            try NativeStorageMigration.recoverPendingSnippets(defaults)
+            recoveryFailed = false
+        } catch {
+            recoveryFailed = true
+        }
         self.defaults = defaults
         self.maximumEntries = max(1, maximumEntries)
         if defaults.object(forKey: Key.enabled) == nil {
@@ -281,8 +289,9 @@ final class TerminalCommandHistoryStore: ObservableObject {
         } else {
             storedSnippetGroups = []
         }
+        snippetPersistenceFailed = recoveryFailed
         normalizeAndPersistIfNeeded()
-        migrateTemplatesToGlobalLibraryIfNeeded()
+        if !recoveryFailed { migrateTemplatesToGlobalLibraryIfNeeded() }
     }
 
     @discardableResult
@@ -390,6 +399,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
     }
 
     func importTemplates(_ values: [TerminalCommandTemplate]) {
+        guard !snippetPersistenceFailed else { return }
         let existing = Set(storedTemplates.map(\.id))
         let additions = values.filter { !existing.contains($0.id) }
         storedTemplates.append(contentsOf: additions)
@@ -403,6 +413,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
     }
 
     func replaceSyncedTemplates(_ values: [TerminalCommandTemplate]) {
+        guard !snippetPersistenceFailed else { return }
         let internalTemplates = storedTemplates.filter { isInternalTemplate($0) }
         let replacement = Array(values.prefix(500 - internalTemplates.count))
         guard templates() != replacement.sorted(by: { $0.updatedAt > $1.updatedAt }) else { return }
@@ -417,7 +428,6 @@ final class TerminalCommandHistoryStore: ObservableObject {
     private func reconcileImportedSnippetGroups(_ values: [TerminalCommandTemplate]) {
         var handledNames: [String] = []
         var handledIDs = Set<UUID>()
-        let before = storedSnippetGroups
         for value in values.sorted(by: {
             $0.updatedAt == $1.updatedAt
                 ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt
@@ -452,7 +462,6 @@ final class TerminalCommandHistoryStore: ObservableObject {
                 storedTemplates[index].groupID = value.groupID
             }
         }
-        if storedSnippetGroups != before { persistSnippetGroups() }
     }
 
     func templates(in groupID: UUID) -> [TerminalCommandTemplate] {
@@ -484,7 +493,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         profileID: UUID,
         now: Date = Date()
     ) -> TerminalSnippetGroup? {
-        guard let name = normalizedSnippetGroupName(rawName),
+        guard !snippetPersistenceFailed, let name = normalizedSnippetGroupName(rawName),
               !hasSnippetGroup(named: name)
         else { return nil }
 
@@ -495,7 +504,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             createdAt: now
         )
         storedSnippetGroups.append(group)
-        persistSnippetGroups()
+        guard persistSnippets() else { return nil }
         return group
     }
 
@@ -506,7 +515,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         profileID: UUID,
         now: Date = Date()
     ) -> Bool {
-        guard let name = normalizedSnippetGroupName(rawName),
+        guard !snippetPersistenceFailed, let name = normalizedSnippetGroupName(rawName),
               let index = storedSnippetGroups.firstIndex(where: {
                   $0.id == id
               })
@@ -547,16 +556,14 @@ final class TerminalCommandHistoryStore: ObservableObject {
                 storedTemplates[templateIndex].updatedAt = now
             }
         }
-        persistSnippetGroups()
-        persistTemplates()
-        return true
+        return persistSnippets()
     }
 
     /// Removes a group without deleting its snippets. Snippets are moved to the
     /// existing default group so a category operation cannot destroy commands.
     @discardableResult
     func removeSnippetGroup(id: UUID, profileID: UUID) -> Bool {
-        guard let index = storedSnippetGroups.firstIndex(where: {
+        guard !snippetPersistenceFailed, let index = storedSnippetGroups.firstIndex(where: {
             $0.id == id
         }) else { return false }
 
@@ -579,10 +586,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
                 storedTemplates[templateIndex].groupID = defaultGroup.id
                 storedTemplates[templateIndex].updatedAt = Date()
             }
-            persistTemplates()
         }
-        persistSnippetGroups()
-        return true
+        return persistSnippets()
     }
 
     @discardableResult
@@ -596,6 +601,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         targetProfileIDs: [UUID]? = nil,
         targets: [TerminalSnippetTarget]? = nil
     ) -> Bool {
+        guard !snippetPersistenceFailed else { return false }
         let now = Date()
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let category = rawCategory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -648,18 +654,16 @@ final class TerminalCommandHistoryStore: ObservableObject {
            let groupIndex = storedSnippetGroups.firstIndex(where: { $0.id == groupID }) {
             storedSnippetGroups[groupIndex].updatedAt = now
         }
-        persistSnippetGroups()
         if storedTemplates.count > 500 {
             storedTemplates.sort { $0.updatedAt > $1.updatedAt }
             storedTemplates = Array(storedTemplates.prefix(500))
         }
-        persistTemplates()
-        return true
+        return persistSnippets()
     }
 
     @discardableResult
     func moveTemplate(id: UUID, toGroupID groupID: UUID, profileID: UUID) -> Bool {
-        guard let group = storedSnippetGroups.first(where: {
+        guard !snippetPersistenceFailed, let group = storedSnippetGroups.first(where: {
             $0.id == groupID
         }), let index = storedTemplates.firstIndex(where: {
             $0.id == id
@@ -669,8 +673,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         storedTemplates[index].groupID = group.id
         storedTemplates[index].isExplicitlyUngrouped = false
         storedTemplates[index].updatedAt = Date()
-        persistTemplates()
-        return true
+        return persistSnippets()
     }
 
     @discardableResult
@@ -713,6 +716,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         title rawTitle: String,
         command rawCommand: String
     ) -> Bool {
+        guard !snippetPersistenceFailed else { return false }
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty,
               title.count <= 80,
@@ -741,8 +745,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
                 )
             )
         }
-        persistTemplates()
-        return true
+        return persistSnippets()
     }
 
     @discardableResult
@@ -759,10 +762,11 @@ final class TerminalCommandHistoryStore: ObservableObject {
 
     @discardableResult
     func removeTemplate(id: UUID) -> Bool {
+        guard !snippetPersistenceFailed else { return false }
         let oldCount = storedTemplates.count
         storedTemplates.removeAll { $0.id == id }
-        if storedTemplates.count != oldCount { persistTemplates() }
-        return storedTemplates.count != oldCount
+        guard storedTemplates.count != oldCount else { return false }
+        return persistSnippets()
     }
 
     func webPayload(
@@ -912,7 +916,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
                         id: group.id,
                         profileID: Self.globalSnippetLibraryID,
                         name: group.name,
-                        createdAt: group.createdAt
+                        createdAt: group.createdAt,
+                        updatedAt: group.updatedAt
                     )
                 )
             }
@@ -963,8 +968,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             }
         }
 
-        if templatesChanged { persistTemplates() }
-        if groupsChanged { persistSnippetGroups() }
+        if templatesChanged || groupsChanged { persistSnippets() }
     }
 
     private func normalizedTargetIDs(_ ids: [UUID]) -> [UUID] {
@@ -1008,15 +1012,21 @@ final class TerminalCommandHistoryStore: ObservableObject {
         historyRevision &+= 1
     }
 
-    private func persistTemplates() {
-        guard let data = try? JSONEncoder().encode(storedTemplates) else { return }
-        defaults.set(data, forKey: Key.templates)
-        snippetRevision &+= 1
+    @discardableResult
+    private func persistSnippets() -> Bool {
+        guard !snippetPersistenceFailed else { return false }
+        do {
+            try NativeStorageMigration.commitSnippets(
+                groups: JSONEncoder().encode(storedSnippetGroups),
+                templates: JSONEncoder().encode(storedTemplates), to: defaults
+            )
+            snippetRevision &+= 1
+            return true
+        } catch {
+            snippetPersistenceFailed = true
+            return false
+        }
     }
 
-    private func persistSnippetGroups() {
-        guard let data = try? JSONEncoder().encode(storedSnippetGroups) else { return }
-        defaults.set(data, forKey: Key.snippetGroups)
-        snippetRevision &+= 1
-    }
+    private func persistTemplates() { persistSnippets() }
 }

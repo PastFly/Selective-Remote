@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+private struct CloudProfileShareSelection: Identifiable {
+    let id = UUID()
+    let profile: ConnectionProfile
+    let delivery: SelectiveRemoteTeamMutationDelivery
+}
+
 private enum ProfileTab: String, CaseIterable, Identifiable {
     case general = "Основные"
     case authentication = "Аутентификация"
@@ -146,7 +152,7 @@ struct ContentView: View {
     @State private var showsNotifications = false
     @State private var notificationAccountEndpoint: String?
     @State private var notificationAccountID: UUID?
-    @State private var profileToShare: ConnectionProfile?
+    @State private var profileToShare: CloudProfileShareSelection?
     @State private var personalHostPendingDeletion: ConnectionProfile?
     @State private var showsPersonalFolderCreator = false
     @State private var newPersonalFolderName = ""
@@ -157,6 +163,9 @@ struct ContentView: View {
     @State private var showsSyncCenter = false
     @State private var diagnosticsCloudSyncRequestID: UUID?
     @State private var cloudSessionAvailable = false
+    @State private var legacyHostWarning: LegacyHostWarning?
+    @State private var legacyHostCheckInFlight = false
+    @State private var showsLegacyHostWarning = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID = UserDefaults.standard
         .string(forKey: "SelectiveRemote.host-shelf.team-selection.v1")
@@ -271,6 +280,10 @@ struct ContentView: View {
         .appTextSize(appAppearance.textSize)
         .controlSize(appAppearance.density.controlSize)
         .tint(.accentColor)
+        .onAppear { refreshLegacyHostWarning() }
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+            refreshLegacyHostWarning()
+        }
         .confirmationDialog(
             UpdateLocalization.text(ru: "Удалить Host?", en: "Delete Host?"),
             isPresented: Binding(
@@ -298,6 +311,15 @@ struct ContentView: View {
                 id?.uuidString,
                 forKey: "SelectiveRemote.host-shelf.team-selection.v1"
             )
+        }
+        .alert(UpdateLocalization.text(ru: "Не удалось подтвердить выход из Cloud", en: "Cloud sign-out could not be confirmed"),
+               isPresented: Binding(
+                get: { syncPresentation.unconfirmedSessionCleanup },
+                set: { if !$0 { syncPresentation.acknowledgeUnconfirmedSessionCleanup() } }
+               )) {
+            Button("OK", role: .cancel) { syncPresentation.acknowledgeUnconfirmedSessionCleanup() }
+        } message: {
+            Text(SelectiveRemoteCloudError.logoutUnconfirmed.localizedDescription)
         }
         .alert("Ошибка", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -407,8 +429,8 @@ struct ContentView: View {
                 model.generateSSHKey(request, session: session)
             }
         }
-        .sheet(item: $profileToShare) { profile in
-            SelectiveRemoteCloudProfileShareView(profile: profile)
+        .sheet(item: $profileToShare) { selection in
+            SelectiveRemoteCloudProfileShareView(profile: selection.profile, openingDelivery: selection.delivery)
         }
         .sheet(isPresented: $showsPersonalFolderCreator) {
             personalFolderCreator
@@ -503,6 +525,65 @@ struct ContentView: View {
         }
     }
 
+    private enum LegacyHostWarning: Sendable, Equatable {
+        case changed, unavailable
+    }
+
+    private func refreshLegacyHostWarning() {
+        guard !legacyHostCheckInFlight else { return }
+        legacyHostCheckInFlight = true
+        Task {
+            let result = await Task.detached(priority: .utility) { () -> LegacyHostWarning? in
+                do {
+                    return try LegacyProfileChangeDetector.hasChanges(UserDefaults.standard) ? .changed : nil
+                } catch {
+                    return .unavailable
+                }
+            }.value
+            if result != nil && result != legacyHostWarning { showsLegacyHostWarning = true }
+            legacyHostWarning = result
+            legacyHostCheckInFlight = false
+        }
+    }
+
+    private func legacyHostWarningView(_ warning: LegacyHostWarning) -> some View {
+        let title = warning == .changed
+            ? UpdateLocalization.text(ru: "Изменения в предыдущей версии", en: "Changes in the previous version")
+            : UpdateLocalization.text(ru: "Не удалось проверить предыдущую версию", en: "Could not check the previous version")
+        let message = warning == .changed
+            ? UpdateLocalization.text(
+                ru: "Данные подключений предыдущей версии изменились после обновления и не отображаются здесь. Откройте предыдущую версию, чтобы их просмотреть. Не редактируйте подключения одновременно в обеих версиях.",
+                en: "Connection data from the previous version changed after the upgrade and is not shown here. Open the previous version to view it. Avoid editing connections in both versions at the same time."
+              )
+            : UpdateLocalization.text(
+                ru: "Не удалось проверить изменения подключений в предыдущей версии. Закройте предыдущую версию и перезапустите приложение. Если сообщение сохранится, сохраните копию данных перед дальнейшими изменениями.",
+                en: "Changes to connection data in the previous version could not be checked. Close the previous version and restart the app. If this message remains, keep a copy of your data before making further changes."
+              )
+        return Button {
+            showsLegacyHostWarning = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                Text(title).font(.callout.weight(.medium)).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("legacy-host-warning")
+        .help(message)
+        .alert(title, isPresented: $showsLegacyHostWarning) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(message)
+        }
+    }
+
     private func notificationLifecycle<V: View>(_ view: V) -> some View {
         view
             .task(id: cloudSessionAvailable) { await refreshNotificationSources() }
@@ -539,23 +620,10 @@ struct ContentView: View {
     }
 
     private var notificationBell: some View {
-        Button { showsNotifications.toggle() } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "bell")
-                if notificationCenter.attentionCount > 0 {
-                    Text(notificationCenter.attentionCount > 9 ? "9+" :
-                         "\(notificationCenter.attentionCount)")
-                        .font(.caption2.bold())
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
+        NotificationBellButton(attentionCount: notificationCenter.attentionCount,
+                               english: language.selection.usesEnglish) {
+            showsNotifications.toggle()
         }
-        .buttonStyle(.borderless)
-        .help(UpdateLocalization.text(ru: "Уведомления", en: "Notifications"))
-        .accessibilityLabel(UpdateLocalization.text(
-            ru: "Уведомления: требуют внимания \(notificationCenter.attentionCount)",
-            en: "Notifications: \(notificationCenter.attentionCount) need attention"
-        ))
         .popover(isPresented: $showsNotifications, arrowEdge: .top) {
             NotificationCenterView(center: notificationCenter, onOpen: openNotification)
         }
@@ -701,6 +769,12 @@ struct ContentView: View {
             .padding(.horizontal, 18)
             .padding(.top, 18)
             .padding(.bottom, 16)
+
+            if let legacyHostWarning {
+                legacyHostWarningView(legacyHostWarning)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
 
             if showsHostQuickAccess {
                 HStack(spacing: 7) {
@@ -1215,7 +1289,8 @@ struct ContentView: View {
                             identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
                             navigationScope: "personal-\(surface.rawValue)",
                             previewTitle: item.friendlyName,
-                            select: { openProfile(item.id) }
+                            select: { openProfile(item.id) },
+                            activate: { openProfile(item.id); model.connect() }
                         ) {
                             ProfileRow(
                                 profile: item,
@@ -1299,7 +1374,8 @@ struct ContentView: View {
                                         identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
                                         navigationScope: "personal-\(surface.rawValue)",
                                         previewTitle: item.friendlyName,
-                                        select: { openProfile(item.id) }
+                                        select: { openProfile(item.id) },
+                                        activate: { openProfile(item.id); model.connect() }
                                     ) {
                                         ProfileGridCard(
                                             profile: item,
@@ -1557,7 +1633,8 @@ struct ContentView: View {
                                             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
                                             navigationScope: "team-sidebar",
                                             previewTitle: host.profile.friendlyName,
-                                            select: { openTeamHostCard(host) }
+                                            select: { openTeamHostCard(host) },
+                                            activate: { requestTeamHostAction(.connect, for: host) }
                                         ) {
                                             teamHostSidebarGridCard(host)
                                         }
@@ -1613,7 +1690,8 @@ struct ContentView: View {
             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
             navigationScope: "team-sidebar",
             previewTitle: host.profile.friendlyName,
-            select: { openTeamHostCard(host) }
+            select: { openTeamHostCard(host) },
+            activate: { requestTeamHostAction(.connect, for: host) }
         ) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -1868,26 +1946,37 @@ struct ContentView: View {
         }
         sidebarTeamMutationInProgress = true
         teamHostSortMode = .manual
+        let pendingDelivery = Result {
+            guard let deviceID = UUID(uuidString: cloudDeviceID), deviceID.isSelectiveRemoteCloudUUID,
+                  let owner = teamHosts.session(teamID: context.teamID, vaultID: context.vaultID)
+            else { throw SelectiveRemoteCloudError.authenticationRequired }
+            return try SelectiveRemoteTeamMutationDelivery(endpoint: cloudEndpoint, deviceID: deviceID, owner: owner)
+        }
         Task { @MainActor in
             defer { sidebarTeamMutationInProgress = false }
             do {
-                let endpoint = try SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
+                let delivery = try pendingDelivery.get()
+                guard let owner = delivery.owner else { throw SelectiveRemoteCloudError.authenticationRequired }
+                let boundClient = SelectiveRemoteCloudAPIClient(boundPublicationSession: owner)
+                let currentDevice = { UUID(uuidString: cloudDeviceID) ?? UUID() }
+                try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice())
+                let endpoint = delivery.endpoint
                 let outcome = try await AccessMoveDecision.perform(
                     changesAncestry: changesAncestry,
                     decide: {
                         try await AccessMoveDecision.fetch(
                             teamID: context.teamID, vaultID: context.vaultID,
-                            endpoint: endpoint, client: cloudClient,
+                            endpoint: endpoint, client: boundClient,
                             changesAncestry: true
                         )
                     },
                     persist: {
-                        let deviceID = UUID(uuidString: cloudDeviceID)
-                            .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
-                        cloudDeviceID = deviceID.canonicalCloudString
+                        try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice())
                         let identity = try await SelectiveRemoteTeamDeviceIdentityManager()
-                            .identity(endpoint: endpoint, deviceID: deviceID)
-                        let service = try SelectiveRemoteTeamHostMutationService()
+                            .identity(endpoint: endpoint, deviceID: delivery.deviceID)
+                        try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice())
+                        let service = try SelectiveRemoteTeamHostMutationService(
+                            remote: boundClient, snapshots: SelectiveRemoteTeamVaultFileSnapshotStore(), session: owner)
                         return try await service.apply(
                             .organize(updates), to: context, endpoint: endpoint,
                             identity: identity
@@ -1901,11 +1990,14 @@ struct ContentView: View {
                     model.errorMessage = explanation
                     return
                 }
-                teamHosts.replaceVault(with: snapshot)
-                selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
-                    teamID: context.teamID, vaultID: context.vaultID,
-                    recordID: selectedRecordID
-                )
+                let boundSnapshot = try delivery.bind(snapshot)
+                try delivery.commit(currentEndpoint: cloudEndpoint, currentDeviceID: currentDevice()) {
+                    teamHosts.replaceVault(with: boundSnapshot)
+                    selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
+                        teamID: context.teamID, vaultID: context.vaultID,
+                        recordID: selectedRecordID
+                    )
+                }
             } catch {
                 model.errorMessage = error.localizedDescription
             }
@@ -2376,8 +2468,10 @@ struct ContentView: View {
             return
         }
         do {
-            cloudSessionAvailable = try SelectiveRemoteCloudKeychainTokenStore()
-                .token(for: endpoint) != nil
+            let token = try SelectiveRemoteCloudKeychainTokenStore().token(for: endpoint)
+            cloudSessionAvailable = token.map {
+                !SelectiveRemotePublicationLifecycle.isRetiredToken(endpoint: endpoint, token: $0)
+            } ?? false
         } catch {
             cloudSessionAvailable = false
         }
@@ -2724,7 +2818,15 @@ struct ContentView: View {
             UpdateLocalization.text(ru: "Поделиться с командой…", en: "Share with Team…"),
             systemImage: "person.2.badge.plus"
         ) {
-            profileToShare = item
+            do {
+                guard let deviceID = UUID(uuidString: cloudDeviceID), deviceID.isSelectiveRemoteCloudUUID
+                else { throw SelectiveRemoteCloudError.authenticationRequired }
+                let delivery = try SelectiveRemoteTeamMutationDelivery(endpoint: cloudEndpoint, deviceID: deviceID)
+                guard let current = model.profiles.first(where: { $0.id == item.id })
+                else { throw SelectiveRemoteCloudError.invalidRequest }
+                try delivery.check(currentEndpoint: cloudEndpoint, currentDeviceID: deviceID)
+                profileToShare = .init(profile: current, delivery: delivery)
+            } catch { model.errorMessage = error.localizedDescription }
         }
         Divider()
         Button("Удалить", systemImage: "trash", role: .destructive) {

@@ -9,17 +9,17 @@ import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
-  resolveVaultConflictsByNewest,
   resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
 } from "./vault-model.js";
+import { openVaultStorage } from "./vault-storage.js";
 
-const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
 const snapshotKey = "personal";
 const syncKey = "personal-sync";
 const backupSnapshotKey = "personal-previous";
+const legacyOwnershipKey = "personal-legacy-owner:v1";
 const deviceKey = "browser-device";
 const sessionDeviceKey = "personal-session-device-key";
 const sessionUnlockKey = "personal-session-unlock";
@@ -55,15 +55,25 @@ function validatedSnapshot(value) {
   return { revision: value.revision, deviceID, envelope: value.envelope };
 }
 
+function validatedRemoteSnapshot(value) {
+  try { return validatedSnapshot(value); }
+  catch { throw new Error("invalid_remote_vault"); }
+}
+
 function validatedSyncMetadata(value) {
-  exactKeys(value, syncKeys, "invalid_local_vault_sync");
+  const hasServerHash = Object.hasOwn(value ?? {}, "serverContentHash");
+  exactKeys(value, hasServerHash ? [...syncKeys, "serverContentHash"] : syncKeys, "invalid_local_vault_sync");
   if (!Number.isSafeInteger(value.localRevision) || value.localRevision < 1) {
     throw new Error("invalid_local_vault_sync");
   }
   if (!Number.isSafeInteger(value.serverRevision) || value.serverRevision < 0) {
     throw new Error("invalid_local_vault_sync");
   }
-  return { localRevision: value.localRevision, serverRevision: value.serverRevision };
+  if (hasServerHash && (value.serverRevision < 1 || !base64URLDigest.test(value.serverContentHash))) {
+    throw new Error("invalid_local_vault_sync");
+  }
+  return { localRevision: value.localRevision, serverRevision: value.serverRevision,
+    ...(hasServerHash ? { serverContentHash: value.serverContentHash } : {}) };
 }
 
 function normalizedDeviceID(value) {
@@ -130,6 +140,7 @@ export function accountVaultStorageKeys(accountValue) {
     sync: `${prefix}sync`,
     backup: `${prefix}previous`,
     sessionUnlock: `${prefix}session-unlock`,
+    ownership: `${prefix}ownership`,
   };
 }
 
@@ -163,9 +174,51 @@ function validatedSessionUnlock(value, accountID) {
   };
 }
 
+function sameSessionUnlock(left, right) {
+  if (left == null || right == null) return left == null && right == null;
+  try {
+    const accountID = normalizedAccountID(left.accountID);
+    const a = validatedSessionUnlock(left, accountID), b = validatedSessionUnlock(right, accountID);
+    return a.nonce.every((value, index) => value === b.nonce[index])
+      && a.ciphertext.every((value, index) => value === b.ciphertext[index]);
+  } catch { return false; }
+}
+
+// A damaged record can be replaced after a password unlock, but only if the
+// exact record read before encryption is still present in the transaction.
+function sameStoredSessionUnlock(left, right) {
+  if (sameSessionUnlock(left, right)) return true;
+  try {
+    const keys = ["accountID", "ciphertext", "nonce", "version"];
+    exactKeys(left, keys, "invalid_session_unlock");
+    exactKeys(right, keys, "invalid_session_unlock");
+    if (typeof left.accountID !== "string" || left.accountID !== right.accountID
+        || typeof left.version !== "number" || !Object.is(left.version, right.version)) return false;
+    return ["nonce", "ciphertext"].every((key) => {
+      const a = left[key], b = right[key];
+      if (!ArrayBuffer.isView(a) || !ArrayBuffer.isView(b)
+          || a.BYTES_PER_ELEMENT !== 1 || b.BYTES_PER_ELEMENT !== 1
+          || a.constructor.name !== b.constructor.name || a.byteLength !== b.byteLength
+          || a.byteLength > 4096) return false;
+      const aa = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      const bb = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+      return aa.every((value, index) => value === bb[index]);
+    });
+  } catch { return false; }
+}
+
 function sameWrappedKey(left, right) {
   const keys = ["algorithm", "iterations", "salt", "value"];
+  if (!left || !right || typeof left.algorithm !== "string" || !Number.isSafeInteger(left.iterations)
+      || typeof left.salt !== "string" || typeof left.value !== "string") return false;
   return keys.every((key) => left?.[key] === right?.[key]);
+}
+
+function validatedOwnershipBinding(value, accountID) {
+  exactKeys(value, ["accountID", "version", "wrappedKey"], "invalid_local_vault_owner");
+  if (value.version !== 1 || normalizedAccountID(value.accountID) !== accountID
+      || !sameWrappedKey(value.wrappedKey, value.wrappedKey)) throw new Error("invalid_local_vault_owner");
+  return clone(value);
 }
 
 function clone(value) {
@@ -175,16 +228,7 @@ function clone(value) {
 }
 
 function openDatabase(indexedDBValue) {
-  if (!indexedDBValue?.open) return Promise.reject(new Error("local_vault_storage_unavailable"));
-  return new Promise((resolve, reject) => {
-    const request = indexedDBValue.open(databaseName, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(storeName)) request.result.createObjectStore(storeName);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("local_vault_storage_unavailable"));
-    request.onblocked = () => reject(new Error("local_vault_storage_unavailable"));
-  });
+  return openVaultStorage(indexedDBValue, "local_vault_storage_unavailable");
 }
 
 async function transaction(indexedDBValue, mode, operation) {
@@ -207,8 +251,9 @@ async function transaction(indexedDBValue, mode, operation) {
 
 export function createIndexedDBVaultRepository(indexedDBValue = globalThis.indexedDB, { accountID = null } = {}) {
   const keys = accountID === null
-    ? { snapshot: snapshotKey, sync: syncKey, backup: backupSnapshotKey, sessionUnlock: sessionUnlockKey }
+    ? { snapshot: snapshotKey, sync: syncKey, backup: backupSnapshotKey, sessionUnlock: sessionUnlockKey, ownership: legacyOwnershipKey }
     : accountVaultStorageKeys(accountID);
+  const sessionUnlockGenerationKey = `${keys.sessionUnlock}:generation`;
   return {
     async load() {
       const value = await transaction(indexedDBValue, "readonly", (store) => store.get(keys.snapshot));
@@ -218,6 +263,149 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
       const snapshot = validatedSnapshot(value);
       await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), keys.snapshot));
     },
+    async saveInitial(value, syncValue = null) {
+      const snapshot = validatedSnapshot(value);
+      const metadata = syncValue === null ? null : validatedSyncMetadata(syncValue);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          let failure = null;
+          const request = store.get(keys.snapshot);
+          request.onsuccess = () => {
+            if (request.result != null) { failure = new Error("local_vault_exists"); tx.abort(); return; }
+            store.add(clone(snapshot), keys.snapshot);
+            if (metadata) store.put(metadata, keys.sync);
+            if (accountID !== null) store.put({ version: 1, accountID: normalizedAccountID(accountID),
+              wrappedKey: clone(snapshot.envelope.wrappedKey) }, keys.ownership);
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve();
+        });
+      } finally { database.close(); }
+    },
+    async saveIfCurrent(expectedValue, nextValue, { backup = false, sync = null, requireCurrent = () => {} } = {}) {
+      const expected = validatedSnapshot(expectedValue), next = validatedSnapshot(nextValue);
+      const metadata = sync === null ? null : validatedSyncMetadata(sync);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          let failure = null;
+          const current = store.get(keys.snapshot), owner = store.get(keys.ownership);
+          let remaining = 2;
+          for (const request of [current, owner]) request.onsuccess = () => {
+            if (--remaining) return;
+            try {
+              requireCurrent();
+              if (!current.result || JSON.stringify(validatedSnapshot(current.result)) !== JSON.stringify(expected)) {
+                throw new Error("local_vault_changed");
+              }
+              if (backup) store.put(clone(expected), keys.backup);
+              store.put(clone(next), keys.snapshot);
+              if (metadata) store.put(metadata, keys.sync);
+              if (accountID !== null && owner.result) {
+                const binding = validatedOwnershipBinding(owner.result, normalizedAccountID(accountID));
+                if (!sameWrappedKey(binding.wrappedKey, expected.envelope.wrappedKey)) throw new Error("local_vault_owner_unverified");
+                store.put({ ...binding, wrappedKey: clone(next.envelope.wrappedKey) }, keys.ownership);
+              }
+            } catch (error) { failure = error; tx.abort(); }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve();
+        });
+      } finally { database.close(); }
+    },
+    async saveSyncIfCurrent(expectedValue, syncValue, { requireCurrent = () => {} } = {}) {
+      const expected = validatedSnapshot(expectedValue), metadata = validatedSyncMetadata(syncValue);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          let failure = null;
+          const current = store.get(keys.snapshot), prior = store.get(keys.sync);
+          let remaining = 2;
+          for (const request of [current, prior]) request.onsuccess = () => {
+            if (--remaining) return;
+            try {
+              requireCurrent();
+              if (!current.result || JSON.stringify(validatedSnapshot(current.result)) !== JSON.stringify(expected)) {
+                throw new Error("local_vault_changed");
+              }
+              if (prior.result && validatedSyncMetadata(prior.result).serverRevision > metadata.serverRevision) {
+                throw new Error("local_vault_sync_changed");
+              }
+              const previous = prior.result && validatedSyncMetadata(prior.result);
+              if (previous && previous.serverRevision === metadata.serverRevision && previous.serverContentHash
+                  && previous.serverContentHash !== metadata.serverContentHash) throw new Error("local_vault_sync_changed");
+              store.put(metadata, keys.sync);
+            } catch (error) { failure = error; tx.abort(); }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve();
+        });
+      } finally { database.close(); }
+    },
+    async loadLegacyState() {
+      if (accountID !== null) throw new Error("invalid_local_vault_owner");
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readonly");
+          const store = tx.objectStore(storeName);
+          const snapshot = store.get(keys.snapshot);
+          const sync = store.get(keys.sync);
+          const owner = store.get(keys.ownership);
+          tx.onabort = () => reject(new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve({ snapshot: snapshot.result ?? null, sync: sync.result ?? null, owner: owner.result ?? null });
+        });
+      } finally { database.close(); }
+    },
+    async importLegacyStateIfAbsent({ snapshot, sync, owner }) {
+      if (accountID === null) throw new Error("invalid_local_vault_owner");
+      const normalizedSnapshot = validatedSnapshot(snapshot);
+      const metadata = sync == null ? null : validatedSyncMetadata(sync);
+      if (metadata && metadata.localRevision > normalizedSnapshot.revision) throw new Error("invalid_local_vault_sync");
+      const binding = validatedOwnershipBinding({
+        version: 1, accountID: owner, wrappedKey: normalizedSnapshot.envelope.wrappedKey,
+      }, normalizedAccountID(accountID));
+      const database = await openDatabase(indexedDBValue);
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite");
+          const store = tx.objectStore(storeName);
+          let failure = null;
+          const requests = [store.get(keys.snapshot), store.get(snapshotKey), store.get(syncKey), store.get(legacyOwnershipKey)];
+          let remaining = requests.length;
+          for (const request of requests) request.onsuccess = () => {
+            if (--remaining !== 0) return;
+            try {
+              const [target, source, sourceSync, sourceOwner] = requests.map(item => item.result ?? null);
+              if (target) throw new Error("local_vault_exists");
+              const current = source == null ? null : validatedSnapshot(source);
+              const currentSync = sourceSync == null ? null : validatedSyncMetadata(sourceSync);
+              if (JSON.stringify(current) !== JSON.stringify(normalizedSnapshot)
+                  || JSON.stringify(currentSync) !== JSON.stringify(metadata)) throw new Error("legacy_snapshot_changed");
+              if (!sourceOwner) throw new Error("local_vault_owner_unverified");
+              const prior = validatedOwnershipBinding(sourceOwner, normalizedAccountID(sourceOwner.accountID));
+              if (!sameWrappedKey(prior.wrappedKey, normalizedSnapshot.envelope.wrappedKey)
+                  || prior.accountID !== binding.accountID) throw new Error("invalid_local_vault_owner");
+              store.add(clone(normalizedSnapshot), keys.snapshot);
+              if (metadata) store.put(metadata, keys.sync);
+              store.put(binding, keys.ownership);
+              store.put(binding, legacyOwnershipKey);
+            } catch (error) { failure = error; tx.abort(); }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve();
+        });
+      } finally { database.close(); }
+    },
     async savePrevious(value) {
       const snapshot = validatedSnapshot(value);
       await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), keys.backup));
@@ -225,6 +413,29 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
     async loadSync() {
       const value = await transaction(indexedDBValue, "readonly", (store) => store.get(keys.sync));
       return value === null || value === undefined ? null : validatedSyncMetadata(value);
+    },
+    async loadSyncForSnapshot(expectedValue) {
+      const expected = validatedSnapshot(expectedValue);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readonly"), store = tx.objectStore(storeName);
+          const current = store.get(keys.snapshot), metadata = store.get(keys.sync);
+          let failure = null, result = null, remaining = 2;
+          for (const request of [current, metadata]) request.onsuccess = () => {
+            if (--remaining) return;
+            try {
+              if (!current.result || JSON.stringify(validatedSnapshot(current.result)) !== JSON.stringify(expected)) {
+                throw new Error("local_vault_changed");
+              }
+              result = metadata.result == null ? null : validatedSyncMetadata(metadata.result);
+            } catch (error) { failure = error; tx.abort(); }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve(result);
+        });
+      } finally { database.close(); }
     },
     async saveSync(value) {
       const metadata = validatedSyncMetadata(value);
@@ -307,14 +518,164 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
     async saveSessionDeviceKey(value) {
       await transaction(indexedDBValue, "readwrite", (store) => store.put(value, sessionDeviceKey));
     },
+    async saveSessionDeviceKeyIfAbsent(value) {
+      const candidate = validatedSessionDeviceKey(value);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          let selected = null, failure = null;
+          const request = store.get(sessionDeviceKey);
+          request.onsuccess = () => {
+            try {
+              selected = request.result ? validatedSessionDeviceKey(request.result) : candidate;
+              if (!request.result) store.add(candidate, sessionDeviceKey);
+            } catch (error) { failure = error; tx.abort(); }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve(selected);
+        });
+      } finally { database.close(); }
+    },
     async loadSessionUnlock() {
       return transaction(indexedDBValue, "readonly", (store) => store.get(keys.sessionUnlock));
     },
     async saveSessionUnlock(value) {
-      await transaction(indexedDBValue, "readwrite", (store) => store.put(value, keys.sessionUnlock));
+      const unlock = accountID === null ? value : validatedSessionUnlock(value, normalizedAccountID(accountID));
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(unlock, keys.sessionUnlock));
+    },
+    async loadSessionUnlockGeneration() {
+      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(sessionUnlockGenerationKey));
+      if (value === null) return 0;
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error("local_vault_storage_failed");
+      return value;
+    },
+    async loadSessionUnlockState() {
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readonly"), store = tx.objectStore(storeName);
+          const generation = store.get(sessionUnlockGenerationKey), unlock = store.get(keys.sessionUnlock);
+          tx.oncomplete = () => {
+            const current = generation.result ?? 0;
+            if (!Number.isSafeInteger(current) || current < 0) { reject(new Error("local_vault_storage_failed")); return; }
+            resolve({ generation: current, unlock: unlock.result ?? null });
+          };
+          tx.onabort = () => reject(new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(new Error("local_vault_storage_failed"));
+        });
+      } finally { database.close(); }
+    },
+    async saveSessionUnlockIfCurrent(value, expectedGeneration, expectedUnlock) {
+      if (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 || expectedUnlock === undefined) throw new Error("local_vault_storage_failed");
+      const unlock = accountID === null ? value : validatedSessionUnlock(value, normalizedAccountID(accountID));
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          let committed = false, failure = null;
+          const generation = store.get(sessionUnlockGenerationKey), previous = store.get(keys.sessionUnlock);
+          let remaining = 2;
+          for (const request of [generation, previous]) request.onsuccess = () => {
+            if (--remaining) return;
+            const current = generation.result ?? 0;
+            if (!Number.isSafeInteger(current) || current < 0 || current === Number.MAX_SAFE_INTEGER) { failure = new Error("local_vault_storage_failed"); tx.abort(); return; }
+            if (current !== expectedGeneration || !sameStoredSessionUnlock(previous.result ?? null, expectedUnlock)) return;
+            store.put(unlock, keys.sessionUnlock);
+            store.put(current + 1, sessionUnlockGenerationKey);
+            committed = true;
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve(committed);
+        });
+      } finally { database.close(); }
     },
     async deleteSessionUnlock() {
-      await transaction(indexedDBValue, "readwrite", (store) => store.delete(keys.sessionUnlock));
+      const database = await openDatabase(indexedDBValue);
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          let failure = null;
+          const request = store.get(sessionUnlockGenerationKey);
+          request.onsuccess = () => {
+            const current = request.result ?? 0;
+            if (!Number.isSafeInteger(current) || current < 0 || current === Number.MAX_SAFE_INTEGER) {
+              failure = new Error("local_vault_storage_failed"); tx.abort(); return;
+            }
+            store.put(current + 1, sessionUnlockGenerationKey);
+            store.delete(keys.sessionUnlock);
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve();
+        });
+      } finally { database.close(); }
+    },
+    async deleteSessionUnlockIfCurrent(expected, pending = [], { strictGeneration = false } = {}) {
+      if (expected !== null && (!Number.isSafeInteger(expected.generation) || expected.generation < 0)) {
+        throw new Error("local_vault_storage_failed");
+      }
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite"), store = tx.objectStore(storeName);
+          const generation = store.get(sessionUnlockGenerationKey), unlock = store.get(keys.sessionUnlock);
+          let remaining = 2, deleted = false, failure = null;
+          for (const request of [generation, unlock]) request.onsuccess = () => {
+            if (--remaining) return;
+            const current = generation.result ?? 0, currentUnlock = unlock.result ?? null;
+            if (!Number.isSafeInteger(current) || current < 0 || current === Number.MAX_SAFE_INTEGER) {
+              failure = new Error("local_vault_storage_failed"); tx.abort(); return;
+            }
+            const observedMatch = expected && (!strictGeneration || current === expected.generation) && (expected.unlock
+              ? sameSessionUnlock(currentUnlock, expected.unlock)
+              : current === expected.generation && currentUnlock === null);
+            const pendingMatch = currentUnlock && pending.some(candidate =>
+              (!strictGeneration || current === candidate.base?.generation + 1)
+                && sameSessionUnlock(currentUnlock, candidate.unlock));
+            const invalidatePending = pending.some(candidate => candidate.base
+              && current === candidate.base.generation && sameStoredSessionUnlock(currentUnlock, candidate.base.unlock));
+            if (!observedMatch && !pendingMatch && !invalidatePending) return;
+            store.put(current + 1, sessionUnlockGenerationKey);
+            if (observedMatch || pendingMatch) { store.delete(keys.sessionUnlock); deleted = true; }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve(deleted);
+        });
+      } finally { database.close(); }
+    },
+    async loadOwnershipBinding() {
+      if (accountID === null) return null;
+      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(keys.ownership));
+      return value == null ? null : validatedOwnershipBinding(value, normalizedAccountID(accountID));
+    },
+    async saveOwnershipBinding(value) {
+      if (accountID === null) throw new Error("invalid_local_vault_owner");
+      const binding = validatedOwnershipBinding(value, normalizedAccountID(accountID));
+      const database = await openDatabase(indexedDBValue);
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite");
+          const store = tx.objectStore(storeName);
+          let failure = null;
+          const request = store.get(keys.snapshot);
+          request.onsuccess = () => {
+            try {
+              const current = validatedSnapshot(request.result);
+              if (!sameWrappedKey(current.envelope.wrappedKey, binding.wrappedKey)) {
+                throw new Error("invalid_local_vault_owner");
+              }
+              store.put(binding, keys.ownership);
+            } catch (error) { failure = error; tx.abort(); }
+          };
+          tx.onabort = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(failure ?? new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve();
+        });
+      } finally { database.close(); }
     },
     forAccount(accountValue) {
       return createIndexedDBVaultRepository(indexedDBValue, { accountID: normalizedAccountID(accountValue) });
@@ -330,55 +691,117 @@ export async function prepareAccountScopedVault({
   cryptoValue = globalThis.crypto,
   now = () => new Date().toISOString(),
   randomUUID = () => cryptoValue.randomUUID(),
+  onController = async () => {},
+  requireCurrent = () => {},
 } = {}) {
   const normalizedID = normalizedAccountID(accountID);
   if (!accountRepository || !legacyRepository) throw new Error("invalid_local_vault_repository");
-  let vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID });
+  requireCurrent();
+  const unlockState = typeof accountRepository.loadSessionUnlockState === "function"
+    ? await accountRepository.loadSessionUnlockState() : null;
+  requireCurrent();
+  const unlockGeneration = unlockState?.generation ?? null;
+  let vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID, initialUnlockState: unlockState });
+  await onController(vault);
+  requireCurrent();
   const accountStatus = await vault.status();
+  requireCurrent();
   if (accountStatus !== "empty") {
+    const stored = await accountRepository.load();
+    requireCurrent();
+    const binding = typeof accountRepository.loadOwnershipBinding === "function"
+      ? await accountRepository.loadOwnershipBinding() : null;
+    requireCurrent();
+    let ownership = null;
+    try { if (binding) ownership = validatedOwnershipBinding(binding, normalizedID); } catch {}
+    if (!ownership || !stored || !sameWrappedKey(ownership.wrappedKey, stored.envelope?.wrappedKey)) {
+      return { vault, legacyMigrated: false, restored: false, legacyOwnershipUnverified: true };
+    }
     const restored = passphrase === null
       ? await vault.restoreRememberedSession(normalizedID)
       : false;
+    requireCurrent();
+    if (restored && !await vault.hasAccountOwnership(normalizedID)) {
+      vault.lock();
+      return { vault, legacyMigrated: false, restored: false, legacyOwnershipUnverified: true };
+    }
     return { vault, legacyMigrated: false, restored };
   }
 
-  const legacySnapshot = await legacyRepository.load();
+  if (typeof legacyRepository.loadLegacyState !== "function"
+      || typeof accountRepository.importLegacyStateIfAbsent !== "function") {
+    throw new Error("local_vault_storage_unavailable");
+  }
+  const legacyState = await legacyRepository.loadLegacyState();
+  requireCurrent();
+  const legacySnapshot = legacyState.snapshot;
   if (!legacySnapshot) return { vault, legacyMigrated: false, restored: false };
-  const legacyVault = createLocalVaultController({ repository: legacyRepository, cryptoValue, now, randomUUID });
+  const remembered = typeof legacyRepository.loadSessionUnlock === "function"
+    ? await legacyRepository.loadSessionUnlock()
+    : null;
+  requireCurrent();
+  const legacyVault = createLocalVaultController({
+    repository: { ...legacyRepository, load: async () => clone(legacySnapshot),
+      loadSessionUnlock: async () => clone(remembered), deleteSessionUnlock: async () => {},
+      // The retained legacy record is read-only during migration.
+      saveSessionUnlockIfCurrent: undefined },
+    cryptoValue, now, randomUUID,
+  });
   let restored = false;
-  let remembered = null;
+  let claimedOwner = null;
+  if (legacyState.owner) {
+    const owner = validatedOwnershipBinding(legacyState.owner, normalizedAccountID(legacyState.owner.accountID));
+    if (sameWrappedKey(owner.wrappedKey, legacySnapshot.envelope?.wrappedKey)) claimedOwner = owner.accountID;
+  }
+  if (claimedOwner && claimedOwner !== normalizedID) return { vault, legacyMigrated: false, restored: false };
+  // Older clients could copy A's unlocked snapshot to B and even upload or
+  // remember it under B. Neither a matching remote wrapper nor a remembered
+  // key created by those clients proves ownership. Only a binding previously
+  // written by the protected migration is accepted; preserve other data for
+  // an explicit, independently verified recovery flow.
+  if (claimedOwner !== normalizedID) {
+    return { vault, legacyMigrated: false, restored: false, legacyOwnershipUnverified: true };
+  }
+  await onController(legacyVault);
+  requireCurrent();
+  const rememberedAccount = remembered?.accountID ? String(remembered.accountID).toLowerCase() : null;
+  const rememberedRestored = remembered && rememberedAccount === normalizedID
+    ? await legacyVault.restoreRememberedSession(normalizedID) : false;
+  requireCurrent();
+
   if (passphrase !== null) {
     try {
       await legacyVault.unlock(passphrase);
       restored = true;
     } catch {
-      return { vault, legacyMigrated: false, restored: false };
+      throw new Error("legacy_vault_unlock_failed");
     }
+    requireCurrent();
   } else {
-    remembered = typeof legacyRepository.loadSessionUnlock === "function"
-      ? await legacyRepository.loadSessionUnlock()
-      : null;
-    if (!remembered || String(remembered.accountID ?? "").toLowerCase() !== normalizedID) {
-      return { vault, legacyMigrated: false, restored: false };
-    }
-    restored = await legacyVault.restoreRememberedSession(normalizedID);
-    if (!restored) return { vault, legacyMigrated: false, restored: false };
+    restored = rememberedRestored;
   }
 
-  await accountRepository.save(legacySnapshot);
-  if (typeof legacyRepository.loadSync === "function" && typeof accountRepository.saveSync === "function") {
-    const sync = await legacyRepository.loadSync();
-    if (sync) await accountRepository.saveSync(sync);
-  }
-  vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID });
-  if (passphrase !== null) await vault.unlock(passphrase);
-  else {
-    await vault.unlockWithSessionKey(legacyVault.sessionKey());
+  await accountRepository.importLegacyStateIfAbsent({ snapshot: legacySnapshot, sync: legacyState.sync, owner: normalizedID });
+  requireCurrent();
+  let migratedUnlockState = unlockState;
+  if (passphrase === null && restored) {
     if (typeof accountRepository.saveSessionUnlock !== "function") {
       throw new Error("local_vault_storage_unavailable");
     }
-    await accountRepository.saveSessionUnlock(validatedSessionUnlock(remembered, normalizedID));
+    const unlock = validatedSessionUnlock(remembered, normalizedID);
+    if (unlockGeneration !== null && typeof accountRepository.saveSessionUnlockIfCurrent === "function") {
+      if (await accountRepository.saveSessionUnlockIfCurrent(unlock, unlockGeneration, unlockState.unlock)) {
+        migratedUnlockState = { generation: unlockGeneration + 1, unlock };
+      }
+    } else await accountRepository.saveSessionUnlock(unlock);
+    requireCurrent();
   }
+  vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID, initialUnlockState: migratedUnlockState });
+  await onController(vault);
+  requireCurrent();
+  if (passphrase !== null) await vault.unlock(passphrase);
+  else if (restored) await vault.unlockWithSessionKey(legacyVault.sessionKey());
+  requireCurrent();
   return { vault, legacyMigrated: true, restored };
 }
 
@@ -447,6 +870,7 @@ export function createLocalVaultController({
   cryptoValue = globalThis.crypto,
   now = () => new Date().toISOString(),
   randomUUID = () => cryptoValue.randomUUID(),
+  initialUnlockState = null,
 } = {}) {
   if (!repository || typeof repository.load !== "function" || typeof repository.save !== "function") {
     throw new Error("invalid_local_vault_repository");
@@ -456,6 +880,35 @@ export function createLocalVaultController({
   let vaultKey = null;
   let document = null;
   let pendingConflicts = null;
+  let lockGeneration = 0;
+  let observedUnlockState = initialUnlockState ? clone(initialUnlockState) : null;
+  let observedUnlockGeneration = observedUnlockState?.generation ?? -1;
+  // A value merely read from shared storage may belong to another session.
+  let claimedUnlockState = null;
+  const pendingSessionUnlocks = new Set();
+
+  function observeClaimedUnlock(state) {
+    if (!claimedUnlockState || state.generation > claimedUnlockState.generation) claimedUnlockState = clone(state);
+  }
+
+  function observeUnlockState(state) {
+    if (!state || !Number.isSafeInteger(state.generation) || state.generation < 0) {
+      throw new Error("local_vault_storage_failed");
+    }
+    if (state.generation > observedUnlockGeneration) {
+      observedUnlockGeneration = state.generation;
+      observedUnlockState = clone(state);
+    } else if (state.generation === observedUnlockGeneration && observedUnlockState
+        && !sameSessionUnlock(observedUnlockState.unlock, state.unlock)) {
+      // An older client may replace the record without advancing generation.
+      // Do not let an ambiguous observation authorize a later deletion.
+      observedUnlockState = null;
+    }
+  }
+
+  function requireGeneration(expected) {
+    if (lockGeneration !== expected) throw new Error("local_vault_locked");
+  }
 
   async function stableDeviceID() {
     if (snapshot?.deviceID) return snapshot.deviceID;
@@ -468,42 +921,68 @@ export function createLocalVaultController({
 
   async function syncMetadata() {
     if (typeof repository.loadSync !== "function") return null;
-    const value = await repository.loadSync();
+    const value = snapshot && typeof repository.loadSyncForSnapshot === "function"
+      ? await repository.loadSyncForSnapshot(snapshot) : await repository.loadSync();
     return value ? validatedSyncMetadata(value) : null;
   }
 
-  async function saveSyncMetadata(value) {
+  async function saveSyncMetadata(value, { requireCurrent = () => {} } = {}) {
     if (typeof repository.saveSync !== "function") throw new Error("local_vault_sync_storage_unavailable");
-    await repository.saveSync(validatedSyncMetadata(value));
+    const generation = lockGeneration, expected = snapshot;
+    const metadata = validatedSyncMetadata(value);
+    const previous = await syncMetadata();
+    requireCurrent();
+    requireGeneration(generation);
+    if (snapshot !== expected) throw new Error("local_vault_changed");
+    if (previous && previous.serverRevision === metadata.serverRevision && previous.serverContentHash) {
+      if (metadata.serverContentHash && previous.serverContentHash !== metadata.serverContentHash) {
+        throw new Error("local_vault_sync_changed");
+      }
+      metadata.serverContentHash = previous.serverContentHash;
+    }
+    if (expected && typeof repository.saveSyncIfCurrent === "function") await repository.saveSyncIfCurrent(expected, metadata, { requireCurrent });
+    else await repository.saveSync(metadata);
+    requireCurrent();
+    requireGeneration(generation);
+    if (snapshot !== expected) throw new Error("local_vault_changed");
   }
 
   function requireUnlocked() {
     if (!snapshot || !vaultKey || !document) throw new Error("local_vault_locked");
   }
 
-  async function persist(nextDocument) {
+  async function persist(nextDocument, { returnSnapshot = false, requireCurrent = () => {} } = {}) {
     requireUnlocked();
+    requireCurrent();
+    const generation = lockGeneration;
+    const expected = snapshot;
     const normalized = validateVaultDocument(nextDocument);
     const envelope = await encryptVaultPayload({
       vaultKey,
       payload: normalized,
-      baseRevision: snapshot.revision,
-      wrappedKey: snapshot.envelope.wrappedKey,
+      baseRevision: expected.revision,
+      wrappedKey: expected.envelope.wrappedKey,
       cryptoValue,
     });
     const nextSnapshot = validatedSnapshot({
-      revision: snapshot.revision + 1,
-      deviceID: snapshot.deviceID,
+      revision: expected.revision + 1,
+      deviceID: expected.deviceID,
       envelope,
     });
-    await repository.save(nextSnapshot);
+    requireGeneration(generation);
+    requireCurrent();
+    if (typeof repository.saveIfCurrent === "function") await repository.saveIfCurrent(expected, nextSnapshot, { requireCurrent });
+    else await repository.save(nextSnapshot);
+    requireGeneration(generation);
+    requireCurrent();
     snapshot = nextSnapshot;
     document = normalized;
-    return clone(document);
+    return returnSnapshot ? clone(nextSnapshot) : clone(document);
   }
 
   async function unlockUsingSessionKey(nextVaultKey) {
     if (snapshot || vaultKey || document) throw new Error("local_vault_not_locked");
+    const generation = lockGeneration;
     const algorithm = nextVaultKey?.algorithm;
     const usages = Array.from(nextVaultKey?.usages ?? []);
     if (nextVaultKey?.type !== "secret"
@@ -519,6 +998,7 @@ export function createLocalVaultController({
     const nextDocument = validateVaultDocument(
       await decryptVaultEnvelope(nextVaultKey, nextSnapshot.envelope, cryptoValue),
     );
+    requireGeneration(generation);
     snapshot = nextSnapshot;
     vaultKey = nextVaultKey;
     document = nextDocument;
@@ -533,6 +1013,7 @@ export function createLocalVaultController({
     },
 
     async create(passphrase) {
+      const generation = lockGeneration;
       if (await repository.load()) throw new Error("local_vault_exists");
       const nextVaultKey = await generateVaultKey(cryptoValue);
       const wrappedKey = await wrapVaultKey(nextVaultKey, passphrase, cryptoValue);
@@ -545,7 +1026,10 @@ export function createLocalVaultController({
         cryptoValue,
       });
       const nextSnapshot = validatedSnapshot({ revision: 1, deviceID: await stableDeviceID(), envelope });
-      await repository.save(nextSnapshot);
+      requireGeneration(generation);
+      if (typeof repository.saveInitial === "function") await repository.saveInitial(nextSnapshot);
+      else await repository.save(nextSnapshot);
+      requireGeneration(generation);
       snapshot = nextSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
@@ -554,16 +1038,19 @@ export function createLocalVaultController({
     },
 
     async unlock(passphrase) {
+      const generation = lockGeneration;
       snapshot = null;
       vaultKey = null;
       document = null;
       const stored = await repository.load();
+      requireGeneration(generation);
       if (!stored) throw new Error("local_vault_missing");
       const nextSnapshot = validatedSnapshot(stored);
       const nextVaultKey = await unwrapVaultKey(nextSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
       const nextDocument = validateVaultDocument(
         await decryptVaultEnvelope(nextVaultKey, nextSnapshot.envelope, cryptoValue),
       );
+      requireGeneration(generation);
       snapshot = nextSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
@@ -576,6 +1063,24 @@ export function createLocalVaultController({
       return vaultKey;
     },
 
+    async bindAccountOwnership(accountValue) {
+      requireUnlocked();
+      if (typeof repository.saveOwnershipBinding !== "function") throw new Error("local_vault_storage_unavailable");
+      await repository.saveOwnershipBinding({
+        version: 1, accountID: normalizedAccountID(accountValue), wrappedKey: snapshot.envelope.wrappedKey,
+      });
+    },
+
+    async hasAccountOwnership(accountValue) {
+      requireUnlocked();
+      if (typeof repository.loadOwnershipBinding !== "function") return false;
+      const accountID = normalizedAccountID(accountValue);
+      const value = await repository.loadOwnershipBinding();
+      if (!value) return false;
+      const binding = validatedOwnershipBinding(value, accountID);
+      return sameWrappedKey(binding.wrappedKey, snapshot.envelope.wrappedKey);
+    },
+
     unlockWithSessionKey: unlockUsingSessionKey,
 
     async rememberSession(accountValue) {
@@ -583,42 +1088,71 @@ export function createLocalVaultController({
       if (typeof repository.loadSessionDeviceKey !== "function"
           || typeof repository.saveSessionDeviceKey !== "function"
           || typeof repository.saveSessionUnlock !== "function") return false;
-      if (vaultKey.extractable !== true) return false;
+      const capturedGeneration = lockGeneration, rememberedVaultKey = vaultKey;
+      if (rememberedVaultKey.extractable !== true) return false;
       const accountID = normalizedAccountID(accountValue);
+      const unlockState = typeof repository.loadSessionUnlockState === "function"
+        ? await repository.loadSessionUnlockState() : null;
+      if (unlockState && !observedUnlockState && observedUnlockGeneration < 0 && unlockState.unlock === null) {
+        observeUnlockState(unlockState);
+      }
+      const unlockGeneration = unlockState?.generation ?? null;
+      if (lockGeneration !== capturedGeneration) return false;
       let sessionKey = await repository.loadSessionDeviceKey();
       if (sessionKey) sessionKey = validatedSessionDeviceKey(sessionKey);
       else {
         sessionKey = await cryptoValue.subtle.generateKey(
           { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
         );
-        await repository.saveSessionDeviceKey(sessionKey);
+        if (typeof repository.saveSessionDeviceKeyIfAbsent === "function") {
+          sessionKey = validatedSessionDeviceKey(await repository.saveSessionDeviceKeyIfAbsent(sessionKey));
+        } else await repository.saveSessionDeviceKey(sessionKey);
       }
       const nonce = cryptoValue.getRandomValues(new Uint8Array(12));
-      const rawVaultKey = new Uint8Array(await cryptoValue.subtle.exportKey("raw", vaultKey));
+      const rawVaultKey = new Uint8Array(await cryptoValue.subtle.exportKey("raw", rememberedVaultKey));
       try {
         const ciphertext = new Uint8Array(await cryptoValue.subtle.encrypt(
           { name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(`${sessionUnlockContext}${accountID}`) },
           sessionKey,
           rawVaultKey,
         ));
-        await repository.saveSessionUnlock({
+        const unlock = {
           version: sessionUnlockVersion, accountID, nonce, ciphertext,
-        });
-        return true;
+        };
+        if (lockGeneration !== capturedGeneration) return false;
+        const pending = { unlock, base: unlockState ? clone(unlockState) : null };
+        pendingSessionUnlocks.add(pending);
+        try {
+          if (unlockGeneration !== null && typeof repository.saveSessionUnlockIfCurrent === "function") {
+            if (!await repository.saveSessionUnlockIfCurrent(unlock, unlockGeneration, unlockState.unlock)) return false;
+            observeUnlockState({ generation: unlockGeneration + 1, unlock });
+            observeClaimedUnlock({ generation: unlockGeneration + 1, unlock });
+          } else await repository.saveSessionUnlock(unlock);
+          if (lockGeneration !== capturedGeneration) return false;
+          return true;
+        } finally { pendingSessionUnlocks.delete(pending); }
       } finally {
         rawVaultKey.fill(0);
       }
     },
 
     async restoreRememberedSession(accountValue) {
+      const generation = lockGeneration;
       if (typeof repository.loadSessionDeviceKey !== "function"
           || typeof repository.loadSessionUnlock !== "function") return false;
       if (snapshot && vaultKey && document) return false;
       if (!await repository.load()) return false;
       const accountID = normalizedAccountID(accountValue);
       try {
+        const unlockState = typeof repository.loadSessionUnlockState === "function"
+          ? await repository.loadSessionUnlockState() : null;
+        if (unlockState && observedUnlockState
+            && (unlockState.generation !== observedUnlockState.generation
+              || !sameSessionUnlock(unlockState.unlock, observedUnlockState.unlock))) return false;
+        if (unlockState && !observedUnlockState && observedUnlockGeneration >= 0) return false;
         const sessionKey = validatedSessionDeviceKey(await repository.loadSessionDeviceKey());
         const remembered = validatedSessionUnlock(await repository.loadSessionUnlock(), accountID);
+        if (unlockState && !sameSessionUnlock(unlockState.unlock, remembered)) return false;
         const rawVaultKey = new Uint8Array(await cryptoValue.subtle.decrypt(
           { name: "AES-GCM", iv: remembered.nonce, additionalData: new TextEncoder().encode(`${sessionUnlockContext}${accountID}`) },
           sessionKey,
@@ -628,22 +1162,64 @@ export function createLocalVaultController({
           const nextVaultKey = await cryptoValue.subtle.importKey(
             "raw", rawVaultKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
           );
+          requireGeneration(generation);
+          if (unlockState && typeof repository.saveSessionUnlockIfCurrent === "function") {
+            // Claim a distinct remembered record for this controller. A late
+            // logout from an older tab must not delete a session restored now.
+            const nonce = cryptoValue.getRandomValues(new Uint8Array(12));
+            const ciphertext = new Uint8Array(await cryptoValue.subtle.encrypt(
+              { name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(`${sessionUnlockContext}${accountID}`) },
+              sessionKey,
+              rawVaultKey,
+            ));
+            requireGeneration(generation);
+            const unlock = { version: sessionUnlockVersion, accountID, nonce, ciphertext };
+            const pending = { unlock, base: clone(unlockState) };
+            pendingSessionUnlocks.add(pending);
+            try {
+              if (!await repository.saveSessionUnlockIfCurrent(unlock, unlockState.generation, unlockState.unlock)) return false;
+              observeUnlockState({ generation: unlockState.generation + 1, unlock });
+              observeClaimedUnlock({ generation: unlockState.generation + 1, unlock });
+            } finally { pendingSessionUnlocks.delete(pending); }
+            requireGeneration(generation);
+          } else if (unlockState && !observedUnlockState) observeUnlockState(unlockState);
           await unlockUsingSessionKey(nextVaultKey);
+          requireGeneration(generation);
           return true;
         } finally {
           rawVaultKey.fill(0);
         }
       } catch {
-        if (typeof repository.deleteSessionUnlock === "function") await repository.deleteSessionUnlock();
+        // A concurrent tab may have replaced the record since it was read.
+        // Preserve it; an explicit successful unlock can safely replace it.
         return false;
       }
     },
 
+    async forgetTrackedRememberedSession() {
+      if (typeof repository.deleteSessionUnlockIfCurrent !== "function") return false;
+      const expected = claimedUnlockState ? clone(claimedUnlockState) : null;
+      const pending = [...pendingSessionUnlocks].map(clone);
+      if (!expected && !pending.length) {
+        // Preserve any unclaimed record; its owner cannot be established here.
+        if (typeof repository.loadSessionUnlock !== "function") return false;
+        return (await repository.loadSessionUnlock()) == null;
+      }
+      return repository.deleteSessionUnlockIfCurrent(expected, pending, { strictGeneration: true });
+    },
+
     async forgetRememberedSession() {
+      if (typeof repository.deleteSessionUnlockIfCurrent === "function") {
+        const expected = observedUnlockState ? clone(observedUnlockState) : null;
+        const pending = [...pendingSessionUnlocks].map(clone);
+        if (!expected && !pending.length) return false;
+        return repository.deleteSessionUnlockIfCurrent(expected, pending);
+      }
       if (typeof repository.deleteSessionUnlock === "function") await repository.deleteSessionUnlock();
     },
 
     lock() {
+      lockGeneration += 1;
       snapshot = null;
       vaultKey = null;
       document = null;
@@ -652,20 +1228,25 @@ export function createLocalVaultController({
 
     async rewrap(passphrase) {
       requireUnlocked();
+      const generation = lockGeneration;
+      const expected = snapshot;
       const wrappedKey = await wrapVaultKey(vaultKey, passphrase, cryptoValue);
       const envelope = await encryptVaultPayload({
         vaultKey,
         payload: document,
-        baseRevision: snapshot.revision,
+        baseRevision: expected.revision,
         wrappedKey,
         cryptoValue,
       });
       const nextSnapshot = validatedSnapshot({
-        revision: snapshot.revision + 1,
-        deviceID: snapshot.deviceID,
+        revision: expected.revision + 1,
+        deviceID: expected.deviceID,
         envelope,
       });
-      await repository.save(nextSnapshot);
+      requireGeneration(generation);
+      if (typeof repository.saveIfCurrent === "function") await repository.saveIfCurrent(expected, nextSnapshot);
+      else await repository.save(nextSnapshot);
+      requireGeneration(generation);
       snapshot = nextSnapshot;
       return clone(document);
     },
@@ -689,27 +1270,47 @@ export function createLocalVaultController({
       };
     },
 
+    async requireConfirmedSyncHistory({ remoteRevision = null } = {}) {
+      requireUnlocked();
+      const generation = lockGeneration, current = snapshot;
+      const metadata = await syncMetadata();
+      requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
+      if (metadata?.serverRevision > 0 && !metadata.serverContentHash
+          && (metadata.localRevision !== current.revision
+            || (remoteRevision !== null && remoteRevision !== metadata.serverRevision))) {
+        throw new Error("remote_history_unverified");
+      }
+    },
+
     async prepareUpload(baseRevision) {
       requireUnlocked();
+      const generation = lockGeneration, current = snapshot;
       if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) throw new Error("invalid_base_revision");
+      const envelope = await encryptVaultPayload({
+        vaultKey,
+        payload: document,
+        baseRevision,
+        wrappedKey: current.envelope.wrappedKey,
+        cryptoValue,
+      });
+      requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
       return {
-        localRevision: snapshot.revision,
-        envelope: await encryptVaultPayload({
-          vaultKey,
-          payload: document,
-          baseRevision,
-          wrappedKey: snapshot.envelope.wrappedKey,
-          cryptoValue,
-        }),
+        localRevision: current.revision,
+        envelope,
       };
     },
 
-    async markSynced({ serverRevision, localRevision }) {
+    async markSynced({ serverRevision, localRevision, serverContentHash = null, requireCurrent = () => {} }) {
       requireUnlocked();
+      requireCurrent();
       if (!Number.isSafeInteger(localRevision) || localRevision < 1 || localRevision > snapshot.revision) {
         throw new Error("invalid_local_vault_sync");
       }
-      await saveSyncMetadata({ serverRevision, localRevision });
+      const metadata = { serverRevision, localRevision,
+        ...(serverContentHash ? { serverContentHash } : {}) };
+      await saveSyncMetadata(metadata, { requireCurrent });
       return {
         localRevision: snapshot.revision,
         serverRevision,
@@ -717,31 +1318,78 @@ export function createLocalVaultController({
       };
     },
 
-    async mergeRemote({ revision, envelope }) {
+    verifyRemoteWrapper({ revision, envelope }) {
       requireUnlocked();
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      if (!sameWrappedKey(remoteSnapshot.envelope.wrappedKey, snapshot.envelope.wrappedKey)) {
+        throw new Error("remote_wrapped_key_changed");
+      }
+    },
+
+    async verifySameRevisionRemote({ revision, envelope }, { dirty, requireCurrent = () => {} }) {
+      requireUnlocked();
+      requireCurrent();
+      const generation = lockGeneration;
+      const current = snapshot;
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      if (!sameWrappedKey(remoteSnapshot.envelope.wrappedKey, snapshot.envelope.wrappedKey)) {
+        throw new Error("remote_wrapped_key_changed");
+      }
       const remoteDocument = validateVaultDocument(
         await decryptVaultEnvelope(vaultKey, remoteSnapshot.envelope, cryptoValue),
       );
+      requireGeneration(generation);
+      requireCurrent();
+      if (snapshot !== current) throw new Error("local_vault_changed");
+      const metadata = await syncMetadata();
+      requireGeneration(generation);
+      requireCurrent();
+      if (snapshot !== current || !metadata || metadata.serverRevision !== revision
+          || (metadata.localRevision !== current.revision) !== dirty) throw new Error("local_vault_sync_changed");
+      if (metadata.serverContentHash && metadata.serverContentHash !== envelope.contentHash) {
+        throw new Error("remote_same_revision_changed");
+      }
+      if (!metadata.serverContentHash && dirty) throw new Error("remote_history_unverified");
+      if (!dirty && JSON.stringify(remoteDocument) !== JSON.stringify(document)) throw new Error("remote_same_revision_changed");
+      if (!metadata.serverContentHash) {
+        await saveSyncMetadata({ ...metadata, serverContentHash: envelope.contentHash }, { requireCurrent });
+        requireGeneration(generation);
+        requireCurrent();
+        if (snapshot !== current) throw new Error("local_vault_changed");
+      }
+    },
+
+    async mergeRemote({ revision, envelope }) {
+      requireUnlocked();
+      const generation = lockGeneration;
+      const current = snapshot;
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID: snapshot.deviceID, envelope });
+      const remoteDocument = validateVaultDocument(
+        await decryptVaultEnvelope(vaultKey, remoteSnapshot.envelope, cryptoValue),
+      );
+      requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
+      await this.requireConfirmedSyncHistory({ remoteRevision: revision });
+      requireGeneration(generation);
+      if (snapshot !== current) throw new Error("local_vault_changed");
       if (!sameWrappedKey(remoteSnapshot.envelope.wrappedKey, snapshot.envelope.wrappedKey)) {
         throw new Error("remote_wrapped_key_changed");
       }
       const merged = mergeVaultDocuments(document, remoteDocument);
-      const automaticallyResolved = merged.conflicts.length;
-      if (automaticallyResolved > 0) {
-        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
-          deviceID: snapshot.deviceID,
-          resolvedAt: now(),
-        });
+      if (merged.conflicts.length > 0) {
+        pendingConflicts = { revision, document: merged.document, conflicts: merged.conflicts,
+          sourceSnapshot: snapshot, remoteContentHash: envelope.contentHash };
+        return { conflicts: clone(merged.conflicts), matchesRemote: false,
+          localRevision: snapshot.revision, localChanged: false };
       }
       pendingConflicts = null;
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
       const localChanged = JSON.stringify(merged.document) !== JSON.stringify(document);
-      if (localChanged) await persist(merged.document);
+      const matchedSnapshot = localChanged ? await persist(merged.document, { returnSnapshot: true }) : clone(snapshot);
       return {
         conflicts: [],
-        automaticallyResolved,
         matchesRemote,
+        localRevision: matchedSnapshot.revision,
         localChanged,
       };
     },
@@ -753,11 +1401,13 @@ export function createLocalVaultController({
         : null;
     },
 
-    async resolveConflicts({ revision, resolutions }) {
+    async resolveConflicts({ revision, resolutions, requireCurrent = () => {} }) {
       requireUnlocked();
+      requireCurrent();
       if (!pendingConflicts || revision !== pendingConflicts.revision || !Array.isArray(resolutions)) {
         throw new Error("invalid_pending_conflicts");
       }
+      if (snapshot !== pendingConflicts.sourceSnapshot) throw new Error("invalid_pending_conflicts");
       if (resolutions.length !== pendingConflicts.conflicts.length) {
         throw new Error("incomplete_conflict_resolution");
       }
@@ -786,9 +1436,11 @@ export function createLocalVaultController({
         });
       }
       const previousLocalRevision = snapshot.revision;
-      await persist(resolvedDocument);
+      const remoteContentHash = pendingConflicts.remoteContentHash;
+      await persist(resolvedDocument, { requireCurrent });
+      requireCurrent();
       pendingConflicts = null;
-      await saveSyncMetadata({ serverRevision: revision, localRevision: previousLocalRevision });
+      await saveSyncMetadata({ serverRevision: revision, localRevision: previousLocalRevision, serverContentHash: remoteContentHash }, { requireCurrent });
       return {
         revision,
         localRevision: snapshot.revision,
@@ -797,15 +1449,23 @@ export function createLocalVaultController({
     },
 
     async importRemote({ revision, envelope }, passphrase) {
+      const generation = lockGeneration;
       if (await repository.load()) throw new Error("local_vault_exists");
       const deviceID = await stableDeviceID();
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID, envelope });
+      const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID, envelope });
       const nextVaultKey = await unwrapVaultKey(remoteSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
       const nextDocument = validateVaultDocument(
         await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
       );
-      await repository.save(remoteSnapshot);
-      await saveSyncMetadata({ serverRevision: revision, localRevision: revision });
+      requireGeneration(generation);
+      if (typeof repository.saveInitial === "function") {
+        await repository.saveInitial(remoteSnapshot, { serverRevision: revision, localRevision: revision,
+          serverContentHash: envelope.contentHash });
+      } else {
+        await repository.save(remoteSnapshot);
+        await saveSyncMetadata({ serverRevision: revision, localRevision: revision, serverContentHash: envelope.contentHash });
+      }
+      requireGeneration(generation);
       snapshot = remoteSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
@@ -813,23 +1473,11 @@ export function createLocalVaultController({
       return clone(document);
     },
 
-    async replaceLockedWithRemote({ revision, envelope }, passphrase) {
-      if (await this.status() !== "locked") throw new Error("local_vault_not_locked");
-      const deviceID = await stableDeviceID();
-      const remoteSnapshot = validatedSnapshot({ revision, deviceID, envelope });
-      const nextVaultKey = await unwrapVaultKey(remoteSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
-      const nextDocument = validateVaultDocument(
-        await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
-      );
-      const previousSnapshot = validatedSnapshot(await repository.load());
-      if (typeof repository.savePrevious === "function") await repository.savePrevious(previousSnapshot);
-      await repository.save(remoteSnapshot);
-      await saveSyncMetadata({ serverRevision: revision, localRevision: revision });
-      snapshot = remoteSnapshot;
-      vaultKey = nextVaultKey;
-      document = nextDocument;
-      pendingConflicts = null;
-      return clone(document);
+    async replaceLockedWithRemote() {
+      if (snapshot || vaultKey || document) throw new Error("local_vault_not_locked");
+      // A decryptable remote copy does not prove that an inaccessible local
+      // copy has no unsynchronized changes. Preserve it for recovery.
+      throw new Error("local_vault_recovery_required");
     },
 
     async upsert({ id = randomUUID(), type, data }) {

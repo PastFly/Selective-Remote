@@ -277,7 +277,13 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
         _ = try await client.teams(endpoint: endpoint)
     }
     func resetProcessEpoch() { SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint) }
-    func restoreAuthentication() { tokens.saveToken(String(repeating: "a", count: 40), for: fixture.scope.endpoint) }
+    func restoreAuthentication() throws {
+        let endpoint = fixture.scope.endpoint
+        let epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        try SelectiveRemotePublicationLifecycle.transitionIfCurrent(endpoint: endpoint, expectedEpoch: epoch) { _ in
+            tokens.saveToken(String(repeating: "b", count: 40), for: endpoint)
+        }
+    }
     func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws {
         _ = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: protected).retireScopes(session: session, selection: selection)
     }
@@ -286,7 +292,8 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
     }
     func hasStoredSession(endpoint: URL) async -> Bool { true }
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession? {
-        .init(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "a", count: 40), tokenStore: tokens)
+        guard let token = tokens.token(for: fixture.scope.endpoint) else { return nil }
+        return .init(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
     }
     func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState {
         if listFault == "format-auth" { try await rejectAuthentication(endpoint: endpoint) }
@@ -362,7 +369,7 @@ struct CloudVaultPublicationAutoSyncTests {
         await remote.setListFault(fault)
         if fault == "team-denied" || fault.hasPrefix("team-auth") { await #expect(throws: Error.self) { try await auto.synchronizeOnce(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) } }
         else { _ = try await auto.synchronizeOnce(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) }
-        await remote.restoreAuthentication()
+        try await remote.restoreAuthentication()
         let checking = try #require(try await remote.publicationSession(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID))
         #expect(try store.load(scope: fixture.scope, session: checking) == nil)
         #expect(try store.cachedScopes(session: checking).isEmpty)
@@ -410,6 +417,28 @@ struct CloudVaultPublicationAutoSyncTests {
 
 @Suite("actual published native models")
 struct CloudVaultPublicationActualModelTests {
+    @MainActor
+    @Test("Cancelled cleanup keeps a still-authorized V2 presentation")
+    func cancelledCleanupPreservesValidPublication() async throws {
+        let fixture = try PublicationFixture()
+        let (reader, _, _, session, directory) = try CloudVaultPublicationCoordinatorTests().setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner)
+        let snapshot = try cache.materializedSnapshot()
+        let reference = try #require(try cache.reference(cache.parts[0]) as SelectiveRemotePublishedModelReference?)
+        let presentation = SelectiveRemotePublicationPresentation()
+        try presentation.bind(reader: reader, session: session, scope: fixture.scope, cache: cache)
+        presentation.replace(with: [snapshot])
+        let cleanup = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            #expect(!presentation.valid(reference))
+            #expect(presentation.validIgnoringTaskCancellation(reference))
+            presentation.clearInvalidSessions(endpoint: fixture.scope.endpoint)
+        }
+        await cleanup.value
+        #expect(presentation.valid(reference))
+    }
+
     @MainActor
     @Test("actual JS converter output materializes assigned IDs, duplicate ordinals, missing IDs and byte-distinct folders through native crypto")
     func actualConverter() async throws {

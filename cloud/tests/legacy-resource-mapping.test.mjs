@@ -86,3 +86,22 @@ test('custodian metadata preserves tombstones/clocks/source fingerprint without 
   assert.throws(()=>legacyAdministrativeMetadata({document:{...doc,duplicatePayload:doc.records},mapping:map,
     sourceFingerprint:'a'.repeat(64)}),/unsupported_source_metadata/);
 });
+
+test('native Forwarding base64url configuration survives inventory byte-exactly',async()=>{
+ const {stagingV1Records}=await import('./browser/staging-real-lifecycle.mjs'),forward=stagingV1Records().find(r=>r.type==='forwarding'),document=legacy([{...forward,version:1,modifiedAt:1800000000}]),before=JSON.stringify(document);
+ assert.deepEqual(inspectLegacyResources(document).blockers,[]);
+ const mapped=mapLegacyResources({document,scope:{teamID:uuid(),vaultID:uuid()},cryptoValue:c});assert.equal(mapped.resources[0].id,forward.id);assert.equal(JSON.stringify(document),before);
+ const decoded=JSON.parse(Buffer.from(forward.data.configuration,'base64url'));assert.equal(decoded.id,forward.id);assert.equal(decoded.rule.id,forward.id);
+ const sorted=JSON.stringify(decoded,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);assert.equal(forward.data.configuration,Buffer.from(sorted).toString('base64url')); // Native JSONEncoder.sortedKeys + withoutEscapingSlashes + base64url.
+});
+test('native configuration decoding retains JSON compatibility and rejects opaque, noncanonical, invalid UTF8, wrong shape and embedded secrets',()=>{
+ const resourceID=uuid(),native={id:resourceID,connection:{kind:'custom',host:'synthetic.invalid',username:'synthetic',port:22},rule:{id:resourceID,name:'fixture',kind:'local',bindAddress:'127.0.0.1',sourcePort:19090,destinationHost:'127.0.0.1',destinationPort:19091}},encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+ const inspect=(type,configuration,key='configuration')=>inspectLegacyResources(legacy([record(type,{[key]:configuration},resourceID)])).blockers;
+ assert.deepEqual(inspect('forwarding',JSON.stringify(native)),[]);
+ const badUTF8=Buffer.from(JSON.stringify(native));badUTF8[badUTF8.indexOf('synthetic.invalid')]=255;assert.ok(inspect('forwarding',badUTF8.toString('base64url')).includes('opaque_profile_requires_conversion'));
+ const tailNative=structuredClone(native);while(Buffer.byteLength(JSON.stringify(tailNative))%3===0)tailNative.rule.name+='x';const canonical=encode(tailNative),alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_',noncanonical=canonical.slice(0,-1)+alphabet[alphabet.indexOf(canonical.at(-1))+1];assert.equal(Buffer.from(canonical,'base64url').equals(Buffer.from(noncanonical,'base64url')),true);assert.ok(inspect('forwarding',noncanonical).includes('opaque_profile_requires_conversion'));
+ for(const value of [encode(native)+'=',encode(native)+'!',Buffer.from([0xff]).toString('base64url'),encode([]),encode({}),encode({...native,id:uuid()}),encode({...native,rule:{...native.rule,id:uuid()}}),encode({...native,connection:{...native.connection,unknown:'value'}}),'opaque'])assert.ok(inspect('forwarding',value).includes('opaque_profile_requires_conversion'));
+ assert.ok(inspect('host',encode(native)).includes('opaque_profile_requires_conversion'));assert.ok(inspect('forwarding',encode(native),'profile').includes('opaque_profile_requires_conversion'));
+ assert.ok(inspect('forwarding',encode({...native,connection:{...native.connection,password:'SYNTHETIC_SECRET'}})).includes('embedded_secret_requires_conversion'));
+ assert.ok(inspect('forwarding',JSON.stringify({...native,rule:{...native.rule,token:'SYNTHETIC_SECRET'}})).includes('embedded_secret_requires_conversion'));
+});

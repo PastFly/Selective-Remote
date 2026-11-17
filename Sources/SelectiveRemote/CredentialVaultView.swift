@@ -906,7 +906,7 @@ struct CredentialVaultView: View {
             Divider()
             if agentLoadedKeyIDs.contains(key.id) {
                 Button("Убрать из ssh-agent", systemImage: "minus.circle") {
-                    model.removeSSHKeyFromAgentAndKeychain(key.id)
+                    model.removeSSHKeyFromAgent(key.id)
                     refreshAgentState()
                 }
             } else {

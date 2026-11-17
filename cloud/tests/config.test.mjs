@@ -184,3 +184,34 @@ test("mail configuration rejects placeholders and insecurely short credentials",
     /SMTP_PASSWORD must contain at least 16 characters/,
   );
 });
+
+test("enabled publication requires an independent absolute compatibility fence", () => {
+  const enabled = { ...baseEnv, PUBLICATION_READER_ENABLED: "true", PUBLICATION_ENVIRONMENT: "staging",
+    PUBLICATION_CURSOR_SECRET: "c".repeat(32), PUBLICATION_ALLOWED_VAULT_IDS: "12345678-1234-4234-a234-123456789012" };
+  assert.throws(() => loadConfig(enabled), /PUBLICATION_FENCE_PATH/);
+  assert.throws(() => loadConfig({ ...enabled, PUBLICATION_FENCE_PATH: "relative/fence" }), /PUBLICATION_FENCE_PATH/);
+  assert.equal(loadConfig({ ...enabled, PUBLICATION_FENCE_PATH: "/var/lib/independent/fence.jsonl" }).deployment.fencePath,
+    "/var/lib/independent/fence.jsonl");
+  assert.equal(loadConfig(baseEnv).deployment.fencePath, null);
+});
+
+test('optional test registration permits exactly two canonical staging emails and stays absent by default',()=>{
+  assert.equal(loadConfig(baseEnv).registrationEmailAllowlist,null);
+  const env={...baseEnv,PUBLICATION_ENVIRONMENT:'staging',STAGING_REGISTRATION_EMAIL_ALLOWLIST:'first@example.test,second@example.test'};
+  assert.deepEqual(loadConfig(env).registrationEmailAllowlist,['first@example.test','second@example.test']);
+  for(const changes of [{PUBLICATION_ENVIRONMENT:'production'},{PUBLICATION_ENVIRONMENT:undefined},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:''},{STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test'},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test,one@example.test'},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'One@example.test,two@example.test'},
+    {STAGING_REGISTRATION_EMAIL_ALLOWLIST:'one@example.test,two@example.test,three@example.test'}])
+    assert.throws(()=>loadConfig({...env,...changes}),/STAGING_REGISTRATION_EMAIL_ALLOWLIST/);
+});
+
+test('anchor configuration must include the journal and is passed to runtime settings', async()=>{
+  const {rootCertificates}=await import('node:tls');
+  const anchor={PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:synthetic@external-anchor.example/fence',
+    PUBLICATION_FENCE_ANCHOR_ID:'11111111-1111-4111-8111-111111111111',
+    PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64')};
+  assert.throws(()=>loadConfig({...baseEnv,...anchor}),/invalid_deployment_anchor_configuration/);
+  assert.equal(loadConfig({...baseEnv,...anchor,PUBLICATION_FENCE_PATH:'/tmp/fence'}).deployment.anchor.deploymentID,anchor.PUBLICATION_FENCE_ANCHOR_ID);
+});

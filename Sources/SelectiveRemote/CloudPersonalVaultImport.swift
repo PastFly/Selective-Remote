@@ -294,10 +294,8 @@ enum SelectiveRemotePersonalVaultImporter {
     }
 
     private static func integer(_ value: SelectiveRemoteJSONValue?) -> Int? {
-        guard case let .number(result)? = value, result.rounded() == result,
-              result >= Double(Int.min), result <= Double(Int.max)
-        else { return nil }
-        return Int(result)
+        guard case let .number(result)? = value else { return nil }
+        return Int(exactly: result)
     }
 
     private static func decode<T: Decodable>(_ value: String, recordID: UUID) throws -> T {

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import {verifyControllerFixture} from "../scripts/verify-staging-controller.mjs";
 import { fileURLToPath } from "node:url";
 
 const composePath = fileURLToPath(new URL("../compose.postgres-bind.yaml", import.meta.url));
@@ -40,28 +41,30 @@ test("Compose profile replaces the PG volume and disables daemon auto-start", as
   assert.doesNotMatch(source, /5432:|8080:/);
 });
 
-test("guarded starter validates before Compose config and start", async () => {
-  const source = await readFile(starterPath, "utf8");
-  const sourceGuard = source.indexOf("validate-postgres-bind-source.mjs");
-  const storageGuard = source.indexOf('validate-postgres-storage.sh" --check');
-  const config = source.indexOf("config --quiet");
-  const model = source.indexOf("validate-postgres-bind-model.mjs");
-  const start = source.indexOf("up -d");
-  assert.ok(
-    sourceGuard >= 0 &&
-      sourceGuard < storageGuard &&
-      storageGuard < config &&
-      config < model &&
-      model < start,
-  );
-  assert.match(source, /--project-directory/);
-  assert.match(source, /compose_files/);
+test("guarded starter retains storage/model validation before migration and traffic", async () => {
+  const wrapper = await readFile(starterPath, "utf8");
+  const source = await readFile(new URL("../scripts/verify-staging-controller.mjs", import.meta.url), "utf8");
+  assert.match(wrapper, /exec \/opt\/selective-remote-controller\/scripts\/staging-controller\.sh/);
+  assert.doesNotMatch(wrapper, /docker|POSTGRES_PASSWORD|DATABASE_URL/);
+  assert.match(source, /validate-postgres-storage\.sh/);
+  assert.match(source, /validate-postgres-bind-source\.mjs/);
+  assert.match(source, /validateControllerCompose\(model,settings,/);
+  assert.match(source, /'--project-directory'/);
   assert.match(source, /node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b/);
-  assert.match(source, /docker run --rm --pull=never --network none --read-only/);
-  assert.match(source, /--user 65534:65534 --cap-drop ALL --security-opt no-new-privileges/);
-  assert.match(source, /config --format json \|\s*\n\s*"\$\{validator_container\[@\]\}" -i/);
-  assert.doesNotMatch(source, /(?:^|\n)\s*node\s/m);
-  assert.doesNotMatch(source, /\.env|POSTGRES_PASSWORD|DATABASE_URL/);
+  const metadata = {version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1};
+  const stages = [];
+  await verifyControllerFixture({candidate:{}, runCommand:async ({stage}) => {
+    stages.push(stage);if(stage === 'candidate-metadata')return metadata;
+  }});
+  assert.ok(stages.indexOf('storage') < stages.indexOf('check'));
+  assert.ok(stages.indexOf('check') < stages.indexOf('migrate'));
+  assert.ok(stages.lastIndexOf('check') < stages.indexOf('open-traffic'));
+  const denied = [];
+  await assert.rejects(verifyControllerFixture({candidate:{}, runCommand:async ({stage}) => {
+    denied.push(stage);if(stage === 'candidate-metadata')return metadata;
+    if(stage === 'storage')throw Error('storage_denied');
+  }}), /storage_denied/);
+  assert.ok(!denied.includes('migrate') && !denied.includes('open-traffic'));
 });
 
 async function makeFixture() {

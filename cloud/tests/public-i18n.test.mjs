@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
 
 test("public portal exposes a persistent RU and EN locale switch", () => {
-  assert.match(html, /\/i18n\.js\?v=196/);
+  assert.match(html, /\/i18n\.js\?v=197/);
   assert.match(i18n, /selective-remote\.locale\.v1/);
   assert.match(i18n, /navigator\.language/);
   assert.match(i18n, /URLSearchParams\(location\.search\)/);
@@ -65,4 +66,29 @@ test("dynamic authentication, synchronization, and Team errors have English mess
     "Editor",
     "Viewer",
   ]) assert.match(i18n, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+});
+
+
+test("partial and unconfirmed Team device admissions are understandable in English", () => {
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(i18n, browser);
+  const t = browser.window.SelectiveRemoteI18n.t;
+  assert.equal(t("Не удалось подтвердить результат допуска. Обновите список устройств и проверьте доступ."),
+    "Could not confirm the admission result. Refresh the device list and check access.");
+  assert.equal(t("Допущено устройств: 2. Проверьте синхронизацию и выдачу ключей."),
+    "Devices approved: 2. Check synchronization and key delivery.");
+});
+
+test("unconfirmed local logout cleanup is clear in English for either server result", () => {
+  const browser = { window: {}, document: { addEventListener() {} },
+    location: { search: "?lang=en" }, URLSearchParams,
+    localStorage: { getItem() { return null; } }, navigator: { language: "en" } };
+  runInNewContext(i18n, browser);
+  const t = browser.window.SelectiveRemoteI18n.t;
+  assert.equal(t("Сеанс Cloud завершён на сервере. Не удалось подтвердить удаление локального ключа доверенного браузера."),
+    "The Cloud session ended on the server. Removal of the local trusted-browser key could not be confirmed.");
+  assert.equal(t("Не удалось подтвердить завершение сеанса Cloud на сервере. Проверьте подключение. Не удалось подтвердить удаление локального ключа доверенного браузера."),
+    "The Cloud session could not be confirmed ended on the server. Check your connection. Removal of the local trusted-browser key could not be confirmed.");
 });
