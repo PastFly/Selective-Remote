@@ -332,8 +332,8 @@ struct CloudSettingsView: View {
                     }
 
                     Text(UpdateLocalization.text(
-                        ru: "После входа Hosts, Snippets, Forwarding и сохранённые пароли синхронизируются автоматически. Keychain подтверждается один раз за сеанс; в Cloud хранится только E2EE-шифротекст.",
-                        en: "After sign-in, Hosts, Snippets, Forwarding, and saved passwords sync automatically. Keychain access is confirmed once per session; Cloud stores only E2EE ciphertext."
+                        ru: "После входа Hosts, Snippets, Forwarding и сохранённые пароли синхронизируются автоматически. macOS может запросить доступ к Keychain. В Cloud хранятся только зашифрованные данные.",
+                        en: "After sign-in, Hosts, Snippets, Forwarding, and saved passwords sync automatically. macOS may ask for Keychain access. Cloud stores only end-to-end encrypted data."
                     ))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -614,8 +614,6 @@ struct CloudSettingsView: View {
         if accountEndpoint == url.absoluteString, accountUser != nil { return }
         resetAccountPresentation(endpoint: url)
         let generation = accountPresentationGeneration
-        let hasSession = await client.hasStoredSession(endpoint: url)
-        guard accountPresentationGeneration == generation, hasSession else { return }
         accountPhase = .restoring
         do {
             let session = try await client.sessionBinding(endpoint: url)
@@ -636,7 +634,7 @@ struct CloudSettingsView: View {
         } catch {
             guard accountPresentationGeneration == generation else { return }
             resetAccountPresentation(endpoint: url)
-            if error is CancellationError { return }
+            if error is CancellationError || error as? SelectiveRemoteCloudError == .authenticationRequired { return }
             accountErrorMessage = error.localizedDescription
         }
     }
