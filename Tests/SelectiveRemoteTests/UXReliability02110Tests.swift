@@ -126,8 +126,10 @@ struct UXReliability02110Tests {
         #expect(content.contains("en: \"Update \\(manifest.version)\""))
         #expect(content.contains(".minimumScaleFactor(0.85)"))
         #expect(content.contains(".fixedSize(horizontal: true, vertical: false)"))
-        let header = try #require(content.components(separatedBy: "private var sidebarHeader: some View {").last?
-            .components(separatedBy: "private var sidebarHostSearch: some View {").first)
+        let headerStart = try #require(content.range(of: "private var sidebarHeader: some View {"))
+        let remaining = content[headerStart.upperBound...]
+        let headerEnd = try #require(remaining.range(of: "private var sidebarHostSearch: some View {"))
+        let header = remaining[..<headerEnd.lowerBound]
         #expect(header.contains("if model.availableUpdateManifest != nil ||"))
         #expect(header.contains("model.runningSessionCount > 0 ||"))
         #expect(header.contains("model.runningSSHTunnelCount > 0"))
