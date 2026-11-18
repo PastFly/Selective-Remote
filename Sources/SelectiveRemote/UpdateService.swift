@@ -10,10 +10,16 @@ struct SelectiveRemoteUpdateManifest: Codable, Equatable, Sendable {
     let minimumMacOS: String?
 }
 
+struct GitHubUpdateRelease: Equatable, Sendable {
+    let version: String
+    let pageURL: URL
+}
+
 enum UpdateCheckResult: Equatable, Sendable {
     case upToDate
     case available(SelectiveRemoteUpdateManifest)
     case incompatible(SelectiveRemoteUpdateManifest)
+    case githubRelease(GitHubUpdateRelease)
 }
 
 enum UpdateServiceError: LocalizedError, Sendable {
@@ -37,17 +43,77 @@ enum UpdateServiceError: LocalizedError, Sendable {
 }
 
 enum UpdateService {
+    typealias LoadResponse = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
+    private static let githubRepository = "PastFly/Selective-Remote"
+    private static let githubLatestReleaseURL = URL(
+        string: "https://api.github.com/repos/\(githubRepository)/releases/latest"
+    )!
+
+    private struct GitHubReleaseResponse: Decodable {
+        struct Asset: Decodable {
+            let name: String
+            let state: String
+        }
+
+        let tagName: String
+        let draft: Bool
+        let prerelease: Bool
+        let assets: [Asset]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case draft, prerelease, assets
+        }
+    }
+
     static func check(
         feedURL: URL,
+        allowsInAppInstallation: Bool,
         currentVersion: String,
         currentBuild: Int,
         currentMacOS: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion,
-        session: URLSession = .shared
+        load: LoadResponse = { try await URLSession.shared.data(for: $0) }
+    ) async throws -> UpdateCheckResult {
+        var officialResult: Result<UpdateCheckResult, Error> = .success(.upToDate)
+        if allowsInAppInstallation {
+            do {
+                let result = try await checkOfficialFeed(
+                    feedURL: feedURL,
+                    currentVersion: currentVersion,
+                    currentBuild: currentBuild,
+                    currentMacOS: currentMacOS,
+                    load: load
+                )
+                if case .available = result { return result }
+                officialResult = .success(result)
+            } catch {
+                try Task.checkCancellation()
+                officialResult = .failure(error)
+            }
+        }
+
+        if let release = try await latestGitHubRelease(after: currentVersion, load: load) {
+            if case let .success(.incompatible(manifest)) = officialResult,
+               compareVersions(release.version, manifest.version) != .orderedDescending {
+                return .incompatible(manifest)
+            }
+            return .githubRelease(release)
+        }
+        return try officialResult.get()
+    }
+
+    private static func checkOfficialFeed(
+        feedURL: URL,
+        currentVersion: String,
+        currentBuild: Int,
+        currentMacOS: OperatingSystemVersion,
+        load: LoadResponse
     ) async throws -> UpdateCheckResult {
         var request = URLRequest(url: feedURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 15
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await load(request)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else { throw UpdateServiceError.invalidResponse }
@@ -68,6 +134,40 @@ enum UpdateService {
             return .available(manifest)
         }
         return .upToDate
+    }
+
+    private static func latestGitHubRelease(
+        after currentVersion: String,
+        load: LoadResponse
+    ) async throws -> GitHubUpdateRelease? {
+        var request = URLRequest(url: githubLatestReleaseURL, timeoutInterval: 15)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await load(request)
+        guard let http = response as? HTTPURLResponse else {
+            throw UpdateServiceError.invalidResponse
+        }
+        if http.statusCode == 404 { return nil }
+        guard (200..<300).contains(http.statusCode) else {
+            throw UpdateServiceError.invalidResponse
+        }
+
+        let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
+        let tag = release.tagName
+        guard !release.draft, !release.prerelease,
+              tag.range(of: #"^v[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil
+        else { return nil }
+        let version = String(tag.dropFirst())
+        guard version.split(separator: ".").allSatisfy({ Int($0) != nil }),
+              compareVersions(version, currentVersion) == .orderedDescending,
+              release.assets.contains(where: {
+                  $0.name == "SelectiveRemote-\(version)-arm64.dmg" && $0.state == "uploaded"
+              }),
+              let pageURL = URL(string: "https://github.com/\(githubRepository)/releases/tag/\(tag)")
+        else { return nil }
+
+        // A GitHub release can offer its download page. Only the configured feed can
+        // produce an installable manifest, and the installer still verifies the publisher.
+        return GitHubUpdateRelease(version: version, pageURL: pageURL)
     }
 
     static func configuredFeedURL(bundle: Bundle = .main) throws -> URL {

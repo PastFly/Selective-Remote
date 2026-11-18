@@ -360,15 +360,23 @@ struct ContentView: View {
         .alert(UpdateLocalization.formatted("updates.alert.title",
             english: language.selection.usesEnglish, AppBrand.name), isPresented: Binding(
             get: { model.updateMessage != nil },
-            set: { if !$0 { model.updateMessage = nil } }
+            set: { if !$0 { model.dismissUpdateMessage() } }
         )) {
-            if model.availableUpdateURL != nil {
-                Button("Скачать DMG") { model.openAvailableUpdate() }
-            }
-            if model.availableUpdateManifest != nil {
+            if !model.updateCheckFailed, model.availableUpdateManifest != nil {
+                if model.downloadedUpdateDMGURL != nil {
+                    Button("Установить и перезапустить") { model.installDownloadedUpdateAndRestart() }
+                } else {
+                    Button("Скачать DMG") { model.openAvailableUpdate() }
+                        .disabled(model.isDownloadingUpdate)
+                }
                 Button("Что нового") { model.openAvailableReleaseNotes() }
             }
-            Button("OK", role: .cancel) { model.updateMessage = nil }
+            if !model.updateCheckFailed, model.availableGitHubRelease != nil {
+                Button(UpdateLocalization.text(ru: "Открыть релиз на GitHub", en: "Open GitHub Release")) {
+                    model.openGitHubUpdateRelease()
+                }
+            }
+            Button("OK", role: .cancel) { model.dismissUpdateMessage() }
         } message: {
             Text(model.updateMessage ?? "")
         }
@@ -781,19 +789,19 @@ struct ContentView: View {
                 }
             }
 
-            if model.availableUpdateManifest != nil ||
+            if model.availableUpdateVersion != nil ||
                 model.runningSessionCount > 0 ||
                 model.runningSSHTunnelCount > 0 {
                 HStack(spacing: 8) {
-                    if let manifest = model.availableUpdateManifest {
+                    if let version = model.availableUpdateVersion {
                         Button {
                             showsUpdatePopover.toggle()
                         } label: {
                             Label {
                                 Text(
                                     UpdateLocalization.text(
-                                        ru: "Обновление \(manifest.version)",
-                                        en: "Update \(manifest.version)"
+                                        ru: "Обновление \(version)",
+                                        en: "Update \(version)"
                                     )
                                 )
                                     .lineLimit(1)
@@ -809,8 +817,8 @@ struct ContentView: View {
                         .layoutPriority(1)
                         .help(
                             UpdateLocalization.text(
-                                ru: "Доступно обновление \(manifest.version)",
-                                en: "Update \(manifest.version) is available"
+                                ru: "Доступно обновление \(version)",
+                                en: "Update \(version) is available"
                             )
                         )
                         .popover(isPresented: $showsUpdatePopover, arrowEdge: .top) {
@@ -819,7 +827,7 @@ struct ContentView: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                         .animation(
                             reduceMotion ? nil : .easeInOut(duration: 0.2),
-                            value: manifest.version
+                            value: version
                         )
                     }
                     Spacer(minLength: 4)

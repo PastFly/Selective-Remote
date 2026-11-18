@@ -71,22 +71,15 @@ private struct UpdateSettingsView: View {
                 LabeledContent("Установлено") {
                     Text(AppBuildInfo.fullText).monospacedDigit()
                 }
-                if let manifest = model.availableUpdateManifest {
+                if let version = model.availableUpdateVersion {
                     LabeledContent("Доступно") {
-                        Text(manifest.version)
+                        Text(version)
                             .monospacedDigit()
                             .foregroundStyle(Color.accentColor)
                     }
                 } else {
                     LabeledContent("Состояние") {
-                        Label(
-                            UpdateLocalization.key(model.isCheckingForUpdates
-                                ? "updates.status.checking" : "updates.status.current"),
-                            systemImage: model.isCheckingForUpdates
-                                ? "arrow.triangle.2.circlepath"
-                                : "checkmark.circle.fill"
-                        )
-                        .foregroundStyle(model.isCheckingForUpdates ? Color.secondary : Color.green)
+                        updateStatus
                     }
                 }
                 LabeledContent("Последняя проверка") {
@@ -138,13 +131,39 @@ private struct UpdateSettingsView: View {
                         Button("История версий") { model.openInstalledReleaseNotes() }
                     }
                 }
-                if model.availableUpdateManifest != nil {
+                if model.availableUpdateVersion != nil {
                     UpdateExperiencePopover(model: model)
                         .frame(maxWidth: .infinity)
                 }
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        if model.isCheckingForUpdates {
+            Label(UpdateLocalization.key("updates.status.checking"), systemImage: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.secondary)
+        } else if model.updateCheckFailed {
+            Label(
+                UpdateLocalization.text(ru: "Проверка не удалась", en: "Update check failed"),
+                systemImage: "exclamationmark.circle"
+            )
+            .foregroundStyle(.secondary)
+        } else if let minimum = model.incompatibleUpdate?.minimumMacOS {
+            Label(
+                UpdateLocalization.text(ru: "Требуется macOS \(minimum) или новее", en: "Requires macOS \(minimum) or later"),
+                systemImage: "info.circle"
+            )
+            .foregroundStyle(.secondary)
+        } else if model.lastSuccessfulUpdateCheckDate == nil {
+            Text(UpdateLocalization.key("updates.last_check.never"))
+                .foregroundStyle(.secondary)
+        } else {
+            Label(UpdateLocalization.key("updates.status.current"), systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        }
     }
 
     private var lastCheckText: String {
@@ -180,7 +199,7 @@ struct UpdateExperiencePopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let manifest = model.availableUpdateManifest {
-                updateHeader(manifest)
+                updateHeader(version: manifest.version)
                 updateProgress(manifest)
 
                 if let error = model.updateInstallError, !error.isEmpty {
@@ -258,6 +277,20 @@ struct UpdateExperiencePopover: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            } else if let release = model.availableGitHubRelease {
+                updateHeader(version: release.version)
+                Text(UpdateLocalization.text(
+                    ru: "Скачайте DMG со страницы релиза и установите обновление вручную.",
+                    en: "Download the DMG from the release page and install the update manually."
+                ))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Button(UpdateLocalization.text(ru: "Открыть релиз на GitHub", en: "Open GitHub Release")) {
+                    model.openGitHubUpdateRelease()
+                }
+                .buttonStyle(.borderedProminent)
             } else if model.isCheckingForUpdates {
                 ProgressView("Проверяем обновления…")
             } else {
@@ -287,7 +320,7 @@ struct UpdateExperiencePopover: View {
         }
     }
 
-    private func updateHeader(_ manifest: SelectiveRemoteUpdateManifest) -> some View {
+    private func updateHeader(version: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -300,8 +333,8 @@ struct UpdateExperiencePopover: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(UpdateLocalization.text(
-                    ru: "Доступно обновление \(manifest.version)",
-                    en: "Update \(manifest.version) is available"
+                    ru: "Доступно обновление \(version)",
+                    en: "Update \(version) is available"
                 ))
                 .font(.headline)
 
@@ -315,7 +348,7 @@ struct UpdateExperiencePopover: View {
                         .foregroundStyle(.secondary)
                     versionPill(
                         UpdateLocalization.text(ru: "Доступно", en: "Available"),
-                        manifest.version,
+                        version,
                         emphasized: true
                     )
                 }
