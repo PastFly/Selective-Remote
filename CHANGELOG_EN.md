@@ -1,3 +1,8 @@
+## 0.32.2
+
+- Selective Remote checks GitHub for stable releases at launch and every five hours and shows available updates in the app.
+- Updates from the publisher-verified channel can be installed in the app. Community builds link to the GitHub release for manual installation.
+
 ## 0.32.1
 
 - Collapse Cloud Services and Workspace independently. The sidebar remembers both settings.

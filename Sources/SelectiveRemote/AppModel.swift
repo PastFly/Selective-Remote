@@ -358,9 +358,13 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var latestSnippetRun: TerminalSnippetRunSummary?
     @Published var updateMessage: String?
     @Published private(set) var isCheckingForUpdates = false
-    @Published private(set) var availableUpdateURL: URL?
-    @Published private(set) var availableReleaseNotesURL: URL?
+    @Published private(set) var updateCheckFailed = false
     @Published private(set) var availableUpdateManifest: SelectiveRemoteUpdateManifest?
+    @Published private(set) var availableGitHubRelease: GitHubUpdateRelease?
+    @Published private(set) var incompatibleUpdate: SelectiveRemoteUpdateManifest?
+    var availableUpdateVersion: String? {
+        availableUpdateManifest?.version ?? availableGitHubRelease?.version
+    }
     @Published private(set) var isDownloadingUpdate = false
     @Published private(set) var updateDownloadProgress = 0.0
     @Published private(set) var updateDownloadStage: UpdateDownloadStage = .idle
@@ -600,7 +604,7 @@ final class AppModel: NSObject, ObservableObject {
             try? await Task.sleep(for: .seconds(3))
             guard let self, !Task.isCancelled else { return }
             if self.automaticallyCheckForUpdates {
-                self.checkForUpdates(announcesUpToDate: false)
+                self.checkForUpdates(announcesUpToDate: false, offersUpdateOnLaunch: true)
             }
             while !Task.isCancelled {
                 do {
@@ -5059,8 +5063,8 @@ final class AppModel: NSObject, ObservableObject {
         checkForUpdates(announcesUpToDate: false)
     }
 
-    private func checkForUpdates(announcesUpToDate: Bool) {
-        guard !isCheckingForUpdates else { return }
+    private func checkForUpdates(announcesUpToDate: Bool, offersUpdateOnLaunch: Bool = false) {
+        guard !isUpdateOperationInProgress else { return }
         isCheckingForUpdates = true
         if announcesUpToDate {
             updateMessage = nil
@@ -5069,60 +5073,55 @@ final class AppModel: NSObject, ObservableObject {
             guard let self else { return }
             defer { self.isCheckingForUpdates = false }
             do {
-                let feedURL = try UpdateService.configuredFeedURL()
                 let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
                     ?? "0.0.0"
                 let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0
                 let result = try await UpdateService.check(
-                    feedURL: feedURL,
+                    feedURL: try UpdateService.configuredFeedURL(),
+                    allowsInAppInstallation: (try? UpdatePublisherIdentity.official(from: .main)) != nil,
                     currentVersion: version,
                     currentBuild: build
                 )
+                guard !isDownloadingUpdate, updateDownloadStage != .installing else { return }
+                updateCheckFailed = false
                 let successfulCheckDate = Date()
                 lastSuccessfulUpdateCheckDate = successfulCheckDate
                 UserDefaults.standard.set(
                     successfulCheckDate.timeIntervalSince1970,
                     forKey: lastSuccessfulUpdateCheckKey
                 )
+                if case let .available(manifest) = result {
+                    if availableUpdateManifest != manifest {
+                        clearDownloadState()
+                    }
+                    availableUpdateManifest = manifest
+                } else {
+                    availableUpdateManifest = nil
+                    clearDownloadState()
+                }
+                availableGitHubRelease = nil
+                incompatibleUpdate = nil
+
                 switch result {
                 case .upToDate:
-                    availableUpdateManifest = nil
-                    availableUpdateURL = nil
-                    availableReleaseNotesURL = nil
-                    downloadedUpdateDMGURL = nil
-                    downloadedUpdateUsesCustomDestination = false
-                    updateInstallError = nil
-                    updateDownloadStage = .idle
                     if announcesUpToDate {
                         updateMessage = UpdateLocalization.text(ru: "Установлена актуальная версия \(AppBrand.name) \(version).", en: "The current version \(AppBrand.name) \(version) is installed.")
                     }
                 case let .available(manifest):
-                    let versionChanged = availableUpdateManifest?.version != manifest.version
-                    availableUpdateManifest = manifest
-                    availableUpdateURL = manifest.downloadURL
-                    availableReleaseNotesURL = manifest.releaseNotesURL
-                    if versionChanged {
-                        downloadedUpdateDMGURL = nil
-                        downloadedUpdateUsesCustomDestination = false
-                        updateInstallError = nil
-                        updateDownloadProgress = 0
-                        updateDownloadStage = .idle
-                    }
-                    if announcesUpToDate {
-                        updateMessage = UpdateLocalization.text(ru: "Доступна новая версия \(AppBrand.name) \(manifest.version).", en: "A new version \(AppBrand.name) \(manifest.version) is available.")
-                    }
-                    notifyUpdateIfNeeded(manifest)
+                    announceAvailableUpdate(
+                        manifest.version,
+                        message: UpdateLocalization.text(
+                            ru: "Доступна новая версия \(AppBrand.name) \(manifest.version).",
+                            en: "A new version \(AppBrand.name) \(manifest.version) is available."
+                        ),
+                        manualCheck: announcesUpToDate,
+                        offersUpdateOnLaunch: offersUpdateOnLaunch
+                    )
                     if automaticallyDownloadUpdates && downloadedUpdateDMGURL == nil {
                         downloadAvailableUpdate()
                     }
                 case let .incompatible(manifest):
-                    availableUpdateManifest = nil
-                    availableUpdateURL = nil
-                    availableReleaseNotesURL = manifest.releaseNotesURL
-                    downloadedUpdateDMGURL = nil
-                    downloadedUpdateUsesCustomDestination = false
-                    updateDownloadProgress = 0
-                    updateDownloadStage = .idle
+                    incompatibleUpdate = manifest
                     let minimum = manifest.minimumMacOS
                         ?? UpdateLocalization.text(ru: "более новая версия macOS", en: "a newer version of macOS")
                     if announcesUpToDate {
@@ -5131,13 +5130,59 @@ final class AppModel: NSObject, ObservableObject {
                             en: "\(AppBrand.name) \(manifest.version) is available, but it requires macOS \(minimum) or later."
                         )
                     }
+                case let .githubRelease(release):
+                    availableGitHubRelease = release
+                    announceAvailableUpdate(
+                        release.version,
+                        message: UpdateLocalization.text(
+                            ru: "Версия \(release.version) доступна на GitHub для ручной установки.",
+                            en: "Version \(release.version) is available on GitHub for manual installation."
+                        ),
+                        manualCheck: announcesUpToDate,
+                        offersUpdateOnLaunch: offersUpdateOnLaunch
+                    )
                 }
             } catch {
+                updateCheckFailed = true
                 if announcesUpToDate {
                     updateMessage = UpdateLocalization.text(ru: "Не удалось проверить обновления: \(error.localizedDescription)", en: "Unable to check for updates: \(error.localizedDescription)")
                 }
             }
         }
+    }
+
+    private func announceAvailableUpdate(
+        _ version: String,
+        message: String,
+        manualCheck: Bool,
+        offersUpdateOnLaunch: Bool
+    ) {
+        let seenVersion = UserDefaults.standard.string(forKey: lastSeenUpdateVersionKey)
+        if manualCheck || (offersUpdateOnLaunch && NSApp?.isActive == true && seenVersion != version) {
+            updateMessage = message
+        } else {
+            notifyUpdateIfNeeded(version: version)
+        }
+    }
+
+    func dismissUpdateMessage() {
+        if updateMessage != nil, !updateCheckFailed {
+            markAvailableUpdateSeen()
+        }
+        updateMessage = nil
+    }
+
+    private func clearDownloadState() {
+        downloadedUpdateDMGURL = nil
+        downloadedUpdateUsesCustomDestination = false
+        updateInstallError = nil
+        updateDownloadProgress = 0
+        updateDownloadStage = .idle
+    }
+
+    func openGitHubUpdateRelease() {
+        guard let release = availableGitHubRelease else { return }
+        NSWorkspace.shared.open(release.pageURL)
     }
 
     func openAvailableUpdate() {
@@ -5335,7 +5380,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func markAvailableUpdateSeen() {
-        guard let version = availableUpdateManifest?.version else { return }
+        guard let version = availableUpdateVersion else { return }
         UserDefaults.standard.set(version, forKey: lastSeenUpdateVersionKey)
     }
 
@@ -5347,7 +5392,7 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    private func notifyUpdateIfNeeded(_ manifest: SelectiveRemoteUpdateManifest) {
+    private func notifyUpdateIfNeeded(version: String) {
         let defaults = UserDefaults.standard
         let lastVersion = defaults.string(forKey: lastNotifiedUpdateVersionKey)
         let lastTimestamp = defaults.double(forKey: lastNotifiedUpdateDateKey)
@@ -5355,7 +5400,7 @@ final class AppModel: NSObject, ObservableObject {
         let now = Date()
         let seenVersion = defaults.string(forKey: lastSeenUpdateVersionKey)
         guard UpdateNotificationPolicy.shouldNotify(
-            version: manifest.version,
+            version: version,
             seenVersion: seenVersion,
             lastVersion: lastVersion,
             lastDate: lastDate,
@@ -5375,15 +5420,15 @@ final class AppModel: NSObject, ObservableObject {
                 guard allowed else { return }
                 let content = UNMutableNotificationContent()
                 content.title = AppBrand.name
-                content.body = UpdateLocalization.text(ru: "Доступно обновление \(manifest.version)", en: "Update \(manifest.version) is available")
+                content.body = UpdateLocalization.text(ru: "Доступно обновление \(version)", en: "Update \(version) is available")
                 content.sound = .default
                 let request = UNNotificationRequest(
-                    identifier: "selective-remote-update-\(manifest.version)",
+                    identifier: "selective-remote-update-\(version)",
                     content: content,
                     trigger: nil
                 )
                 try await center.add(request)
-                UserDefaults.standard.set(manifest.version, forKey: self.lastNotifiedUpdateVersionKey)
+                UserDefaults.standard.set(version, forKey: self.lastNotifiedUpdateVersionKey)
                 UserDefaults.standard.set(now.timeIntervalSince1970, forKey: self.lastNotifiedUpdateDateKey)
             } catch {
                 // Notifications are optional; update discovery must remain usable without permission.

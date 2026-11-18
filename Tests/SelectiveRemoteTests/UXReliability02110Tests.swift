@@ -122,15 +122,15 @@ struct UXReliability02110Tests {
         let content = try source("Sources/SelectiveRemote/ContentView.swift")
 
         #expect(content.contains("Text(AppBrand.name)"))
-        #expect(content.contains("ru: \"Обновление \\(manifest.version)\""))
-        #expect(content.contains("en: \"Update \\(manifest.version)\""))
+        #expect(content.contains("ru: \"Обновление \\(version)\""))
+        #expect(content.contains("en: \"Update \\(version)\""))
         #expect(content.contains(".minimumScaleFactor(0.85)"))
         #expect(content.contains(".fixedSize(horizontal: true, vertical: false)"))
         let headerStart = try #require(content.range(of: "private var sidebarHeader: some View {"))
         let remaining = content[headerStart.upperBound...]
         let headerEnd = try #require(remaining.range(of: "private var sidebarHostSearch: some View {"))
         let header = remaining[..<headerEnd.lowerBound]
-        #expect(header.contains("if model.availableUpdateManifest != nil ||"))
+        #expect(header.contains("if model.availableUpdateVersion != nil ||"))
         #expect(header.contains("model.runningSessionCount > 0 ||"))
         #expect(header.contains("model.runningSSHTunnelCount > 0"))
     }
