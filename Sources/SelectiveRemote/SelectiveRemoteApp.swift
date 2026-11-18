@@ -258,7 +258,7 @@ struct SelectiveRemoteApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 syncPresentation.setAccount(
-                    endpoint: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
+                    endpoint: cloudEndpointPreference,
                     deviceID: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1")
                 )
             }
@@ -509,7 +509,7 @@ struct SelectiveRemoteApp: App {
 
     private func configureSyncPresentation() {
         syncPresentation.setAccount(
-            endpoint: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
+            endpoint: cloudEndpointPreference,
             deviceID: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1")
         )
         Task {
@@ -535,6 +535,11 @@ struct SelectiveRemoteApp: App {
         }
     }
 
+    private var cloudEndpointPreference: String {
+        UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1")
+            ?? SelectiveRemoteCloudEndpoint.production
+    }
+
     private func schedulePersonalVaultAutoSync() {
         guard !appLock.isLocked else {
             syncPresentation.setPrerequisite(.personal, lifecycle: .locked)
@@ -546,8 +551,7 @@ struct SelectiveRemoteApp: App {
             syncPresentation.setPrerequisite(.personal, lifecycle: .disabled)
             return
         }
-        guard let endpointText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
-              let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(endpointText),
+        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpointPreference),
               let deviceText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1"),
               let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
         else {
@@ -564,7 +568,9 @@ struct SelectiveRemoteApp: App {
         let syncDeviceID = deviceID.uuidString
         let uploadGeneration = UUID()
         personalUploadGeneration = uploadGeneration
-        syncPresentation.recordPersonalPending()
+        if ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
+            syncPresentation.recordPersonalPending()
+        }
         Task {
             guard personalUploadGeneration == uploadGeneration,
                   syncPresentation.generation == syncGeneration else { return }
@@ -593,11 +599,7 @@ struct SelectiveRemoteApp: App {
     @MainActor
     private func runPersonalVaultInboundSyncLoop() async {
         while !Task.isCancelled {
-            if UserDefaults.standard.object(
-                forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
-            ) as? Bool ?? true {
-                await downloadPersonalVaultChanges()
-            }
+            await downloadPersonalVaultChanges()
             do { try await Task.sleep(for: .seconds(15)) }
             catch { return }
         }
@@ -605,17 +607,23 @@ struct SelectiveRemoteApp: App {
 
     @MainActor
     private func downloadPersonalVaultChanges() async {
-        guard !appLock.isLocked,
-              let endpointText = UserDefaults.standard.string(
-                  forKey: "SelectiveRemote.cloud.endpoint.v1"
-              ),
-              let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(endpointText),
+        guard !appLock.isLocked else {
+            syncPresentation.setPrerequisite(.personal, lifecycle: .locked)
+            return
+        }
+        guard UserDefaults.standard.object(
+            forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
+        ) as? Bool ?? true else {
+            syncPresentation.setPrerequisite(.personal, lifecycle: .disabled)
+            return
+        }
+        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpointPreference),
               let deviceText = UserDefaults.standard.string(
                   forKey: "SelectiveRemote.cloud.device-id.v1"
               ),
               let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
         else {
-            syncPresentation.recordPersonalUnknown()
+            syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
             return
         }
         UserDefaults.standard.set(
@@ -624,7 +632,8 @@ struct SelectiveRemoteApp: App {
         )
         let syncGeneration = syncPresentation.generation
         let uploadGeneration = personalUploadGeneration
-        if syncPresentation.personal.pendingLocalChanges != true {
+        if syncPresentation.personal.pendingLocalChanges != true,
+           ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.begin(.personal)
         }
         defer {
@@ -646,6 +655,12 @@ struct SelectiveRemoteApp: App {
             switch result {
             case .unavailable:
                 syncPresentation.recordPersonalUnknown()
+                return
+            case .signedOut:
+                syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
+                return
+            case .setupRequired:
+                syncPresentation.setPrerequisite(.personal, lifecycle: .setupRequired)
                 return
             case let .unconfirmedUpload(issue):
                 if let issue { syncPresentation.recordPersonalFailure(issue) }
@@ -693,6 +708,10 @@ struct SelectiveRemoteApp: App {
                   syncPresentation.matchesAccount(
                 endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
             ), syncPresentation.generation == syncGeneration else { return }
+            if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
+                syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
+                return
+            }
             SelectiveRemotePersonalVaultSyncStatus.recordError(error)
             syncPresentation.recordPersonalFailure(SyncIssue.classifyPersonal(error))
         }

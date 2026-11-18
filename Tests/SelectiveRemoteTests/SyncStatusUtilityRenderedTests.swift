@@ -11,7 +11,7 @@ struct SyncStatusUtilityRenderedTests {
     func matrix() throws {
         let output = ProcessInfo.processInfo.environment["SR_CAPTURE_SYNC_STATUS_MATRIX"]
         let states: [(String, SyncLifecycle)] = [
-            ("synced", .synced), ("syncing", .syncing), ("unknown", .unknown),
+            ("synced", .synced), ("syncing", .syncing), ("unknown", .unknown), ("setup", .setupRequired),
             ("error", .error), ("conflict", .conflict), ("failClosed", .security),
         ]
         for (name, lifecycle) in states {
@@ -67,7 +67,7 @@ struct SyncStatusUtilityRenderedTests {
 
     @Test("Service block height is stable across sync states")
     func stableHeight() {
-        let states: [SyncLifecycle] = [.synced, .syncing, .unknown, .error, .conflict, .security]
+        let states: [SyncLifecycle] = [.synced, .syncing, .unknown, .setupRequired, .error, .conflict, .security]
         let heights = states.map { lifecycle in
             NSHostingView(rootView: CloudSyncServiceBlockView(
                 lifecycle: lifecycle,

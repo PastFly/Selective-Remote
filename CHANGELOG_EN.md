@@ -1,3 +1,8 @@
+## 0.32.4
+
+- Set up Personal Vault auto-sync in the current Cloud session. When Keychain already has the key, no password is required.
+- Sync Center shows when Personal Vault needs setup or is awaiting its first check.
+
 ## 0.32.3
 
 - Fixed a UI freeze during Cloud sign-in and saved-session restoration.

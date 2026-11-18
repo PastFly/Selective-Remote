@@ -8,7 +8,8 @@ struct SyncStatusUtilityTests {
         let cases: [(SyncLifecycle, String, String, String, String, String)] = [
             (.synced, "Синхронизировано", "Synced", "Синхронизировано", "Synced", "checkmark.circle.fill"),
             (.syncing, "Синхронизация…", "Syncing…", "Синхронизация…", "Syncing…", "arrow.triangle.2.circlepath"),
-            (.unknown, "Состояние неизвестно", "Status unknown", "Неизвестно", "Unknown", "questionmark.circle"),
+            (.unknown, "Ожидает проверки", "Awaiting check", "Ожидает проверки", "Awaiting check", "clock"),
+            (.setupRequired, "Нужно подключить личный Vault", "Personal Vault needs setup", "Подключить Vault", "Set up Vault", "key.fill"),
             (.error, "Ошибка синхронизации", "Sync failed", "Ошибка", "Failed", "exclamationmark.triangle.fill"),
             (.conflict, "Конфликт", "Conflict", "Конфликт", "Conflict", "exclamationmark.triangle.fill"),
             (.security, "Требуется действие", "Action required", "Требуется действие", "Action required", "exclamationmark.triangle.fill"),

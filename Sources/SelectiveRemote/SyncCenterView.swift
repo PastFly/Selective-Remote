@@ -73,8 +73,16 @@ struct SyncCenterView: View {
             }
             if snapshot.lifecycle == .unknown {
                 Text(english
-                     ? "This Mac has no confirmation of the current sync state. Retry, or open Cloud Settings to check sign-in and Vault access."
-                     : "На этом Mac нет подтверждения текущего состояния синхронизации. Повторите синхронизацию или откройте настройки Cloud, чтобы проверить вход и доступ к Vault.")
+                     ? "Run a check to confirm sync on this Mac."
+                     : "Запустите проверку, чтобы подтвердить синхронизацию на этом Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if snapshot.lifecycle == .setupRequired {
+                Text(english
+                     ? "Open Cloud Settings to finish connecting Personal Vault on this Mac."
+                     : "Завершите подключение личного Vault на этом Mac в настройках Cloud.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -112,7 +120,10 @@ struct SyncCenterView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            if snapshot.scope == .team,
+            if snapshot.lifecycle == .setupRequired {
+                Button(english ? "Set up Personal Vault" : "Настроить личный Vault",
+                       action: onOpenCloudSettings)
+            } else if snapshot.scope == .team,
                snapshot.issue == .conflict || snapshot.issue == .keyOrWrapperMissing
                 || snapshot.issue == .rotationRequired {
                 Button(english ? "Open Team management" : "Открыть управление командами",
@@ -121,11 +132,13 @@ struct SyncCenterView: View {
                 Button(english ? "Open Cloud Settings" : "Открыть настройки Cloud",
                        action: onOpenCloudSettings)
             }
-            Button(english ? "Retry \(snapshot.scope == .personal ? "Personal" : "Team")" :
-                    "Повторить: \(snapshot.scope == .personal ? "личный Vault" : "командные Vaults")") {
-                sync.retry(snapshot.scope)
+            if snapshot.lifecycle != .setupRequired {
+                Button(english ? "Retry \(snapshot.scope == .personal ? "Personal" : "Team")" :
+                        "Повторить: \(snapshot.scope == .personal ? "личный Vault" : "командные Vaults")") {
+                    sync.retry(snapshot.scope)
+                }
+                .disabled([.syncing, .signedOut, .locked, .disabled].contains(snapshot.lifecycle))
             }
-            .disabled([.syncing, .signedOut, .locked, .disabled].contains(snapshot.lifecycle))
         }
         .padding(15)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -139,6 +152,8 @@ struct SyncCenterView: View {
         case .synced: "checkmark.circle.fill"
         case .offline: "wifi.slash"
         case .locked: "lock.fill"
+        case .setupRequired: "key.fill"
+        case .unknown: "clock"
         default: "questionmark.circle"
         }
     }

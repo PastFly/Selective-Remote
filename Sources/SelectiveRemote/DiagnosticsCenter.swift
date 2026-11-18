@@ -182,6 +182,7 @@ enum DiagnosticsReportBuilder {
         case .signedOut: lifecycle = "signed_out"
         case .locked: lifecycle = "locked"
         case .disabled: lifecycle = "disabled"
+        case .setupRequired: lifecycle = "setup_required"
         }
         var lines = ["\(scope): \(lifecycle)"]
         if let issue = snapshot.issue {

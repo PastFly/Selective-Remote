@@ -97,8 +97,8 @@ struct PersonalVaultAutoSyncCheckTests {
 
         let result = try await check(fixture)
         switch result {
-        case .unavailable:
-            presentation.recordPersonalUnknown()
+        case .unavailable, .signedOut, .setupRequired:
+            Issue.record("Expected a check using the existing session and key")
         case let .current(revision):
             presentation.recordPersonalSuccess(revision: revision, generation: generation)
         case .download:
@@ -139,9 +139,11 @@ struct PersonalVaultAutoSyncCheckTests {
     func unavailablePrerequisites(prerequisite: PersonalCheckPrerequisite) async throws {
         let fixture = try PersonalCheckFixture(remoteRevision: 5, prerequisite: prerequisite)
         let result = try await check(fixture)
-        guard case .unavailable = result else {
-            Issue.record("A missing prerequisite must remain unavailable")
-            return
+        switch (prerequisite, result) {
+        case (.noSession, .signedOut), (.noKey, .setupRequired), (.initialDownload, .setupRequired):
+            break
+        default:
+            Issue.record("Expected a specific prerequisite for Personal Vault sync")
         }
         #expect(fixture.requests.count == 0)
         #expect(fixture.keys.saveCount == 0)

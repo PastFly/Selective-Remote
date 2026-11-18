@@ -51,12 +51,16 @@ struct CloudSettingsView: View {
     @State private var personalVaultMessageIsError = false
     @State private var personalVaultUploading = false
     @State private var showsPersonalVaultUpload = false
+    @State private var showsPersonalVaultUnlock = false
+    @State private var personalVaultUnlockError: String?
     @State private var showsTeamManagement = false
     @State private var showsDeviceTrust = false
     @State private var personalVaultRecoveryPhrase = ""
     @State private var personalVaultRecoveryConfirmation = ""
     @State private var includePersonalVaultCredentials = false
-    @State private var personalVaultAutoSyncConfigured = false
+    @State private var personalVaultSetup = PersonalVaultSetup.checking
+
+    private var personalVaultAutoSyncConfigured: Bool { personalVaultSetup == .connected }
 
     private let client = SelectiveRemoteCloudAPIClient()
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
@@ -221,33 +225,31 @@ struct CloudSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                     LabeledContent(UpdateLocalization.text(ru: "Автосинхронизация", en: "Automatic sync")) {
-                        Text(personalVaultAutoSyncConfigured
-                            ? UpdateLocalization.text(ru: "Включена", en: "Enabled")
-                            : UpdateLocalization.text(ru: "Не настроена", en: "Not configured"))
-                            .foregroundStyle(personalVaultAutoSyncConfigured ? Color.green : Color.secondary)
+                        Text(personalVaultSetupTitle)
+                            .foregroundStyle(personalVaultAutoSyncConfigured && personalVaultSyncEnabled
+                                             ? Color.green : Color.secondary)
                     }
 
-                    if !personalVaultAutoSyncConfigured {
+                    if personalVaultSetup != .connected, personalVaultSetup != .checking {
                         Button(
-                            UpdateLocalization.text(
-                                ru: "Подключить автосинхронизацию…",
-                                en: "Connect Automatic Sync…"
-                            ),
+                            personalVaultSetupAction,
                             systemImage: "key.fill"
                         ) {
-                            accountErrorMessage = nil
-                            accountSheetMode = .signIn
-                            showsAccountSheet = true
+                            personalVaultLoadErrorMessage = nil
+                            switch personalVaultSetup {
+                            case .needsUnlock:
+                                personalVaultUnlockError = nil
+                                showsPersonalVaultUnlock = true
+                            case .initialDownload:
+                                connectPersonalVault()
+                            case .empty:
+                                showsPersonalVaultUpload = true
+                            case .checking, .connected:
+                                break
+                            }
                         }
                         .buttonStyle(.borderedProminent)
-
-                        Text(UpdateLocalization.text(
-                            ru: "Повторно войдите в аккаунт: пароль используется только в памяти, чтобы безопасно подключить существующий Personal Vault к Keychain этого Mac.",
-                            en: "Sign in again: the password is used only in memory to securely connect the existing Personal Vault to this Mac's Keychain."
-                        ))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .disabled(accountPhase.isBusy)
                     }
 
                     Toggle(
@@ -408,8 +410,23 @@ struct CloudSettingsView: View {
             SelectiveRemoteCloudSessionTransition.notify()
         }
         .onChange(of: endpoint) { _, _ in showsTeamManagement = false }
+        .onChange(of: personalVaultSyncEnabled) { _, _ in
+            NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
+        }
         .sheet(isPresented: $showsAccountSheet) {
             accountSheet
+        }
+        .sheet(isPresented: $showsPersonalVaultUnlock) {
+            PersonalVaultUnlockView(
+                isUnlocking: accountPhase == .connectingPersonalVault,
+                errorMessage: personalVaultUnlockError,
+                onCancel: { showsPersonalVaultUnlock = false },
+                onUnlock: { secret, method in connectPersonalVault(unlock: (secret, method)) }
+            )
+        }
+        .sheet(isPresented: $showsPersonalVaultUpload) {
+            personalVaultUploadSheet
+                .interactiveDismissDisabled(personalVaultUploading)
         }
         .sheet(isPresented: $showsConflictReview) {
             conflictReviewSheet
@@ -454,7 +471,7 @@ struct CloudSettingsView: View {
                 Text(UpdateLocalization.text(ru: "Создание аккаунта…", en: "Creating account…"))
             }
             .foregroundStyle(.secondary)
-        case .signedIn:
+        case .signedIn, .connectingPersonalVault:
             Label(UpdateLocalization.text(ru: "Подключён", en: "Connected"), systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case .refreshing:
@@ -803,11 +820,26 @@ struct CloudSettingsView: View {
             try await client.checkSession(session)
             guard isCurrentPresentation(generation, session: session) else { return }
             personalVaultRevision = personalVault.revision
-            if let deviceID = UUID(uuidString: storedDeviceID), deviceID.isSelectiveRemoteCloudUUID {
-                let material = try? personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
-                personalVaultAutoSyncConfigured = material?.vaultID == personalVault.id
-                    && material?.revision == personalVault.revision
-                    && material?.allowsUpload == true
+            personalVaultSetup = .checking
+            if personalVault.revision == 0 {
+                personalVaultSetup = .empty
+            } else {
+                let deviceID = resolvedDeviceID()
+                let material = try await Task.detached { [personalVaultKeyStore] in
+                    try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
+                }.value
+                try await client.checkSession(session)
+                guard isCurrentPresentation(generation, session: session) else { return }
+                if let material, material.vaultID == personalVault.id {
+                    if material.allowsUpload {
+                        personalVaultSetup = .connected
+                    } else {
+                        personalVaultSetup = material.wrappedKey == personalVault.envelope?.wrappedKey
+                            ? .initialDownload : .needsUnlock
+                    }
+                } else {
+                    personalVaultSetup = .needsUnlock
+                }
             }
         } catch {
             guard isCurrentPresentation(generation, session: session) else { return }
@@ -821,6 +853,7 @@ struct CloudSettingsView: View {
                 return
             }
             personalVaultRevision = nil
+            personalVaultSetup = .checking
             personalVaultLoadErrorMessage = error.localizedDescription
         }
 
@@ -890,14 +923,65 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
+    private func connectPersonalVault(
+        unlock: (String, SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod)? = nil
+    ) {
+        guard !accountPhase.isBusy, let session = accountSession,
+              (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == session.endpoint
+        else { return }
+        let generation = accountPresentationGeneration
+        let deviceID = resolvedDeviceID()
+        accountPhase = .connectingPersonalVault
+        personalVaultUnlockError = nil
+        personalVaultLoadErrorMessage = nil
+        Task { @MainActor in
+            do {
+                if let (secret, method) = unlock {
+                    let enrollment = SelectiveRemotePersonalVaultAccountEnrollment(
+                        client: client, keyStore: personalVaultKeyStore
+                    )
+                    try await enrollment.unlockExistingVault(
+                        session: session, deviceID: deviceID, secret: secret, method: method
+                    )
+                    guard isCurrentPresentation(generation, session: session) else { return }
+                    personalVaultSetup = .initialDownload
+                    showsPersonalVaultUnlock = false
+                }
+                try await applyInitialPersonalVaultDownload(
+                    endpoint: session.endpoint, deviceID: deviceID, session: session
+                )
+                try await client.checkSession(session)
+                guard isCurrentPresentation(generation, session: session) else { return }
+                accountPhase = .signedIn
+                await loadInventory(endpoint: session.endpoint)
+                guard isCurrentPresentation(generation, session: session) else { return }
+                NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
+            } catch {
+                guard isCurrentPresentation(generation, session: session) else { return }
+                accountPhase = .signedIn
+                if error is CancellationError {
+                    await recoverCancelledPresentation(generation, session: session)
+                    return
+                }
+                if (error as? SelectiveRemoteCloudError)?.isAuthenticationLoss == true {
+                    resetAccountPresentation(endpoint: session.endpoint)
+                    accountErrorMessage = error.localizedDescription
+                    return
+                }
+                if showsPersonalVaultUnlock { personalVaultUnlockError = error.localizedDescription }
+                else { personalVaultLoadErrorMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    @MainActor
     private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID, session: SelectiveRemoteCloudSessionBinding) async throws {
-        guard var material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
+        guard let material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
               material.requiresInitialDownload == true
         else { return }
-        let expectedMaterial = material
         let remote = try await client.personalVault(endpoint: url, session: session)
-        guard remote.id == material.vaultID, remote.revision == material.revision,
-              let envelope = remote.envelope
+        guard remote.id == material.vaultID, remote.revision >= material.revision,
+              let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey
         else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
         let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
         let snapshot = try SelectiveRemotePersonalVaultImporter.decode(document)
@@ -912,10 +996,14 @@ struct CloudSettingsView: View {
         guard plan.canApply else {
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
-        material.requiresInitialDownload = false
-        _ = try session.commitPersonalVault(
+        let applied = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: remote.id, vaultKey: material.vaultKey, wrappedKey: envelope.wrappedKey,
+            revision: remote.revision, documentHash: Data(SHA256.hash(data: document.encoded())),
+            includesCredentials: document.records.contains { $0.type == .credential }
+        )
+        let committed = try session.commitPersonalVault(
             tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID,
-            expected: expectedMaterial, material: material
+            expected: material, material: applied
         ) {
             try KeychainService.savePasswords(plan.credentials)
             model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
@@ -924,6 +1012,7 @@ struct CloudSettingsView: View {
             history.importTemplates(plan.snippets)
             return true
         }
+        guard committed else { throw CancellationError() }
     }
 
     @MainActor
@@ -942,7 +1031,14 @@ struct CloudSettingsView: View {
         personalVaultRevision = nil
         personalVaultMessage = nil
         personalVaultMessageIsError = false
-        personalVaultAutoSyncConfigured = false
+        personalVaultSetup = .checking
+        showsPersonalVaultUnlock = false
+        showsPersonalVaultUpload = false
+        personalVaultUnlockError = nil
+        personalVaultUploading = false
+        personalVaultRecoveryPhrase = ""
+        personalVaultRecoveryConfirmation = ""
+        includePersonalVaultCredentials = false
         accountErrorMessage = nil
         inventoryErrorMessage = nil
         personalVaultLoadErrorMessage = nil
@@ -981,6 +1077,34 @@ struct CloudSettingsView: View {
     private var registrationURL: URL? {
         guard let base = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return nil }
         return SelectiveRemoteCloudPortalURL.registration(endpoint: base)
+    }
+
+    private var personalVaultSetupTitle: String {
+        switch personalVaultSetup {
+        case .checking:
+            UpdateLocalization.text(ru: "Ожидает проверки", en: "Awaiting check")
+        case .empty:
+            UpdateLocalization.text(ru: "Нужна первоначальная настройка", en: "Initial setup needed")
+        case .needsUnlock:
+            UpdateLocalization.text(ru: "Нужно разблокировать Vault", en: "Vault needs unlocking")
+        case .initialDownload:
+            UpdateLocalization.text(ru: "Нужно завершить подключение", en: "Finish connecting")
+        case .connected:
+            personalVaultSyncEnabled
+                ? UpdateLocalization.text(ru: "Включена", en: "Enabled")
+                : UpdateLocalization.text(ru: "Выключена", en: "Disabled")
+        }
+    }
+
+    private var personalVaultSetupAction: String {
+        switch personalVaultSetup {
+        case .empty:
+            UpdateLocalization.text(ru: "Настроить личный Vault…", en: "Set Up Personal Vault…")
+        case .initialDownload:
+            UpdateLocalization.text(ru: "Завершить подключение", en: "Finish Connecting")
+        default:
+            UpdateLocalization.text(ru: "Разблокировать личный Vault…", en: "Unlock Personal Vault…")
+        }
     }
 
     @MainActor
@@ -1107,6 +1231,8 @@ struct CloudSettingsView: View {
         }
 
         personalVaultUploading = true
+        accountPhase = .connectingPersonalVault
+        let generation = accountPresentationGeneration
         personalVaultMessage = nil
         personalVaultMessageIsError = false
         Task { @MainActor in
@@ -1132,6 +1258,7 @@ struct CloudSettingsView: View {
                         baseRevision: 0
                     )
                 }.value
+                guard isCurrentPresentation(generation, session: session) else { return }
                 let result = try await client.putPersonalVault(endpoint: url, envelope: setup.envelope, session: session)
                 guard !result.conflict else {
                     throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
@@ -1146,7 +1273,8 @@ struct CloudSettingsView: View {
                     includesCredentials: !credentials.isEmpty
                 )
                 try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: personalVaultKeyStore, replacing: expectedMaterial)
-                personalVaultAutoSyncConfigured = true
+                guard isCurrentPresentation(generation, session: session) else { return }
+                personalVaultSetup = .connected
                 personalVaultRevision = result.revision
                 personalVaultMessage = UpdateLocalization.text(
                     ru: "Защищённая автосинхронизация включена. Первая ревизия r\(result.revision) отправлена; сохранённые credential-записи будут сохраняться при фоновых обновлениях.",
@@ -1154,9 +1282,13 @@ struct CloudSettingsView: View {
                 )
                 personalVaultMessageIsError = false
                 personalVaultUploading = false
+                accountPhase = .signedIn
                 closePersonalVaultUploadSheet()
+                NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
             } catch {
+                guard isCurrentPresentation(generation, session: session) else { return }
                 personalVaultUploading = false
+                accountPhase = .signedIn
                 personalVaultMessage = error.localizedDescription
                 personalVaultMessageIsError = true
             }
@@ -1285,18 +1417,23 @@ struct CloudSettingsView: View {
         case registration
     }
 
+    private enum PersonalVaultSetup {
+        case checking, empty, needsUnlock, initialDownload, connected
+    }
+
     private enum AccountPhase: Equatable {
         case signedOut
         case restoring
         case signingIn
         case registering
         case signedIn
+        case connectingPersonalVault
         case refreshing
         case signingOut
 
         var isBusy: Bool {
             switch self {
-            case .restoring, .signingIn, .registering, .refreshing, .signingOut: true
+            case .restoring, .signingIn, .registering, .connectingPersonalVault, .refreshing, .signingOut: true
             case .signedOut, .signedIn: false
             }
         }
