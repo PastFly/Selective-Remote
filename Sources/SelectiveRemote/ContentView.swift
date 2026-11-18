@@ -582,8 +582,8 @@ struct ContentView: View {
 
     private func legacyHostWarningView(_ warning: LegacyHostWarning) -> some View {
         let title = warning == .changed
-            ? UpdateLocalization.text(ru: "Изменения в предыдущей версии", en: "Changes in the previous version")
-            : UpdateLocalization.text(ru: "Не удалось проверить предыдущую версию", en: "Could not check the previous version")
+            ? UpdateLocalization.text(ru: "Старые профили изменились", en: "Legacy profiles changed")
+            : UpdateLocalization.text(ru: "Старые профили не проверены", en: "Legacy profiles not checked")
         let message = warning == .changed
             ? UpdateLocalization.text(
                 ru: "Данные подключений предыдущей версии изменились после обновления и не отображаются здесь. Откройте предыдущую версию, чтобы их просмотреть. Не редактируйте подключения одновременно в обеих версиях.",
