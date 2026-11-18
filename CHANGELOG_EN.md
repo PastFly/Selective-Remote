@@ -1,3 +1,8 @@
+## 0.32.3
+
+- Fixed a UI freeze during Cloud sign-in and saved-session restoration.
+- The legacy-profile warning opens its details on click and can be dismissed from the sidebar.
+
 ## 0.32.2
 
 - Selective Remote checks GitHub for stable releases at launch and every five hours and shows available updates in the app.

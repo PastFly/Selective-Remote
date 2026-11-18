@@ -29,6 +29,7 @@ final class UnifiedCredentialVault: @unchecked Sendable {
     nonisolated(unsafe) private static var activeFileLock: (path: String, fd: Int32, depth: Int)?
     private let lock = UnifiedCredentialVault.processLock
     private var observedExistingItem = false
+    private var cachedIndex: Set<String>?
     private let defaults: UserDefaults
     private let lockDirectory: URL?
     private let indexKey = "SelectiveRemote.keychain.unifiedVault.index.v2"
@@ -371,8 +372,15 @@ final class UnifiedCredentialVault: @unchecked Sendable {
     }
 
     private var index: Set<String> {
-        get { Set(defaults.stringArray(forKey: indexKey) ?? []) }
-        set { defaults.set(Array(newValue).sorted(), forKey: indexKey) }
+        get { cachedIndex ?? Set(defaults.stringArray(forKey: indexKey) ?? []) }
+        set {
+            guard newValue != index else { return }
+            cachedIndex = newValue
+            let values = newValue.sorted()
+            // UserDefaults notifies SwiftUI synchronously. Publish the display
+            // cache on the main queue without making vault callers wait for it.
+            DispatchQueue.main.async { [self] in defaults.set(values, forKey: indexKey) }
+        }
     }
 
     private var suppressedLegacy: Set<String> {

@@ -18,10 +18,11 @@ with tempfile.TemporaryDirectory(prefix='sr-unified-vault-fixture-', dir='/priva
         'UnifiedCredentialVault(defaults: FakeDefaults())',
         'UnifiedCredentialVault(defaults: FakeDefaults(), lockDirectory: URL(fileURLWithPath: "' + str(work / 'locks') + '"))',
     )
-    main = main.replace(
-        'UnifiedCredentialVault(defaults: oldDefaults)',
-        'UnifiedCredentialVault(defaults: oldDefaults, lockDirectory: URL(fileURLWithPath: "' + str(work / 'locks') + '"))',
-    )
+    for defaults in ('oldDefaults', 'displayDefaults'):
+        main = main.replace(
+            f'UnifiedCredentialVault(defaults: {defaults})',
+            f'UnifiedCredentialVault(defaults: {defaults}, lockDirectory: URL(fileURLWithPath: "{work / "locks"}"))',
+        )
     (work / 'main.swift').write_text(main)
     cache = work / 'cache'
     environment = dict(os.environ, CLANG_MODULE_CACHE_PATH=str(cache), SR_FIXTURE_DIR=str(work))
