@@ -8,7 +8,7 @@ enum SyncScope: Equatable, Sendable {
 
 enum SyncLifecycle: Equatable, Sendable {
     case security, error, conflict, offline, syncing, pending, synced, unknown
-    case signedOut, locked, disabled
+    case signedOut, locked, disabled, setupRequired
 
     var priority: Int {
         switch self {
@@ -19,7 +19,7 @@ enum SyncLifecycle: Equatable, Sendable {
         case .syncing: 3
         case .pending: 2
         case .synced: 1
-        case .unknown, .signedOut, .locked, .disabled: 0
+        case .unknown, .signedOut, .locked, .disabled, .setupRequired: 0
         }
     }
 
@@ -32,10 +32,11 @@ enum SyncLifecycle: Equatable, Sendable {
         case .syncing: english ? "Checking…" : "Проверка…"
         case .pending: english ? "Changes awaiting confirmation" : "Изменения ожидают подтверждения"
         case .synced: english ? "Confirmed on this Mac" : "Подтверждено на этом Mac"
-        case .unknown: english ? "Status unknown" : "Состояние неизвестно"
+        case .unknown: english ? "Awaiting check" : "Ожидает проверки"
         case .signedOut: english ? "Sign in required" : "Требуется вход"
         case .locked: english ? "Unlock required" : "Требуется разблокировка"
         case .disabled: english ? "Sync disabled" : "Синхронизация выключена"
+        case .setupRequired: english ? "Personal Vault needs setup" : "Нужно подключить личный Vault"
         }
     }
 }
@@ -132,7 +133,7 @@ final class SyncPresentationStore: ObservableObject {
         let scopes = [personal.lifecycle, team.lifecycle]
         if let urgent = scopes.filter({ [.security, .error, .conflict].contains($0) })
             .max(by: { $0.priority < $1.priority }) { return urgent }
-        for prerequisite in [SyncLifecycle.locked, .signedOut, .disabled] {
+        for prerequisite in [SyncLifecycle.locked, .signedOut, .setupRequired, .disabled] {
             if scopes.contains(prerequisite) { return prerequisite }
         }
         let highest = scopes.max { $0.priority < $1.priority } ?? .unknown
@@ -252,13 +253,13 @@ final class SyncPresentationStore: ObservableObject {
     }
 
     func setPrerequisite(_ scope: SyncScope, lifecycle: SyncLifecycle) {
-        guard [.signedOut, .locked, .disabled, .unknown].contains(lifecycle) else { return }
+        guard [.signedOut, .locked, .disabled, .setupRequired, .unknown].contains(lifecycle) else { return }
         update(scope, lifecycle: lifecycle, issue: nil, pending: nil)
     }
 
     func retry(_ scope: SyncScope) {
         let snapshot = scope == .personal ? personal : team
-        guard snapshot.lifecycle != .syncing else { return }
+        guard ![.syncing, .signedOut, .locked, .disabled, .setupRequired].contains(snapshot.lifecycle) else { return }
         begin(scope)
         NotificationCenter.default.post(
             name: scope == .personal ? .selectiveRemotePersonalVaultSyncNow :

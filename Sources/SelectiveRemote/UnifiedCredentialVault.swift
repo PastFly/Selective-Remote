@@ -487,19 +487,14 @@ final class UnifiedCredentialVault: @unchecked Sendable {
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: Self.account
         ]
+        // The existing login Keychain item keeps its access control list.
+        // Save the payload once to avoid asking for access a second time.
         let updateStatus = SecItemUpdate(
             key as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
         )
         if updateStatus == errSecSuccess {
             observedExistingItem = true
-            // Accessibility hardening is best-effort for an existing legacy
-            // item: failure must never discard a successfully stored session.
-            _ = SecItemUpdate(
-                key as CFDictionary,
-                [kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-                    as CFDictionary
-            )
             return
         }
         guard updateStatus == errSecItemNotFound else {

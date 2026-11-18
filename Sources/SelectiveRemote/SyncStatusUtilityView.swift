@@ -19,9 +19,9 @@ struct SyncStatusUtilityDescriptor {
             symbolName = "arrow.triangle.2.circlepath"
             tint = .accentColor
         case .unknown:
-            title = english ? "Status unknown" : "Состояние неизвестно"
-            compactTitle = english ? "Unknown" : "Неизвестно"
-            symbolName = "questionmark.circle"
+            title = lifecycle.title(english: english)
+            compactTitle = title
+            symbolName = "clock"
             tint = .secondary
         case .error:
             title = english ? "Sync failed" : "Ошибка синхронизации"
@@ -62,6 +62,11 @@ struct SyncStatusUtilityDescriptor {
             title = english ? "Sync disabled" : "Синхронизация выключена"
             compactTitle = english ? "Disabled" : "Выключена"
             symbolName = "pause.circle"
+            tint = .secondary
+        case .setupRequired:
+            title = lifecycle.title(english: english)
+            compactTitle = english ? "Set up Vault" : "Подключить Vault"
+            symbolName = "key.fill"
             tint = .secondary
         }
     }

@@ -160,12 +160,25 @@ struct SyncPresentationTests {
         #expect(store.team.pendingLocalChanges == nil)
     }
 
+    @Test("A confirmed Team does not hide Personal Vault setup")
+    func personalSetupRemainsVisible() {
+        let store = SyncPresentationStore()
+        store.recordTeamReport(.init(scannedVaults: 3, synchronizedVaults: 3))
+        store.setPrerequisite(.personal, lifecycle: .setupRequired)
+
+        #expect(store.aggregate == .setupRequired)
+        #expect(store.team.lifecycle == .synced)
+        #expect(store.team.checkedVaultCount == 3)
+        store.retry(.personal)
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
     @Test("Lifecycle has distinct Russian and English labels")
     func localizedLabels() {
         #expect(SyncLifecycle.security.title(english: true) == "Action required")
         #expect(SyncLifecycle.security.title(english: false) == "Требуется действие")
-        #expect(SyncLifecycle.unknown.title(english: true) == "Status unknown")
-        #expect(SyncLifecycle.unknown.title(english: false) == "Состояние неизвестно")
+        #expect(SyncLifecycle.unknown.title(english: true) == "Awaiting check")
+        #expect(SyncLifecycle.unknown.title(english: false) == "Ожидает проверки")
     }
 }
 

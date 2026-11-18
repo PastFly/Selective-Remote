@@ -184,13 +184,26 @@ struct SelectiveRemotePersonalVaultKeychainStore: SelectiveRemotePersonalVaultKe
 struct SelectiveRemotePersonalVaultAccountEnrollment {
     enum EnrollmentError: LocalizedError {
         case existingVaultUnlockFailed
+        case vaultNotInitialized
 
         var errorDescription: String? {
-            UpdateLocalization.text(
-                ru: "Не удалось открыть существующий Cloud Vault с этим паролем аккаунта. Приложение не заменило Vault и не изменило сохранённые ключи. Проверьте аккаунт и пароль.",
-                en: "The existing Cloud Vault could not be unlocked with this account password. The app did not replace the Vault or change saved keys. Check the account and password."
-            )
+            switch self {
+            case .existingVaultUnlockFailed:
+                UpdateLocalization.text(
+                    ru: "Не удалось открыть личный Vault. Проверьте пароль, с которым он был настроен, или используйте его фразу восстановления.",
+                    en: "Could not unlock Personal Vault. Check the password used to set it up, or use its recovery phrase."
+                )
+            case .vaultNotInitialized:
+                UpdateLocalization.text(
+                    ru: "Личный Vault ещё не создан. Обновите настройки Cloud и выполните первоначальную настройку.",
+                    en: "Personal Vault has not been created yet. Refresh Cloud Settings and complete initial setup."
+                )
+            }
         }
+    }
+
+    enum UnlockMethod: Sendable, CaseIterable {
+        case accountPassword, recoveryPhrase
     }
 
     let client: SelectiveRemoteCloudAPIClient
@@ -238,16 +251,51 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
                 passphrase: passphrase
             )
         } else {
-            guard let envelope = remote.envelope else {
-                throw SelectiveRemotePersonalVaultError.invalidEnvelope
+            material = try await Self.unlockedMaterial(remote, passphrase: passphrase)
+        }
+        try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial)
+        return material.revision
+    }
+
+    func unlockExistingVault(
+        session: SelectiveRemoteCloudSessionBinding,
+        deviceID: UUID,
+        secret: String,
+        method: UnlockMethod
+    ) async throws {
+        let passphrase: String
+        switch method {
+        case .accountPassword:
+            passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(secret)
+        case .recoveryPhrase:
+            guard (16...1_024).contains(secret.precomposedStringWithCanonicalMapping.utf8.count) else {
+                throw SelectiveRemotePersonalVaultError.invalidRecoveryPhrase
             }
+            passphrase = secret
+        }
+        let endpoint = session.endpoint
+        let expectedMaterial = try keyStore.material(endpoint: endpoint, deviceID: deviceID)
+        let remote = try await client.personalVault(endpoint: endpoint, session: session)
+        let material = try await Self.unlockedMaterial(remote, passphrase: passphrase)
+        try await client.savePersonalVaultMaterial(
+            material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial
+        )
+    }
+
+    private static func unlockedMaterial(
+        _ remote: SelectiveRemoteCloudPersonalVault,
+        passphrase: String
+    ) async throws -> SelectiveRemotePersonalVaultKeyMaterial {
+        guard remote.revision > 0 else { throw EnrollmentError.vaultNotInitialized }
+        guard let envelope = remote.envelope else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+        return try await Task.detached(priority: .userInitiated) {
             do {
                 let vaultKey = try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
                     envelope.wrappedKey,
                     passphrase: passphrase
                 )
                 let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
-                material = try .init(
+                return try SelectiveRemotePersonalVaultKeyMaterial(
                     vaultID: remote.id,
                     vaultKey: vaultKey,
                     wrappedKey: envelope.wrappedKey,
@@ -261,9 +309,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
                 // account password. Local data must not authorize replacing existing ciphertext.
                 throw EnrollmentError.existingVaultUnlockFailed
             }
-        }
-        try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial)
-        return material.revision
+        }.value
     }
 
     private func replaceWithLocalVault(
@@ -323,6 +369,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
 
     enum CheckResult: Sendable {
         case unavailable
+        case signedOut
+        case setupRequired
         case unconfirmedUpload(issue: SyncIssue?)
         case current(revision: Int)
         case download(Download)
@@ -398,11 +446,15 @@ actor SelectiveRemotePersonalVaultAutoSync {
 
     func checkForChanges(endpoint: URL, deviceID: UUID) async throws -> CheckResult {
         let sessionEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        let session: SelectiveRemoteCloudSessionBinding
+        do {
+            session = try await client.sessionBinding(endpoint: endpoint, expectedEpoch: sessionEpoch)
+        } catch SelectiveRemoteCloudError.authenticationRequired {
+            return sessionEpoch == SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+                ? .signedOut : .unavailable
+        }
         guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
-              material.allowsUpload,
-              await client.hasStoredSession(endpoint: endpoint)
-        else { return .unavailable }
-        let session = try await client.sessionBinding(endpoint: endpoint, expectedEpoch: sessionEpoch)
+              material.allowsUpload else { return .setupRequired }
         let remote = try await client.personalVault(endpoint: endpoint, session: session)
         guard await client.hasStoredSession(endpoint: endpoint),
               SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == sessionEpoch,

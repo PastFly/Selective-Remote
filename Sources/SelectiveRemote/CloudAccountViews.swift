@@ -1,6 +1,77 @@
 import Foundation
 import SwiftUI
 
+struct PersonalVaultUnlockView: View {
+    let isUnlocking: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onUnlock: (String, SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod) -> Void
+
+    @State private var secret = ""
+    @State private var method = SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod.accountPassword
+    @FocusState private var focusesSecret: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(
+                UpdateLocalization.text(ru: "Подключить личный Vault", en: "Connect Personal Vault"),
+                systemImage: "lock.open"
+            )
+            .font(.title2.bold())
+
+            Text(UpdateLocalization.text(
+                ru: "Cloud уже подключён. Разблокируйте Vault на этом Mac. Введённые данные используются локально.",
+                en: "You’re already signed in to Cloud. Unlock the Vault on this Mac. Your entry is used locally."
+            ))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Picker(UpdateLocalization.text(ru: "Способ разблокировки", en: "Unlock method"), selection: $method) {
+                Text(UpdateLocalization.text(ru: "Пароль аккаунта", en: "Account password"))
+                    .tag(SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod.accountPassword)
+                Text(UpdateLocalization.text(ru: "Фраза восстановления", en: "Recovery phrase"))
+                    .tag(SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod.recoveryPhrase)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(isUnlocking)
+            .onChange(of: method) { _, _ in secret = ""; focusesSecret = true }
+
+            SecureField(method == .accountPassword
+                ? UpdateLocalization.text(ru: "Пароль, которым настроен Vault", en: "Password used to set up the Vault")
+                : UpdateLocalization.text(ru: "Фраза восстановления Vault", en: "Vault recovery phrase"), text: $secret)
+                .textFieldStyle(.roundedBorder)
+                .focused($focusesSecret)
+                .disabled(isUnlocking)
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                if isUnlocking { ProgressView().controlSize(.small) }
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isUnlocking)
+                Button(UpdateLocalization.text(ru: "Разблокировать", en: "Unlock")) {
+                    let value = secret
+                    secret = ""
+                    onUnlock(value, method)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isUnlocking || secret.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 380, idealWidth: 450, maxWidth: 500)
+        .onAppear { focusesSecret = true }
+        .interactiveDismissDisabled(isUnlocking)
+    }
+}
+
 struct SelectiveRemoteCloudSignInView: View {
     let endpoint: URL
     let registrationEnabled: Bool?

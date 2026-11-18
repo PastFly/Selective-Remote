@@ -220,6 +220,45 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(login.user.id == UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
     }
 
+    @Test("Personal Vault unlock uses the existing session for either locally supplied secret",
+          arguments: SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod.allCases)
+    func unlockWithCurrentSession(method: SelectiveRemotePersonalVaultAccountEnrollment.UnlockMethod) async throws {
+        let recoveryPhrase = "synthetic recovery phrase for the existing Vault"
+        let f = try await Self.fixture(
+            password: Self.newPassword,
+            wrappingPassphrase: method == .recoveryPhrase ? recoveryPhrase : nil
+        )
+        let before = await f.http.requestPaths().count
+
+        try await f.enrollment.unlockExistingVault(
+            session: f.session, deviceID: Self.deviceID,
+            secret: method == .recoveryPhrase ? recoveryPhrase : Self.oldPassword, method: method
+        )
+
+        #expect(Array(await f.http.requestPaths().dropFirst(before)) == ["GET /v1/vault"])
+        #expect(f.keys.saveCount == 1)
+        let material = try #require(f.keys.savedMaterial)
+        #expect(material.vaultID == Self.vaultID)
+        #expect(material.revision == 5)
+        #expect(!material.allowsUpload)
+        try await f.client.checkSession(f.session)
+    }
+
+    @Test("The current account password cannot overwrite material for an older Vault password")
+    func wrongSecretPreservesRemoteAndLocalMaterial() async throws {
+        let f = try await Self.fixture(password: Self.newPassword, trustedKey: true)
+        let before = await f.http.requestPaths().count
+
+        await #expect(throws: SelectiveRemotePersonalVaultAccountEnrollment.EnrollmentError.existingVaultUnlockFailed) {
+            try await f.enrollment.unlockExistingVault(
+                session: f.session, deviceID: Self.deviceID, secret: Self.newPassword, method: .accountPassword
+            )
+        }
+        #expect(Array(await f.http.requestPaths().dropFirst(before)) == ["GET /v1/vault"])
+        #expect(f.keys.saveCount == 0)
+        try await f.client.checkSession(f.session)
+    }
+
     @Test("First enrollment still uploads local data to an empty remote Vault")
     func emptyRemoteEnrollment() async throws {
         let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
