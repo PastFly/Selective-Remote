@@ -201,6 +201,12 @@ struct ContentView: View {
     private var personalHostDetailVisible = true
     @AppStorage("SelectiveRemote.sidebar-host-quick-access-visible.v1")
     private var sidebarHostQuickAccessVisible = true
+    @AppStorage("SelectiveRemote.sidebar.connections-only.v1")
+    private var sidebarConnectionsOnly = false
+    @AppStorage("SelectiveRemote.sidebar.workspace-expanded.v1")
+    private var sidebarWorkspaceExpanded = true
+    @AppStorage("SelectiveRemote.sidebar.cloud-expanded.v1")
+    private var sidebarCloudExpanded = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -221,7 +227,26 @@ struct ContentView: View {
     ]
 
     private var showsHostQuickAccess: Bool {
-        sidebarHostQuickAccessVisible
+        sidebarConnectionsOnly || sidebarHostQuickAccessVisible
+    }
+
+    private var sidebarModeButton: some View {
+        Button {
+            sidebarConnectionsOnly.toggle()
+        } label: {
+            Label(
+                sidebarConnectionsOnly
+                    ? UpdateLocalization.text(ru: "Показать разделы", en: "Show Sections")
+                    : UpdateLocalization.text(ru: "Только подключения", en: "Connections Only"),
+                systemImage: sidebarConnectionsOnly ? "sidebar.left" : "list.bullet"
+            )
+            .labelStyle(.iconOnly)
+        }
+        .buttonStyle(.borderless)
+        .help(sidebarConnectionsOnly
+            ? UpdateLocalization.text(ru: "Показать разделы", en: "Show Sections")
+            : UpdateLocalization.text(ru: "Только подключения", en: "Connections Only"))
+        .accessibilityIdentifier("sidebar.connections-only")
     }
 
     private var profile: ConnectionProfile { model.selectedProfile }
@@ -631,144 +656,19 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        SelectiveRemoteWorkspaceChrome.accent,
-                                        Color(red: 0.12, green: 0.52, blue: 0.46)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                        Image(systemName: "network")
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .frame(width: 42, height: 42)
-                    .shadow(
-                        color: SelectiveRemoteWorkspaceChrome.accent.opacity(0.20),
-                        radius: 10,
-                        y: 4
-                    )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(AppBrand.name)
-                            .font(.title3.bold())
-                            .lineLimit(1)
-                        Text("\(AppBrand.tagline) · \(AppBuildInfo.displayText)")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .layoutPriority(1)
-                    Spacer(minLength: 6)
-                    notificationBell
-                    Button {
-                        showsAppearanceSettings.toggle()
-                    } label: {
-                        Image(systemName: "paintpalette")
-                    }
-                    .buttonStyle(.borderless)
-                    // This is an auxiliary mouse action, not the primary action of
-                    // the window. Excluding it from the key-view loop prevents
-                    // macOS from painting it as selected immediately after launch.
-                    .focusable(false)
-                    .help("Оформление приложения и терминала")
-                    .popover(isPresented: $showsAppearanceSettings, arrowEdge: .top) {
-                        TerminalAppearanceView(
-                            store: terminalAppearance,
-                            appAppearance: appAppearance
-                        )
-                    }
+            if sidebarConnectionsOnly {
+                HStack {
+                    Text(UpdateLocalization.text(ru: "Подключения", en: "Connections"))
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    sidebarModeButton
                 }
-
-                if model.availableUpdateManifest != nil ||
-                    model.runningSessionCount > 0 ||
-                    model.runningSSHTunnelCount > 0 {
-                    HStack(spacing: 8) {
-                        if let manifest = model.availableUpdateManifest {
-                            Button {
-                                showsUpdatePopover.toggle()
-                            } label: {
-                                Label {
-                                    Text(
-                                        UpdateLocalization.text(
-                                            ru: "Обновление \(manifest.version)",
-                                            en: "Update \(manifest.version)"
-                                        )
-                                    )
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.85)
-                                } icon: {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                }
-                                .font(.caption.bold())
-                                .foregroundStyle(Color.accentColor)
-                            }
-                            .buttonStyle(.borderless)
-                            .focusable(false)
-                            .layoutPriority(1)
-                            .help(
-                                UpdateLocalization.text(
-                                    ru: "Доступно обновление \(manifest.version)",
-                                    en: "Update \(manifest.version) is available"
-                                )
-                            )
-                            .popover(isPresented: $showsUpdatePopover, arrowEdge: .top) {
-                                UpdateExperiencePopover(model: model)
-                            }
-                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                            .animation(
-                                reduceMotion ? nil : .easeInOut(duration: 0.2),
-                                value: manifest.version
-                            )
-                        }
-                        Spacer(minLength: 4)
-                        if model.runningSessionCount > 0 {
-                            Label("\(model.runningSessionCount)", systemImage: "bolt.fill")
-                                .font(.caption.bold())
-                                .foregroundStyle(Color.green)
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 5)
-                                .background(Color.green.opacity(0.12), in: Capsule())
-                                .fixedSize(horizontal: true, vertical: false)
-                                .help(
-                                    UpdateLocalization.text(
-                                        ru: "Активных RDP-сессий: \(model.runningSessionCount)",
-                                        en: "Active RDP sessions: \(model.runningSessionCount)"
-                                    )
-                                )
-                        }
-                        if model.runningSSHTunnelCount > 0 {
-                            Label(
-                                "\(model.runningSSHTunnelCount)",
-                                systemImage: "arrow.left.arrow.right"
-                            )
-                            .font(.caption.bold())
-                            .foregroundStyle(Color.orange)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
-                            .background(Color.orange.opacity(0.12), in: Capsule())
-                            .fixedSize(horizontal: true, vertical: false)
-                            .help(
-                                UpdateLocalization.text(
-                                    ru: "Активных SSH-туннелей: \(model.runningSSHTunnelCount)",
-                                    en: "Active SSH tunnels: \(model.runningSSHTunnelCount)"
-                                )
-                            )
-                        }
-                    }
-                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            } else {
+                sidebarHeader
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 16)
 
             if let legacyHostWarning {
                 legacyHostWarningView(legacyHostWarning)
@@ -777,45 +677,236 @@ struct ContentView: View {
             }
 
             if showsHostQuickAccess {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        hostScope == .personal
-                            ? UpdateLocalization.text(
-                                ru: "Поиск личных хостов",
-                                en: "Search Personal Hosts"
-                            )
-                            : UpdateLocalization.text(
-                                ru: "Поиск командных хостов",
-                                en: "Search Team Hosts"
-                            ),
-                        text: sidebarHostSearchBinding
-                    )
-                    .textFieldStyle(.plain)
-                    if !sidebarHostSearchBinding.wrappedValue.isEmpty {
-                        Button { sidebarHostSearchBinding.wrappedValue = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 11)
-                .frame(height: 38)
-                .background(
-                    .regularMaterial,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08))
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+                sidebarHostSearch
             }
 
-            VStack(spacing: 5) {
+            if !sidebarConnectionsOnly {
+                sidebarSections
+            }
+
+            if showsHostQuickAccess {
+                sidebarHostScopeSelector
+            }
+
+            if showsHostQuickAccess && hostScope == .personal {
+                profileTagFilterBar
+                profileCollection(surface: .sidebar)
+                    .id("personal-sidebar-\(hostScopePresentationID)")
+            } else if showsHostQuickAccess {
+                teamHostSidebarCollection
+                    .id("team-sidebar-\(hostScopePresentationID)")
+            }
+
+            if showsHostQuickAccess && !sidebarConnectionsOnly {
+                sidebarHostActions
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            LinearGradient(
+                colors: [
+                    SelectiveRemoteWorkspaceChrome.accent.opacity(0.055),
+                    Color(nsColor: .controlBackgroundColor).opacity(0.32),
+                    Color.clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(width: 1)
+        }
+    }
+
+    private var sidebarHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    SelectiveRemoteWorkspaceChrome.accent,
+                                    Color(red: 0.12, green: 0.52, blue: 0.46)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    Image(systemName: "network")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 42, height: 42)
+                .shadow(
+                    color: SelectiveRemoteWorkspaceChrome.accent.opacity(0.20),
+                    radius: 10,
+                    y: 4
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(AppBrand.name)
+                        .font(.title3.bold())
+                        .lineLimit(1)
+                    Text("\(AppBrand.tagline) · \(AppBuildInfo.displayText)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .layoutPriority(1)
+                Spacer(minLength: 6)
+                sidebarModeButton
+                notificationBell
+                Button {
+                    showsAppearanceSettings.toggle()
+                } label: {
+                    Image(systemName: "paintpalette")
+                }
+                .buttonStyle(.borderless)
+                // This is an auxiliary mouse action, not the primary action of
+                // the window. Excluding it from the key-view loop prevents
+                // macOS from painting it as selected immediately after launch.
+                .focusable(false)
+                .help("Оформление приложения и терминала")
+                .popover(isPresented: $showsAppearanceSettings, arrowEdge: .top) {
+                    TerminalAppearanceView(
+                        store: terminalAppearance,
+                        appAppearance: appAppearance
+                    )
+                }
+            }
+
+            if model.availableUpdateManifest != nil ||
+                model.runningSessionCount > 0 ||
+                model.runningSSHTunnelCount > 0 {
+                HStack(spacing: 8) {
+                    if let manifest = model.availableUpdateManifest {
+                        Button {
+                            showsUpdatePopover.toggle()
+                        } label: {
+                            Label {
+                                Text(
+                                    UpdateLocalization.text(
+                                        ru: "Обновление \(manifest.version)",
+                                        en: "Update \(manifest.version)"
+                                    )
+                                )
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                            } icon: {
+                                Image(systemName: "arrow.down.circle.fill")
+                            }
+                            .font(.caption.bold())
+                            .foregroundStyle(Color.accentColor)
+                        }
+                        .buttonStyle(.borderless)
+                        .focusable(false)
+                        .layoutPriority(1)
+                        .help(
+                            UpdateLocalization.text(
+                                ru: "Доступно обновление \(manifest.version)",
+                                en: "Update \(manifest.version) is available"
+                            )
+                        )
+                        .popover(isPresented: $showsUpdatePopover, arrowEdge: .top) {
+                            UpdateExperiencePopover(model: model)
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 0.2),
+                            value: manifest.version
+                        )
+                    }
+                    Spacer(minLength: 4)
+                    if model.runningSessionCount > 0 {
+                        Label("\(model.runningSessionCount)", systemImage: "bolt.fill")
+                            .font(.caption.bold())
+                            .foregroundStyle(Color.green)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Color.green.opacity(0.12), in: Capsule())
+                            .fixedSize(horizontal: true, vertical: false)
+                            .help(
+                                UpdateLocalization.text(
+                                    ru: "Активных RDP-сессий: \(model.runningSessionCount)",
+                                    en: "Active RDP sessions: \(model.runningSessionCount)"
+                                )
+                            )
+                    }
+                    if model.runningSSHTunnelCount > 0 {
+                        Label(
+                            "\(model.runningSSHTunnelCount)",
+                            systemImage: "arrow.left.arrow.right"
+                        )
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.orange)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(
+                            UpdateLocalization.text(
+                                ru: "Активных SSH-туннелей: \(model.runningSSHTunnelCount)",
+                                en: "Active SSH tunnels: \(model.runningSSHTunnelCount)"
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
+
+    }
+
+    private var sidebarHostSearch: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField(
+                hostScope == .personal
+                    ? UpdateLocalization.text(
+                        ru: "Поиск личных хостов",
+                        en: "Search Personal Hosts"
+                    )
+                    : UpdateLocalization.text(
+                        ru: "Поиск командных хостов",
+                        en: "Search Team Hosts"
+                    ),
+                text: sidebarHostSearchBinding
+            )
+            .textFieldStyle(.plain)
+            if !sidebarHostSearchBinding.wrappedValue.isEmpty {
+                Button { sidebarHostSearchBinding.wrappedValue = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 38)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var sidebarSections: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            DisclosureGroup(isExpanded: $sidebarCloudExpanded) {
                 CloudSyncServiceBlockView(
                     lifecycle: syncPresentation.aggregate,
                     english: language.selection.usesEnglish,
@@ -830,90 +921,105 @@ struct ContentView: View {
                     },
                     onSync: { showsSyncCenter = true }
                 )
+            } label: {
+                Text(UpdateLocalization.text(ru: "Облачные сервисы", en: "Cloud Services"))
+            }
+            .accessibilityIdentifier("sidebar.cloud")
 
-                ForEach(primaryMainAreas) { area in
-                    Button {
-                        setMainArea(area)
+            DisclosureGroup(isExpanded: $sidebarWorkspaceExpanded) {
+                VStack(spacing: 5) {
+                    ForEach(primaryMainAreas) { area in
+                        Button {
+                            setMainArea(area)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: area.systemImage)
+                                    .frame(width: 22)
+                                Text(area.title)
+                                Spacer()
+                                if area == .hosts, !teamHosts.hosts.isEmpty {
+                                    Text("\(teamHosts.hosts.count)")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                                if area == .ssh,
+                                   model.globalTerminalWorkspace().runningSessionCount > 0 {
+                                    Text("\(model.globalTerminalWorkspace().runningSessionCount)")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.green)
+                                }
+                                if area == .terminal, model.runningLocalTerminalCount > 0 {
+                                    Text("\(model.runningLocalTerminalCount)")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.blue)
+                                }
+                                if area == .sftp {
+                                    SFTPWorkspaceSidebarStatus(workspace: model.sftpWorkspace)
+                                }
+                                if area == .forwarding,
+                                   model.runningIndependentSSHTunnelCount > 0 {
+                                    Text("\(model.runningIndependentSSHTunnelCount)")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            .padding(.horizontal, 11)
+                            .frame(height: 34)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: mainArea == area))
+                    }
+
+                    Menu {
+                        ForEach(secondaryMainAreas) { area in
+                            Button {
+                                setMainArea(area)
+                            } label: {
+                                Label(area.title, systemImage: area.systemImage)
+                            }
+                        }
+                        Divider()
+                        Section(UpdateLocalization.text(ru: "Боковая панель", en: "Sidebar")) {
+                            Toggle(
+                                UpdateLocalization.text(
+                                    ru: "Показывать Host Shelf",
+                                    en: "Show Host Shelf"
+                                ),
+                                isOn: $sidebarHostQuickAccessVisible
+                            )
+                        }
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: area.systemImage)
+                            Image(systemName: "ellipsis.circle")
                                 .frame(width: 22)
-                            Text(area.title)
+                            Text(UpdateLocalization.text(ru: "Инструменты", en: "Tools"))
                             Spacer()
-                            if area == .hosts, !teamHosts.hosts.isEmpty {
-                                Text("\(teamHosts.hosts.count)")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                            if area == .ssh,
-                               model.globalTerminalWorkspace().runningSessionCount > 0 {
-                                Text("\(model.globalTerminalWorkspace().runningSessionCount)")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.green)
-                            }
-                            if area == .terminal, model.runningLocalTerminalCount > 0 {
-                                Text("\(model.runningLocalTerminalCount)")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.blue)
-                            }
-                            if area == .sftp {
-                                SFTPWorkspaceSidebarStatus(workspace: model.sftpWorkspace)
-                            }
-                            if area == .forwarding,
-                               model.runningIndependentSSHTunnelCount > 0 {
-                                Text("\(model.runningIndependentSSHTunnelCount)")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.orange)
-                            }
                         }
                         .padding(.horizontal, 11)
                         .frame(height: 34)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: mainArea == area))
+                    .menuStyle(.borderlessButton)
+                    .background(
+                        secondaryMainAreas.contains(mainArea)
+                            ? Color.accentColor.opacity(0.18)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
                 }
-
-                Menu {
-                    ForEach(secondaryMainAreas) { area in
-                        Button {
-                            setMainArea(area)
-                        } label: {
-                            Label(area.title, systemImage: area.systemImage)
-                        }
-                    }
-                    Divider()
-                    Section(UpdateLocalization.text(ru: "Боковая панель", en: "Sidebar")) {
-                        Toggle(
-                            UpdateLocalization.text(
-                                ru: "Показывать Host Shelf",
-                                en: "Show Host Shelf"
-                            ),
-                            isOn: $sidebarHostQuickAccessVisible
-                        )
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "ellipsis.circle")
-                            .frame(width: 22)
-                        Text(UpdateLocalization.text(ru: "Инструменты", en: "Tools"))
-                        Spacer()
-                    }
-                    .padding(.horizontal, 11)
-                    .frame(height: 34)
-                    .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .background(
-                    secondaryMainAreas.contains(mainArea)
-                        ? Color.accentColor.opacity(0.18)
-                        : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                )
+            } label: {
+                Text(UpdateLocalization.text(ru: "Разделы", en: "Workspace"))
             }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 8)
+            .accessibilityIdentifier("sidebar.workspace")
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
 
-            if showsHostQuickAccess {
+    private var sidebarHostScopeSelector: some View {
+        VStack(spacing: 0) {
+            if !sidebarConnectionsOnly {
                 Divider()
                     .padding(.horizontal, 12)
                 HStack(spacing: 7) {
@@ -946,34 +1052,29 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 4)
-                Picker("", selection: $hostScope) {
-                    ForEach(HostScope.allCases) { scope in
-                        Text(scope.title).tag(scope)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .id(language.selection)
-                .labelsHidden()
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-                .onChange(of: hostScope) { _, scope in
-                    personalHostDropTargetID = nil
-                    DispatchQueue.main.async {
-                        refreshHostPresentations()
-                    }
+            }
+            Picker("", selection: $hostScope) {
+                ForEach(HostScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
                 }
             }
-
-            if showsHostQuickAccess && hostScope == .personal {
-                profileTagFilterBar
-                profileCollection(surface: .sidebar)
-                    .id("personal-sidebar-\(hostScopePresentationID)")
-            } else if showsHostQuickAccess {
-                teamHostSidebarCollection
-                    .id("team-sidebar-\(hostScopePresentationID)")
+            .pickerStyle(.segmented)
+            .id(language.selection)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+            .onChange(of: hostScope) { _, scope in
+                personalHostDropTargetID = nil
+                DispatchQueue.main.async {
+                    refreshHostPresentations()
+                }
             }
+        }
+    }
 
-            if showsHostQuickAccess && hostScope == .personal {
+    @ViewBuilder
+    private var sidebarHostActions: some View {
+        if hostScope == .personal {
                 Divider()
                 HStack(spacing: 9) {
                 Menu {
@@ -1058,7 +1159,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
-            } else if showsHostQuickAccess {
+        } else {
                 Divider()
                 ViewThatFits(in: .horizontal) {
                 HStack(spacing: 9) {
@@ -1184,26 +1285,6 @@ struct ContentView: View {
                 .buttonStyle(.borderless)
                 .padding(12)
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background {
-            LinearGradient(
-                colors: [
-                    SelectiveRemoteWorkspaceChrome.accent.opacity(0.055),
-                    Color(nsColor: .controlBackgroundColor).opacity(0.32),
-                    Color.clear
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-        }
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.06))
-                .frame(width: 1)
-        }
     }
 
     @ViewBuilder
@@ -1266,6 +1347,18 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contextMenu { personalHostEmptySpaceContextMenu }
+        } else if surface == .sidebar && sidebarConnectionsOnly {
+            List {
+                ForEach(model.profileGroups.flatMap(\.profiles)) { item in
+                    personalHostListRow(item, surface: surface)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .contextMenu { profileContextMenu(item) }
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .contextMenu { personalHostEmptySpaceContextMenu }
         } else if model.profileCollectionDisplayMode == .list {
             List {
                 SelectiveRemotePersistentOutlineRows(
@@ -1285,23 +1378,7 @@ struct ContentView: View {
                                 )
                             }
                     case let .profile(item):
-                        SelectiveRemoteDraggableHostCard(
-                            identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
-                            navigationScope: "personal-\(surface.rawValue)",
-                            previewTitle: item.friendlyName,
-                            select: { openProfile(item.id) },
-                            activate: { openProfile(item.id); model.connect() }
-                        ) {
-                            ProfileRow(
-                                profile: item,
-                                isSelected: showsPersonalHostSelection(on: surface)
-                                    && model.selectedProfileID == item.id,
-                                session: model.sessions[item.id],
-                                hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
-                                activeTunnelCount: activeTunnelCount(for: item.id),
-                                compact: surface == .sidebar
-                            )
-                        }
+                        personalHostListRow(item, surface: surface)
                         .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
                         .listRowBackground(
                             Color.clear
@@ -1457,6 +1534,28 @@ struct ContentView: View {
         return ungrouped.map { [$0] + ordered } ?? ordered
     }
 
+    private func personalHostListRow(
+        _ item: ConnectionProfile, surface: PersonalHostCollectionSurface
+    ) -> some View {
+        SelectiveRemoteDraggableHostCard(
+            identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+            navigationScope: "personal-\(surface.rawValue)",
+            previewTitle: item.friendlyName,
+            select: { openProfile(item.id) },
+            activate: { openProfile(item.id); model.connect() }
+        ) {
+            ProfileRow(
+                profile: item,
+                isSelected: showsPersonalHostSelection(on: surface)
+                    && model.selectedProfileID == item.id,
+                session: model.sessions[item.id],
+                hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
+                activeTunnelCount: activeTunnelCount(for: item.id),
+                compact: surface == .sidebar
+            )
+        }
+    }
+
     private var sidebarHostSearchBinding: Binding<String> {
         Binding(
             get: {
@@ -1541,6 +1640,14 @@ struct ContentView: View {
                 ))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if sidebarConnectionsOnly {
+            List(visibleSidebarTeamHosts) { host in
+                teamHostSidebarRow(host)
+                    .contextMenu { teamHostContextMenu(host) }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .contextMenu { teamHostEmptySpaceContextMenu }
         } else if teamHostDisplayMode == .list {
             List {
                 ForEach(sidebarTeamIDs, id: \.self) { teamID in
