@@ -240,7 +240,7 @@ test("macOS keeps Hosts navigation stable and gates Team UI behind a Cloud sessi
   assert.match(content, /private let secondaryMainAreas[\s\S]*\.sessionLogs/u);
   assert.match(content, /sidebarHostSearchBinding/u);
   assert.match(content, /SelectiveRemote\.sidebar-host-quick-access-visible\.v1/u);
-  assert.match(content, /private var showsHostQuickAccess: Bool \{\s*sidebarHostQuickAccessVisible\s*\}/u);
+  assert.match(content, /private var showsHostQuickAccess: Bool \{\s*sidebarConnectionsOnly \|\| sidebarHostQuickAccessVisible\s*\}/u);
   assert.match(content, /Показывать Host Shelf/u);
   assert.match(content, /if showsHostQuickAccess \{[\s\S]*Picker\("", selection: \$hostScope\)/u);
   assert.match(content, /if cloudSessionAvailable \|\| !teamHosts\.hosts\.isEmpty/u);
