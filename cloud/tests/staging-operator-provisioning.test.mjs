@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto';
+import * as operator from '../scripts/staging-migration-operator-helper.mjs';
 import test from 'node:test';import {tmpdir} from 'node:os';import {mkdtemp as makeTemp,realpath,rm} from 'node:fs/promises';import {join as pathJoin} from 'node:path';import {fileURLToPath} from 'node:url';
 const temporary=[];async function temp(prefix){const dir=await realpath(await makeTemp(pathJoin(tmpdir(),prefix)));temporary.push(dir);return dir;}test.after(async()=>{await Promise.all(temporary.map(dir=>rm(dir,{recursive:true,force:true})));});
 import assert from 'node:assert/strict';
@@ -50,3 +52,46 @@ test('actual file adapter pins scoped config before guarded restart and closes o
  await reset();const failures=[];await assert.rejects(applyReviewedConfiguration({settings,nextSettings:settings,nextEnv,settingsPath,read:path=>readFile(path),run:async(file,args)=>{if(file==='/bin/bash')throw Error('guard_denied');if(args[0]==='stop')failures.push('closed');return {stdout:'false\n'};}}),/guard_denied/);assert.deepEqual(failures,['closed','closed']);
  await reset();await writeFile(envPath,before+'UNREVIEWED=value\n');let dispatched=false;await assert.rejects(applyReviewedConfiguration({settings,nextSettings:settings,nextEnv,settingsPath,read:path=>readFile(path),run:async()=>{dispatched=true;}}),/environment/);assert.equal(dispatched,false);
 });
+
+test('public V1 emergency closure only flips registration and updates the exact pinned override',()=>{
+ assert.equal(typeof operator.disablePublicRegistration,'function');
+ const path='/var/lib/selective-remote-controller/operator/registration-compose.json';
+ const before='DATABASE_URL=postgres://synthetic\nALLOW_REGISTRATION=true\nNODE_ENV=production\nPUBLICATION_ENVIRONMENT=production\nPUBLICATION_READER_ENABLED=false\nWHOLE_PUBLICATION_ENABLED=false\n';
+ const content=JSON.stringify({services:{cloud:{environment:{ALLOW_REGISTRATION:'true'}}}}),hash=x=>createHash('sha256').update(x).digest('hex');
+ const settings={registrationMode:'production-v1',composeFiles:[{path,sha256:hash(content)}]};
+ const result=operator.disablePublicRegistration(before,settings,content);
+ assert.equal(result.nextEnv,before.replace('ALLOW_REGISTRATION=true','ALLOW_REGISTRATION=false'));
+ assert.deepEqual(JSON.parse(result.pendingCompose.content),{services:{cloud:{environment:{ALLOW_REGISTRATION:'false'}}}});
+ assert.equal(result.pendingCompose.path,path);assert.equal(result.nextSettings.composeFiles[0].sha256,hash(result.pendingCompose.content));
+ for(const [env,s,override] of [
+  [before.replace('ALLOW_REGISTRATION=true','ALLOW_REGISTRATION=false'),settings,content],
+  [before+'ALLOW_REGISTRATION=true\n',settings,content],
+  [before.replace('WHOLE_PUBLICATION_ENABLED=false','WHOLE_PUBLICATION_ENABLED=true'),settings,content],
+  [before.replace('PUBLICATION_READER_ENABLED=false\n',''),settings,content],
+  [before+'STAGING_REGISTRATION_EMAIL_ALLOWLIST=one@example.test,two@example.test\n',settings,content],
+  [before,{...settings,registrationMode:'staging'},content],
+  [before,settings,content+' '],
+  [before,{...settings,composeFiles:[]},content],
+ ])assert.throws(()=>operator.disablePublicRegistration(env,s,override));
+});
+
+test('public V1 controller mode refuses every staging migration and provisioning operation',()=>{
+ assert.equal(typeof operator.assertOperatorMode,'function');
+ const prod={registrationMode:'production-v1'};
+ assert.doesNotThrow(()=>operator.assertOperatorMode(prod,['--disable-public-registration']));
+ for(const args of [[],['--enable-publication'],['--enable-scoped'],['--enroll'],['--activation-fault','after_commit'],['--disable-registration']])assert.throws(()=>operator.assertOperatorMode(prod,args),/environment/);
+ assert.doesNotThrow(()=>operator.assertOperatorMode({},['--enable-scoped']));
+ assert.throws(()=>operator.assertOperatorMode({},['--disable-public-registration']),/environment/);
+});
+
+test('public V1 emergency config closes actual registration service before database work',async()=>{
+ const {loadConfig}=await import('../src/config.mjs'),{CloudService}=await import('../src/service.mjs');
+ const env={NODE_ENV:'production',CLOUD_PUBLIC_ORIGIN:'https://cloud.example.test',DATABASE_URL:'postgres://example.invalid/selective_remote',SESSION_TOKEN_PEPPER:'s'.repeat(32),EMAIL_VERIFICATION_TOKEN_PEPPER:'e'.repeat(32),PASSWORD_RESET_TOKEN_PEPPER:'p'.repeat(32),TEAM_INVITATION_TOKEN_PEPPER:'t'.repeat(32),TEAM_OUTBOX_ENCRYPTION_KEY:'o'.repeat(32),ABUSE_TOKEN_PEPPER:'a'.repeat(32),PROXY_SHARED_SECRET:'b'.repeat(64),SMTP_HOST:'smtp.example.test',SMTP_PORT:'465',SMTP_SECURE:'true',SMTP_USER:'test',SMTP_PASSWORD:'z'.repeat(32),SMTP_FROM:'sender@example.test',PUBLICATION_ENVIRONMENT:'production',ALLOW_REGISTRATION:'true',PUBLICATION_READER_ENABLED:'false',WHOLE_PUBLICATION_ENABLED:'false'};
+ const before=Object.entries(env).map(([k,v])=>k+'='+v).join('\n')+'\n',path='/var/lib/selective-remote-controller/operator/registration-compose.json';
+ const content=JSON.stringify({services:{cloud:{environment:{ALLOW_REGISTRATION:'true'}}}}),settings={registrationMode:'production-v1',composeFiles:[{path,sha256:createHash('sha256').update(content).digest('hex')}]};
+ const {nextEnv}=operator.disablePublicRegistration(before,settings,content),after=Object.fromEntries(nextEnv.trimEnd().split('\n').map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
+ assert.equal(loadConfig(env).allowRegistration,true);const config=loadConfig(after);assert.equal(config.allowRegistration,false);
+ const service=new CloudService(new Proxy({},{get(){throw Error('unexpected_store_work');}}),config);
+ await assert.rejects(service.register({email:'synthetic@example.test'}),/registration_disabled/);
+});
+
