@@ -163,6 +163,9 @@ struct ContentView: View {
     @State private var showsSyncCenter = false
     @State private var diagnosticsCloudSyncRequestID: UUID?
     @State private var cloudSessionAvailable = false
+    @State private var cloudSessionAvailabilityRequest = UUID()
+    @AppStorage("SelectiveRemote.legacy-host-warning-dismissed.v1")
+    private var dismissedLegacyHostWarning = ""
     @State private var legacyHostWarning: LegacyHostWarning?
     @State private var legacyHostCheckInFlight = false
     @State private var showsLegacyHostWarning = false
@@ -541,9 +544,7 @@ struct ContentView: View {
                 },
                 onOpenCloudManagement: {
                     showsSyncCenter = false
-                    refreshCloudSessionAvailability()
-                    if cloudSessionAvailable { showsCloudManagement = true }
-                    else { showsCloudOnboarding = true }
+                    openCloudManagement()
                 },
                 onReviewDevices: {
                     showsSyncCenter = false
@@ -558,7 +559,7 @@ struct ContentView: View {
         }
     }
 
-    private enum LegacyHostWarning: Sendable, Equatable {
+    private enum LegacyHostWarning: String, Sendable {
         case changed, unavailable
     }
 
@@ -573,7 +574,7 @@ struct ContentView: View {
                     return .unavailable
                 }
             }.value
-            if result != nil && result != legacyHostWarning { showsLegacyHostWarning = true }
+            if result == nil, !dismissedLegacyHostWarning.isEmpty { dismissedLegacyHostWarning = "" }
             legacyHostWarning = result
             legacyHostCheckInFlight = false
         }
@@ -581,8 +582,8 @@ struct ContentView: View {
 
     private func legacyHostWarningView(_ warning: LegacyHostWarning) -> some View {
         let title = warning == .changed
-            ? UpdateLocalization.text(ru: "Изменения в предыдущей версии", en: "Changes in the previous version")
-            : UpdateLocalization.text(ru: "Не удалось проверить предыдущую версию", en: "Could not check the previous version")
+            ? UpdateLocalization.text(ru: "Старые профили изменились", en: "Legacy profiles changed")
+            : UpdateLocalization.text(ru: "Старые профили не проверены", en: "Legacy profiles not checked")
         let message = warning == .changed
             ? UpdateLocalization.text(
                 ru: "Данные подключений предыдущей версии изменились после обновления и не отображаются здесь. Откройте предыдущую версию, чтобы их просмотреть. Не редактируйте подключения одновременно в обеих версиях.",
@@ -592,24 +593,38 @@ struct ContentView: View {
                 ru: "Не удалось проверить изменения подключений в предыдущей версии. Закройте предыдущую версию и перезапустите приложение. Если сообщение сохранится, сохраните копию данных перед дальнейшими изменениями.",
                 en: "Changes to connection data in the previous version could not be checked. Close the previous version and restart the app. If this message remains, keep a copy of your data before making further changes."
               )
-        return Button {
-            showsLegacyHostWarning = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .accessibilityHidden(true)
-                Text(title).font(.callout.weight(.medium)).lineLimit(2)
-                Spacer(minLength: 0)
+        return HStack(spacing: 8) {
+            Button {
+                showsLegacyHostWarning = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    Text(title).font(.callout.weight(.medium)).lineLimit(2)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+            .accessibilityIdentifier("legacy-host-warning")
+            .help(message)
+
+            let hideLabel = UpdateLocalization.text(ru: "Скрыть предупреждение", en: "Hide warning")
+            Button {
+                dismissedLegacyHostWarning = warning.rawValue
+            } label: {
+                Label(hideLabel, systemImage: "xmark").labelStyle(.iconOnly)
+                    .font(.caption)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .help(hideLabel)
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("legacy-host-warning")
-        .help(message)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
         .alert(title, isPresented: $showsLegacyHostWarning) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -624,8 +639,9 @@ struct ContentView: View {
                 showsCloudManagement = false
                 notificationAccountID = nil
                 notificationCenter.setAccount(nil)
-                refreshCloudSessionAvailability()
-                Task { await refreshNotificationSources() }
+                refreshCloudSessionAvailability { _ in
+                    Task { await refreshNotificationSources() }
+                }
             }
             .onChange(of: showsNotifications) { _, visible in
                 if visible { Task { await refreshNotificationSources() } }
@@ -635,8 +651,9 @@ struct ContentView: View {
                 notificationAccountEndpoint = nil
                 notificationAccountID = nil
                 notificationCenter.setAccount(nil)
-                refreshCloudSessionAvailability()
-                Task { await refreshNotificationSources() }
+                refreshCloudSessionAvailability { _ in
+                    Task { await refreshNotificationSources() }
+                }
             }
             .onChange(of: syncPresentation.personal) { _, snapshot in
                 if notificationAccountID != nil &&
@@ -678,7 +695,7 @@ struct ContentView: View {
                 sidebarHeader
             }
 
-            if let legacyHostWarning {
+            if let legacyHostWarning, dismissedLegacyHostWarning != legacyHostWarning.rawValue {
                 legacyHostWarningView(legacyHostWarning)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
@@ -919,12 +936,7 @@ struct ContentView: View {
                     english: language.selection.usesEnglish,
                     cloudSessionAvailable: cloudSessionAvailable,
                     onCloud: {
-                        refreshCloudSessionAvailability()
-                        if cloudSessionAvailable {
-                            showsCloudManagement = true
-                        } else {
-                            showsCloudOnboarding = true
-                        }
+                        openCloudManagement()
                     },
                     onSync: { showsSyncCenter = true }
                 )
@@ -1224,12 +1236,7 @@ struct ContentView: View {
                     ))
 
                     Button {
-                        refreshCloudSessionAvailability()
-                        if cloudSessionAvailable {
-                            showsCloudManagement = true
-                        } else {
-                            showsCloudOnboarding = true
-                        }
+                        openCloudManagement()
                     } label: {
                         Image(systemName: "cloud")
                     }
@@ -1280,9 +1287,7 @@ struct ContentView: View {
                         }
                         Button(UpdateLocalization.text(ru: "Team Vaults", en: "Team Vaults"),
                                systemImage: "cloud") {
-                            refreshCloudSessionAvailability()
-                            if cloudSessionAvailable { showsCloudManagement = true }
-                            else { showsCloudOnboarding = true }
+                            openCloudManagement()
                         }
                     } label: { Image(systemName: "ellipsis.circle") }
                     .help(UpdateLocalization.text(ru: "Другие действия", en: "More Actions"))
@@ -2575,26 +2580,37 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func refreshCloudSessionAvailability() {
-        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint) else {
-            cloudSessionAvailable = false
-            hostScope = .personal
-            return
+    private func refreshCloudSessionAvailability(
+        completion: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) {
+        let request = UUID()
+        cloudSessionAvailabilityRequest = request
+        let address = cloudEndpoint
+        let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(address)
+        Task { @MainActor in
+            let available: Bool
+            if let endpoint {
+                available = await cloudClient.hasStoredSession(endpoint: endpoint)
+            } else {
+                available = false
+            }
+            guard cloudSessionAvailabilityRequest == request, cloudEndpoint == address else { return }
+            cloudSessionAvailable = available
+            if !available {
+                if endpoint == nil || teamHosts.hosts.isEmpty {
+                    hostScope = .personal
+                }
+                notificationAccountID = nil
+                notificationCenter.setAccount(nil)
+            }
+            completion(available)
         }
-        do {
-            let token = try SelectiveRemoteCloudKeychainTokenStore().token(for: endpoint)
-            cloudSessionAvailable = token.map {
-                !SelectiveRemotePublicationLifecycle.isRetiredToken(endpoint: endpoint, token: $0)
-            } ?? false
-        } catch {
-            cloudSessionAvailable = false
-        }
-        if !cloudSessionAvailable, teamHosts.hosts.isEmpty {
-            hostScope = .personal
-        }
-        if !cloudSessionAvailable {
-            notificationAccountID = nil
-            notificationCenter.setAccount(nil)
+    }
+
+    private func openCloudManagement() {
+        refreshCloudSessionAvailability { available in
+            if available { showsCloudManagement = true }
+            else { showsCloudOnboarding = true }
         }
     }
 
@@ -2654,15 +2670,16 @@ struct ContentView: View {
     }
 
     private func openCloudDevices() {
-        refreshCloudSessionAvailability()
-        if cloudSessionAvailable {
-            showsDeviceTrust = true
-            return
+        refreshCloudSessionAvailability { available in
+            if available {
+                showsDeviceTrust = true
+                return
+            }
+            guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint),
+                  let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
+            else { return }
+            NSWorkspace.shared.open(url)
         }
-        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint),
-              let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
-        else { return }
-        NSWorkspace.shared.open(url)
     }
 
     private func openNotification(_ item: NotificationItem) {
@@ -2671,19 +2688,14 @@ struct ContentView: View {
         case .deviceApproval:
             openCloudDevices()
         case .invitation:
-            refreshCloudSessionAvailability()
-            if cloudSessionAvailable { showsCloudManagement = true }
-            else { showsCloudOnboarding = true }
+            openCloudManagement()
         case .syncError, .conflict:
             showsSyncCenter = true
-        case .failClosed, .wrapperIssue:
-            refreshCloudSessionAvailability()
-            if cloudSessionAvailable { showsCloudManagement = true }
-            else { showsSyncCenter = true }
-        case .accessGained, .accessLost:
-            refreshCloudSessionAvailability()
-            if cloudSessionAvailable { showsCloudManagement = true }
-            else { showsSyncCenter = true }
+        case .failClosed, .wrapperIssue, .accessGained, .accessLost:
+            refreshCloudSessionAvailability { available in
+                if available { showsCloudManagement = true }
+                else { showsSyncCenter = true }
+            }
         case .hostIdentity:
             guard let id = UUID(uuidString: item.sourceID) else { return }
             if model.profiles.contains(where: { $0.id == id }) {
@@ -3004,9 +3016,7 @@ struct ContentView: View {
                 DiagnosticsCenterView(
                     model: model,
                     onOpenCloudManagement: {
-                        refreshCloudSessionAvailability()
-                        if cloudSessionAvailable { showsCloudManagement = true }
-                        else { showsCloudOnboarding = true }
+                        openCloudManagement()
                     },
                     onOpenSyncCenter: { showsSyncCenter = true },
                     cloudSyncRequestID: diagnosticsCloudSyncRequestID

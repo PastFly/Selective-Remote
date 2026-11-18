@@ -14,8 +14,9 @@ enum KeychainError: Error { case invalidData, unifiedVaultDisappeared, concurren
 final class FakeDefaults {
  static let standard = FakeDefaults()
  var values: [String: Any] = [:]
+ var writeCount = 0
  func stringArray(forKey key: String) -> [String]? { values[key] as? [String] }
- func set(_ value: Any?, forKey key: String) { values[key] = value }
+ func set(_ value: Any?, forKey key: String) { writeCount += 1; values[key] = value }
 }
 enum FakeKeychain {
  static var records: [String: Data] = [:]
@@ -154,4 +155,22 @@ let restoredSecret = try restoredVault.read(reference: second)
 let restoredProtected = try restoredVault.readProtectedData(namespace: "fixture", key: "state")
 let previousSuppressed = try restoredVault.isLegacySuppressed(reference: first)
 check("RESTORE_SUPPRESSES_REPLACED_LEGACY_SECRET", restoredSecret == "replacement" && restoredProtected == Data("protected".utf8) && previousSuppressed)
+FakeKeychain.reset()
+let displayDefaults = FakeDefaults()
+let displayVault = UnifiedCredentialVault(defaults: displayDefaults)
+let displayIndexKey = "SelectiveRemote.keychain.unifiedVault.index.v2"
+try displayVault.withExclusiveAccess {
+    try displayVault.save("synthetic", reference: first)
+    check("INDEX_NOTIFICATION_DEFERRED_OUTSIDE_VAULT_ACCESS", displayDefaults.writeCount == 0)
+    check("CREDENTIAL_COUNT_CURRENT_BEFORE_PUBLICATION", displayVault.entryCount == 1)
+}
+RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+let expectedIndex = [UnifiedCredentialVault.entryKey(for: first)]
+check("INDEX_PUBLISHED_ON_MAIN_QUEUE", displayDefaults.stringArray(forKey: displayIndexKey) == expectedIndex)
+let previousWriteCount = displayDefaults.writeCount
+for _ in 0..<3 {
+    _ = try displayVault.readProtectedData(namespace: "fixture", key: "absent")
+}
+RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+check("STABLE_SESSION_READS_DO_NOT_PUBLISH_INDEX", displayDefaults.writeCount == previousWriteCount)
 if failures > 0 { exit(1) }
