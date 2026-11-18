@@ -1,3 +1,9 @@
+## 0.32.1
+
+- Collapse Cloud Services and Workspace independently. The sidebar remembers both settings.
+- Connections Only shows a flat, searchable list of Personal or Team hosts.
+- Double-click a host to connect. Temporary connection fields for the selected Team Host are preserved until the session starts.
+
 ## 0.32.0
 
 - **Selective Remote Cloud** — 0.32 candidate: work with connections on Mac and in the browser; local use without an account remains available.

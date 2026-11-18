@@ -126,9 +126,13 @@ struct UXReliability02110Tests {
         #expect(content.contains("en: \"Update \\(manifest.version)\""))
         #expect(content.contains(".minimumScaleFactor(0.85)"))
         #expect(content.contains(".fixedSize(horizontal: true, vertical: false)"))
-        #expect(content.contains("if model.availableUpdateManifest != nil ||\n"
-            + "                    model.runningSessionCount > 0 ||\n"
-            + "                    model.runningSSHTunnelCount > 0"))
+        let headerStart = try #require(content.range(of: "private var sidebarHeader: some View {"))
+        let remaining = content[headerStart.upperBound...]
+        let headerEnd = try #require(remaining.range(of: "private var sidebarHostSearch: some View {"))
+        let header = remaining[..<headerEnd.lowerBound]
+        #expect(header.contains("if model.availableUpdateManifest != nil ||"))
+        #expect(header.contains("model.runningSessionCount > 0 ||"))
+        #expect(header.contains("model.runningSSHTunnelCount > 0"))
     }
 
     @Test("Main sidebar fills its column and stays aligned to the top")
@@ -148,9 +152,9 @@ struct UXReliability02110Tests {
         let content = try source("Sources/SelectiveRemote/ContentView.swift")
 
         #expect(content.contains("SelectiveRemote.sidebar-host-quick-access-visible.v1"))
-        #expect(content.contains("private var showsHostQuickAccess: Bool {\n        sidebarHostQuickAccessVisible\n    }"))
+        #expect(content.contains("sidebarConnectionsOnly || sidebarHostQuickAccessVisible"))
         #expect(content.contains("ru: \"Показывать Host Shelf\""))
-        #expect(content.contains("if showsHostQuickAccess {\n                Divider()"))
+        #expect(content.contains("if showsHostQuickAccess {\n                sidebarHostScopeSelector"))
         #expect(content.contains("Picker(\"\", selection: $hostScope)"))
         #expect(!content.contains("same reserved sidebar height"))
         #expect(!content.contains("if scope == .team {\n                        setMainArea(.hosts)"))

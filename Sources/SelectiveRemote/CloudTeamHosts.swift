@@ -1211,6 +1211,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var gatewayPassword = ""
+    @State private var connectionFieldsHostID: UUID?
     @State private var editorRequest: SelectiveRemoteTeamHostEditorRequest?
     @State private var personalSettingsHost: SelectiveRemoteTeamHost?
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
@@ -1570,7 +1571,9 @@ struct SelectiveRemoteTeamHostsView: View {
                 forKey: "SelectiveRemote.team-host.expanded-folders.v1"
             )
         }
-        .onChange(of: selectedHostID) { _, _ in resetConnectionFields() }
+        .onChange(of: selectedHostID) { _, id in
+            if connectionFieldsHostID != id { resetConnectionFields() }
+        }
         .sheet(item: $editorRequest) { request in
             SelectiveRemoteTeamHostEditorView(request: request) { profile, credentials in
                 mutate(
@@ -1875,7 +1878,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     select: {
                                         if selectedHostID != host.id { selectedHostID = host.id }
                                     },
-                                    activate: { selectedHostID = host.id; resetConnectionFields(); connect(host) }
+                                    activate: { connectFromCard(host) }
                                 ) {
                                     hostRow(host)
                                 }
@@ -1954,7 +1957,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                             select: {
                                                 if selectedHostID != host.id { selectedHostID = host.id }
                                             },
-                                            activate: { selectedHostID = host.id; resetConnectionFields(); connect(host) }
+                                            activate: { connectFromCard(host) }
                                         ) {
                                             teamHostGridCard(host)
                                         }
@@ -2096,12 +2099,11 @@ struct SelectiveRemoteTeamHostsView: View {
         guard let request = requestedAction,
               let host = store.hosts.first(where: { $0.id == request.hostID })
         else { return }
-        selectedHostID = host.id
+        if request.action != .connect { selectedHostID = host.id }
         hostDetailVisible = true
         switch request.action {
         case .connect:
-            resetConnectionFields()
-            connect(host)
+            connectFromCard(host)
         case .create:
             if let context = context(for: host),
                SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
@@ -2769,6 +2771,12 @@ struct SelectiveRemoteTeamHostsView: View {
         }
     }
 
+    private func connectFromCard(_ host: SelectiveRemoteTeamHost) {
+        if selectedHostID != host.id { selectedHostID = host.id }
+        if connectionFieldsHostID != host.id { resetConnectionFields() }
+        connect(host)
+    }
+
     private func connect(_ host: SelectiveRemoteTeamHost) {
         if host.publication != nil { connectPublished(host); return }
         var profile = personalSettingsStore.appliedProfile(
@@ -2792,6 +2800,7 @@ struct SelectiveRemoteTeamHostsView: View {
     private func normalizeSelection() {
         if let selectedHostID,
            store.hosts.contains(where: { $0.id == selectedHostID }) {
+            if connectionFieldsHostID != selectedHostID { resetConnectionFields() }
             return
         }
         self.selectedHostID = store.hosts.first?.id
@@ -2804,6 +2813,7 @@ struct SelectiveRemoteTeamHostsView: View {
         } ?? ""
         password = selectedHost?.credentials.password ?? ""
         gatewayPassword = selectedHost?.credentials.gatewayPassword ?? ""
+        connectionFieldsHostID = selectedHostID
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
