@@ -591,7 +591,9 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(sync, /legacyService = "local\.selectiveremote\.cloud\.personal-vault-key\.v1"/u);
   assert.match(sync, /removeLegacy\(endpoint:/u);
   assert.match(crypto, /static func open\(/u);
-  assert.match(settings, /personalVaultAutoSyncConfigured = true/u);
+  assert.match(settings, /var personalVaultAutoSyncConfigured: Bool \{ personalVaultSetup == \.connected \}/u);
+  assert.match(settings, /personalVaultSetup = \.connected/u);
+  assert.match(settings, /try await enrollment\.unlockExistingVault\(\s*session: session,/u);
   assert.doesNotMatch(settings, /Background sync is disabled/u);
   assert.match(sync, /func checkForChanges\(/u);
   assert.match(sync, /enum CheckResult: Sendable/u);
