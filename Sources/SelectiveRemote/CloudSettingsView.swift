@@ -51,7 +51,8 @@ struct CloudSettingsView: View {
     private struct InitialVaultDifference: Identifiable {
         let id: UUID
         let title: String
-        let mayContainDifferentPassword: Bool
+        let profileFields: [String]
+        let credentials: [KeychainCredentialKind: SelectiveRemotePersonalVaultImportPlan.CredentialDifference]
         let deletedInCloud: Bool
     }
     @State private var conflictReviewMessage: String?
@@ -1004,11 +1005,11 @@ struct CloudSettingsView: View {
         let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
         let snapshot = try SelectiveRemotePersonalVaultImporter.decode(document)
         let credentialSources = Set(model.profiles.map(\.id) + model.independentPortForwards.map(\.id))
-        var existingSecrets: [String: String] = [:]
+        var existingSecrets: [String: String]? = [:]
         if snapshot.credentials.contains(where: { credentialSources.contains($0.sourceID) }) {
             // Read the unified Vault once. An unavailable password remains a conflict.
             existingSecrets = await Task.detached {
-                (try? UnifiedCredentialVault.shared.exportedSecrets()) ?? [:]
+                try? UnifiedCredentialVault.shared.exportedSecrets()
             }.value
         }
         try await client.checkSession(session)
@@ -1021,9 +1022,10 @@ struct CloudSettingsView: View {
             localSnippets: localSnippets,
             localForwarding: model.independentPortForwards,
             localSSHKeys: model.sshKeys,
+            existingPasswordsReadable: existingSecrets != nil,
             existingPassword: { id, kind in
                 let reference = KeychainService.credentialReference(profileID: id, kind: kind)
-                return existingSecrets[UnifiedCredentialVault.entryKey(for: reference)]
+                return existingSecrets?[UnifiedCredentialVault.entryKey(for: reference)]
             }
         )
         initialVaultDifferences = []
@@ -1037,9 +1039,17 @@ struct CloudSettingsView: View {
             )
             initialVaultDifferences = plan.conflictIDs.compactMap { id in
                 guard let title = labels[id] else { return nil }
+                let profileFields: [String]
+                if let local = model.profiles.first(where: { $0.id == id }),
+                   let cloud = snapshot.profiles.first(where: { $0.id == id }) {
+                    profileFields = SelectiveRemotePersonalVaultImporter.differingProfileFields(local: local, cloud: cloud)
+                } else {
+                    profileFields = []
+                }
                 return InitialVaultDifference(
                     id: id, title: title,
-                    mayContainDifferentPassword: plan.credentialConflictIDs.contains(id),
+                    profileFields: profileFields,
+                    credentials: plan.credentialDifferences[id] ?? [:],
                     deletedInCloud: snapshot.tombstoneIDs.contains(id)
                 )
             }
@@ -1442,12 +1452,22 @@ struct CloudSettingsView: View {
                     Text(difference.title).font(.headline)
                     if difference.deletedInCloud {
                         Text(UpdateLocalization.text(ru: "Запись удалена в Cloud", en: "Deleted in Cloud"))
-                    } else if difference.mayContainDifferentPassword {
+                    }
+                    if !difference.profileFields.isEmpty {
+                        let fields = difference.profileFields.map(vaultProfileFieldLabel).joined(separator: ", ")
                         Text(UpdateLocalization.text(
-                            ru: "Проверьте настройки и учётные данные",
-                            en: "Check the settings and credentials"
+                            ru: "Различаются поля — \(fields)",
+                            en: "Fields that differ — \(fields)"
                         ))
-                    } else {
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(difference.credentials.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
+                        if let status = difference.credentials[kind] {
+                            Text(vaultCredentialDifferenceLabel(kind: kind, status: status))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if !difference.deletedInCloud, difference.profileFields.isEmpty, difference.credentials.isEmpty {
                         Text(UpdateLocalization.text(ru: "Настройки различаются", en: "Settings differ"))
                     }
                 }
@@ -1463,6 +1483,49 @@ struct CloudSettingsView: View {
         }
         .padding(22)
         .frame(minWidth: 480, minHeight: 325)
+    }
+
+    private func vaultProfileFieldLabel(_ field: String) -> String {
+        switch field {
+        case "host": UpdateLocalization.text(ru: "адрес", en: "address")
+        case "username": UpdateLocalization.text(ru: "пользователь", en: "username")
+        case "sshPort": UpdateLocalization.text(ru: "порт", en: "port")
+        case "friendlyName": UpdateLocalization.text(ru: "название", en: "name")
+        case "group": UpdateLocalization.text(ru: "папка", en: "folder")
+        case "sortIndex": UpdateLocalization.text(ru: "порядок в списке", en: "list order")
+        case "folderOrderPath": UpdateLocalization.text(ru: "порядок папок", en: "folder order")
+        case "isFavorite": UpdateLocalization.text(ru: "избранное", en: "favorite")
+        case "profileDescription": UpdateLocalization.text(ru: "описание", en: "description")
+        case "sshAuthenticationMode": UpdateLocalization.text(ru: "метод входа SSH", en: "SSH authentication")
+        case "sshIdentityID": UpdateLocalization.text(ru: "SSH-ключ", en: "SSH key")
+        case "sshInitialDirectory": UpdateLocalization.text(ru: "начальная папка SSH", en: "SSH starting directory")
+        case "sshKeepAliveSeconds": UpdateLocalization.text(ru: "интервал KeepAlive", en: "keepalive interval")
+        case "sshJumpHostProfileID": "Jump Host"
+        case "portForwards": UpdateLocalization.text(ru: "туннели", en: "tunnels")
+        default: field
+        }
+    }
+
+    private func vaultCredentialDifferenceLabel(
+        kind: KeychainCredentialKind,
+        status: SelectiveRemotePersonalVaultImportPlan.CredentialDifference
+    ) -> String {
+        let name: String = switch kind {
+        case .rdp: "RDP"
+        case .gateway: "RD Gateway"
+        case .ssh: "SSH"
+        case .forwarding: "Forwarding"
+        case .sshKeyAuthorization: UpdateLocalization.text(ru: "SSH-ключ", en: "SSH key")
+        case .proxy: "Proxy"
+        }
+        return switch status {
+        case .missingOnMac:
+            UpdateLocalization.text(ru: "\(name) — запись есть в Cloud, в локальном хранилище она не найдена", en: "\(name) — stored in Cloud, missing from the local vault")
+        case .differs:
+            UpdateLocalization.text(ru: "\(name) — сохранённые учётные данные различаются", en: "\(name) — saved credentials differ")
+        case .keychainUnavailable:
+            UpdateLocalization.text(ru: "\(name) — не удалось прочитать запись из Keychain", en: "\(name) — could not read the Keychain item")
+        }
     }
 
     @ViewBuilder

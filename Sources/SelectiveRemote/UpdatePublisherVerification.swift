@@ -131,6 +131,17 @@ MOUNT="$4"
 DMG="$5"
 CLEANUP_DMG="$6"
 PUBLISHER_REQUIREMENT="$7"
+cleanup() {
+    status=$?
+    /usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
+    if [ "$status" = "0" ]; then
+        if [ "$CLEANUP_DMG" = "1" ]; then
+            /bin/rm -f "$DMG"
+        fi
+    fi
+    /bin/rm -f "$0"
+}
+trap cleanup EXIT
 while /bin/kill -0 "$PID" 2>/dev/null; do
     /bin/sleep 0.2
 done
@@ -138,23 +149,17 @@ BACKUP="${DST}.selective-remote-backup.$$"
 /bin/rm -rf "$BACKUP"
 if ! /bin/mv "$DST" "$BACKUP"; then
     /usr/bin/open "$DST" >/dev/null 2>&1 || true
-    /usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
     exit 1
 fi
-if /usr/bin/ditto "$SRC" "$DST" && /usr/bin/codesign --verify --deep --strict -R "$PUBLISHER_REQUIREMENT" "$DST"; then
+if /usr/bin/ditto "$SRC" "$DST" && /usr/bin/codesign --verify --deep --strict -R "$PUBLISHER_REQUIREMENT" "$DST" &&
+    /usr/bin/open "$DST"; then
     /bin/rm -rf "$BACKUP"
-    /usr/bin/open "$DST"
 else
     /bin/rm -rf "$DST"
     /bin/mv "$BACKUP" "$DST"
     /usr/bin/open "$DST"
     exit 1
 fi
-/usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
-if [ "$CLEANUP_DMG" = "1" ]; then
-    /bin/rm -f "$DMG"
-fi
-/bin/rm -f "$0"
 """#
     }
 }

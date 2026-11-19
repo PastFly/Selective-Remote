@@ -2383,11 +2383,18 @@ struct PersonalVaultInitialDownloadDecoderTests {
         #expect(plan.canApply == matches)
         #expect(plan.credentials.isEmpty)
         #expect(plan.credentialConflictIDs.contains(host.id) != matches)
+        #expect(plan.credentialDifferences[host.id]?[.ssh] == (matches ? nil : .differs))
 
-        let noKeychainAccess = SelectiveRemotePersonalVaultImporter.plan(
+        let noLocalItem = SelectiveRemotePersonalVaultImporter.plan(
             snapshot: snapshot, localProfiles: [host], localSnippets: [], localForwarding: []
         )
+        #expect(noLocalItem.credentialDifferences[host.id]?[.ssh] == .missingOnMac)
+        let noKeychainAccess = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [host], localSnippets: [], localForwarding: [],
+            existingPasswordsReadable: false
+        )
         #expect(noKeychainAccess.conflictIDs == [host.id])
+        #expect(noKeychainAccess.credentialDifferences[host.id]?[.ssh] == .keychainUnavailable)
     }
 
     @Test("Local Host connection history does not block an otherwise identical configuration")
@@ -2403,6 +2410,21 @@ struct PersonalVaultInitialDownloadDecoderTests {
         )
         #expect(plan.canApply)
         #expect(plan.profiles.isEmpty)
+    }
+
+    @Test("Host difference details report fields without values or connection history")
+    func initialImportListsOnlyChangedHostFields() {
+        var local = ConnectionProfile(connectionType: .ssh)
+        local.host = "mac.example"
+        local.selectedDisplayIDs = ["external", "internal"]
+        var cloud = local
+        cloud.host = "cloud.example"
+        cloud.sshPort = 2222
+        cloud.selectedDisplayIDs = ["internal", "external"]
+        cloud.lastConnectedAt = Date(timeIntervalSince1970: 123)
+
+        #expect(SelectiveRemotePersonalVaultImporter.differingProfileFields(local: local, cloud: cloud)
+                == ["host", "sshPort"])
     }
 
     @Test("remote tombstones never silently delete local resources")
