@@ -331,6 +331,17 @@ export class CloudService {
   async getVault(session) {
     const vault = await this.store.getVault(session.user_id);
     if (!vault) throw new Error("vault_missing");
+    return this.vaultResponse(vault);
+  }
+
+  async getVaultRevision(session, revision, writtenByThisDevice) {
+    const vault = await this.store.getVaultRevision(
+      session.user_id, revision, writtenByThisDevice ? session.device_id : null,
+    );
+    return vault ? this.vaultResponse(vault) : null;
+  }
+
+  vaultResponse(vault) {
     return {
       id: vault.id,
       revision: Number(vault.revision),

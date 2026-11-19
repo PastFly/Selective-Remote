@@ -361,6 +361,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         let id: UUID
         let sessionEpoch: UUID
         let vaultID: UUID?
+        let editDates: [UUID: Date]
         var issue: SyncIssue?
     }
     private enum UploadResult {
@@ -403,6 +404,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
         sshKeys: [SSHKeyRecord],
+        editDates: [UUID: Date] = [:],
+        legacyAppliedRevision: Int? = nil,
         onFailure: (@Sendable (SyncIssue) async -> Void)? = nil
     ) -> Task<Void, Never> {
         guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == expectedSessionEpoch else {
@@ -413,7 +416,13 @@ actor SelectiveRemotePersonalVaultAutoSync {
         let uploadID = UUID()
         let sessionEpoch = expectedSessionEpoch
         let vaultID = (try? keyStore.material(endpoint: endpoint, deviceID: deviceID))?.vaultID
-        unconfirmedUploads[account] = UploadState(id: uploadID, sessionEpoch: sessionEpoch, vaultID: vaultID)
+        let previous = unconfirmedUploads[account]
+        let previousDates = previous?.sessionEpoch == sessionEpoch && previous?.vaultID == vaultID
+            ? previous?.editDates ?? [:] : [:]
+        let dates = previousDates.merging(editDates, uniquingKeysWith: max)
+        unconfirmedUploads[account] = UploadState(
+            id: uploadID, sessionEpoch: sessionEpoch, vaultID: vaultID, editDates: dates
+        )
         pending = Task {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
@@ -425,6 +434,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
                     snippets: snippets,
                     forwarding: forwarding,
                     sshKeys: sshKeys,
+                    editDates: dates,
+                    legacyAppliedRevision: legacyAppliedRevision,
                     uploadID: uploadID,
                     sessionEpoch: sessionEpoch
                 )
@@ -487,7 +498,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         if remote.revision == material.revision {
             return .current(revision: remote.revision)
         }
-        guard let envelope = remote.envelope else {
+        guard let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey else {
             throw SelectiveRemotePersonalVaultError.invalidEnvelope
         }
         let document = try SelectiveRemotePersonalVaultCrypto.open(
@@ -528,22 +539,50 @@ actor SelectiveRemotePersonalVaultAutoSync {
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
         sshKeys: [SSHKeyRecord],
+        editDates: [UUID: Date],
+        legacyAppliedRevision: Int?,
         uploadID: UUID,
         sessionEpoch: UUID
     ) async throws -> UploadResult {
-        guard var material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
-              material.allowsUpload,
+        guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
               await client.hasStoredSession(endpoint: endpoint)
         else { return .unavailable }
+        let recovering = !material.allowsUpload
+        guard let baseRevision = recovering ? legacyAppliedRevision : material.revision,
+              baseRevision > 0,
+              !recovering || baseRevision < material.revision
+        else { return .unavailable }
+
         let account = Account(endpoint: endpoint, deviceID: deviceID)
-        let expectedMaterial = material
         let session = try await client.sessionBinding(endpoint: endpoint, expectedEpoch: sessionEpoch)
-        try requireCurrentUpload(expectedMaterial, account: account, id: uploadID, epoch: sessionEpoch)
+        try requireCurrentUpload(material, account: account, id: uploadID, epoch: sessionEpoch)
+        var remote = try await client.personalVault(endpoint: endpoint, session: session)
+        try requireCurrentUpload(material, account: account, id: uploadID, epoch: sessionEpoch)
+        var current = try openCurrent(remote, material: material)
+        let base: SelectiveRemoteVaultDocument
+        if baseRevision == remote.revision {
+            base = current
+        } else {
+            guard let historical = try await client.personalVaultRevision(
+                endpoint: endpoint, revision: baseRevision, writtenByThisDevice: recovering, session: session
+            ) else {
+                if recovering { return .unavailable }
+                throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
+            }
+            try requireCurrentUpload(material, account: account, id: uploadID, epoch: sessionEpoch)
+            guard historical.id == material.vaultID, historical.revision == baseRevision,
+                  let envelope = historical.envelope, envelope.wrappedKey == material.wrappedKey
+            else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+            base = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
+        }
+        let baseHash = Data(SHA256.hash(data: try base.encoded()))
+        guard recovering || baseHash == material.documentHash else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
         let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
             profiles: profiles,
             credentials: try await SelectiveRemotePersonalVaultCredentialCollector.shared.collect(
-                profiles: profiles,
-                forwarding: forwarding
+                profiles: profiles, forwarding: forwarding
             ),
             snippets: snippets,
             forwarding: forwarding,
@@ -551,49 +590,64 @@ actor SelectiveRemotePersonalVaultAutoSync {
             deviceID: deviceID,
             allowEmpty: true
         )
-        try requireCurrentUpload(expectedMaterial, account: account, id: uploadID, epoch: sessionEpoch)
-        let remote = try await client.personalVault(endpoint: endpoint, session: session)
-        try requireCurrentUpload(expectedMaterial, account: account, id: uploadID, epoch: sessionEpoch)
-        guard remote.id == material.vaultID else {
-            throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
-        }
-        let concurrentChange = remote.revision != material.revision
-        let document = concurrentChange
-            ? try mergeConcurrent(
-                local: exported.document,
-                remote: remote,
-                vaultKey: material.vaultKey,
-                deviceID: deviceID
+        let observedEdits = editDates.mapValues(SelectiveRemotePersonalVaultExporter.timestamp)
+        for attempt in 0..<3 {
+            try requireCurrentUpload(material, account: account, id: uploadID, epoch: sessionEpoch)
+            let document = try SelectiveRemotePersonalVaultReconciliation.reconcile(
+                local: exported.document, base: base, current: current, deviceID: deviceID, editDates: observedEdits
             )
-            : try mergedDocument(
-                local: exported.document,
-                remote: remote,
-                vaultKey: material.vaultKey,
-                profileIDs: Set(profiles.map(\.id))
-            )
-        let documentHash = Data(SHA256.hash(data: try document.encoded()))
-        guard documentHash != material.documentHash else {
+            var committedRevision = remote.revision
+            if document != current {
+                let envelope = try SelectiveRemotePersonalVaultCrypto.reseal(
+                    document, vaultKey: material.vaultKey, wrappedKey: material.wrappedKey,
+                    baseRevision: remote.revision
+                )
+                let result = try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session)
+                try requireCurrentUpload(material, account: account, id: uploadID, epoch: sessionEpoch)
+                if result.conflict, attempt < 2 {
+                    remote = try await client.personalVault(endpoint: endpoint, session: session)
+                    current = try openCurrent(remote, material: material)
+                    continue
+                }
+                guard !result.conflict, result.revision == remote.revision + 1 else {
+                    throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
+                }
+                committedRevision = result.revision
+            }
+            if recovering {
+                // Enable inbound sync from the verified historical checkpoint;
+                // it advances to the merged revision only after local application.
+                var recovered = material
+                recovered.requiresInitialDownload = false
+                recovered.revision = baseRevision
+                recovered.documentHash = baseHash
+                try await client.savePersonalVaultMaterial(
+                    recovered, session: session, deviceID: deviceID, keyStore: keyStore, replacing: material
+                )
+            } else if remote.revision == baseRevision, committedRevision > baseRevision {
+                var applied = material
+                applied.revision = committedRevision
+                applied.documentHash = Data(SHA256.hash(data: try document.encoded()))
+                try await client.savePersonalVaultMaterial(
+                    applied, session: session, deviceID: deviceID, keyStore: keyStore, replacing: material
+                )
+                return .acknowledged(newAppliedMaterial: applied)
+            }
             return .acknowledged(newAppliedMaterial: nil)
         }
-        let envelope = try SelectiveRemotePersonalVaultCrypto.reseal(
-            document,
-            vaultKey: material.vaultKey,
-            wrappedKey: material.wrappedKey,
-            baseRevision: remote.revision
-        )
-        try requireCurrentUpload(expectedMaterial, account: account, id: uploadID, epoch: sessionEpoch)
-        let result = try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session)
-        try requireCurrentUpload(expectedMaterial, account: account, id: uploadID, epoch: sessionEpoch)
-        guard !result.conflict, result.revision == remote.revision + 1 else {
-            throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
+        throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
+    }
+
+    private func openCurrent(
+        _ remote: SelectiveRemoteCloudPersonalVault, material: SelectiveRemotePersonalVaultKeyMaterial
+    ) throws -> SelectiveRemoteVaultDocument {
+        guard remote.id == material.vaultID, remote.revision >= material.revision else {
+            throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
         }
-        // Keep the previous revision after a concurrent merge. The inbound loop
-        // then materializes that exact merged revision on this Mac as well.
-        if concurrentChange { return .acknowledged(newAppliedMaterial: nil) }
-        material.revision = result.revision
-        material.documentHash = documentHash
-        try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial)
-        return .acknowledged(newAppliedMaterial: material)
+        guard let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        return try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
     }
 
     private func requireCurrentUpload(
@@ -606,59 +660,5 @@ actor SelectiveRemotePersonalVaultAutoSync {
               SelectiveRemotePublicationLifecycle.epoch(endpoint: account.endpoint) == epoch,
               try keyStore.material(endpoint: account.endpoint, deviceID: account.deviceID) == material
         else { throw CancellationError() }
-    }
-
-    private func mergeConcurrent(
-        local: SelectiveRemoteVaultDocument,
-        remote: SelectiveRemoteCloudPersonalVault,
-        vaultKey: Data,
-        deviceID: UUID
-    ) throws -> SelectiveRemoteVaultDocument {
-        guard let envelope = remote.envelope else {
-            throw SelectiveRemotePersonalVaultError.invalidEnvelope
-        }
-        let current = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return try local.mergedKeepingNewest(
-            with: current,
-            deviceID: deviceID,
-            resolvedAt: formatter.string(from: Date())
-        ).document
-    }
-
-    private func mergedDocument(
-        local: SelectiveRemoteVaultDocument,
-        remote: SelectiveRemoteCloudPersonalVault,
-        vaultKey: Data,
-        profileIDs: Set<UUID>
-    ) throws -> SelectiveRemoteVaultDocument {
-        guard let envelope = remote.envelope else {
-            throw SelectiveRemotePersonalVaultError.invalidEnvelope
-        }
-        let current = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
-        let localCredentialIDs = Set(local.records.lazy.filter { $0.type == .credential }.map(\.id))
-        let credentials = current.records.filter {
-            $0.type == .credential
-                && !localCredentialIDs.contains($0.id)
-                && (isStandaloneCredential($0)
-                    || credentialSourceID($0).map(profileIDs.contains) == true)
-        }
-        return try .init(
-            records: local.records + credentials,
-            tombstones: current.tombstones
-        )
-    }
-
-    private func credentialSourceID(_ record: SelectiveRemoteVaultRecord) -> UUID? {
-        guard case let .object(data) = record.data,
-              case let .string(source)? = data["sourceID"]
-        else { return nil }
-        return UUID(uuidString: source)
-    }
-
-    private func isStandaloneCredential(_ record: SelectiveRemoteVaultRecord) -> Bool {
-        guard case let .object(data) = record.data else { return false }
-        return data["sourceID"] == nil && data["kind"] == nil
     }
 }

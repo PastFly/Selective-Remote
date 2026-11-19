@@ -516,6 +516,95 @@ struct PersonalVaultAutoSyncCheckTests {
         }
     }
 
+    @Test("Mac and Cloud edits converge after a reconnect with a verified device revision",
+          arguments: [false, true])
+    func bidirectionalConvergence(recovering: Bool) async throws {
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        var local = Self.localSnippet
+        var cloud = TerminalCommandTemplate(
+            id: UUID(), profileID: Self.deviceID, title: "Original Cloud record", command: "echo original",
+            category: "Synthetic", targets: [.localTerminal], updatedAt: timestamp
+        )
+        let base = try Self.export([local, cloud], at: timestamp)
+        local.command = "echo Mac edit"
+        let previousCloud = cloud
+        cloud.command = "echo browser edit"
+        let latest = try Self.export([Self.localSnippet, cloud], at: timestamp.addingTimeInterval(100))
+        let puts = PersonalCheckRequests()
+        let history = PersonalCheckRequests()
+        let fixture = try PersonalCheckFixture(
+            remoteRevision: 6, prerequisite: recovering ? .initialDownload : .available,
+            baseDocument: base, remoteDocument: latest, historyRequests: history,
+            uploadResponse: { request, remote, _ in
+                puts.record()
+                return (try remote.acknowledge(request), try #require(HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+                )))
+            }
+        )
+        let upload = await fixture.sync.schedule(
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint),
+            profiles: [], snippets: [local, previousCloud], forwarding: [], sshKeys: [],
+            legacyAppliedRevision: recovering ? 5 : nil
+        )
+        await upload.value
+        #expect(history.count == 1)
+        #expect(puts.count == 1)
+        guard case let .download(download) = try await check(fixture) else {
+            Issue.record("The combined revision must be downloaded back to the Mac")
+            return
+        }
+        #expect(download.revision == 7)
+        let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
+        #expect(Set(snapshot.snippets.map(\.command)) == ["echo Mac edit", "echo browser edit"])
+        #expect(download.document.records.first { $0.id == cloud.id } == latest.records.first { $0.id == cloud.id })
+    }
+
+    @Test("Personal Vault rechecks a browser edit without replacing it or sending an echo")
+    func cloudOnlyChangeDoesNotUpload() async throws {
+        let previous = Self.localSnippet
+        var browserEdit = previous
+        browserEdit.command = "echo changed in browser"
+        let now = Date()
+        let fixture = try PersonalCheckFixture(
+            remoteRevision: 6, baseDocument: Self.export([previous], at: now),
+            remoteDocument: Self.export([browserEdit], at: now)
+        )
+        let update = await fixture.sync.schedule(
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint),
+            profiles: [], snippets: [previous], forwarding: [], sshKeys: []
+        )
+        await update.value
+        guard case let .download(download) = try await check(fixture) else {
+            Issue.record("Expected a browser edit to be received by the Mac")
+            return
+        }
+        #expect(try SelectiveRemotePersonalVaultImporter.decode(download.document).snippets == [browserEdit])
+        #expect(try fixture.sync.acceptDownload(
+            download, endpoint: Self.endpoint, deviceID: Self.deviceID, apply: { true }
+        ))
+        let unchanged = await fixture.sync.schedule(
+            endpoint: Self.endpoint, deviceID: Self.deviceID,
+            expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint),
+            profiles: [], snippets: [browserEdit], forwarding: [], sshKeys: []
+        )
+        await unchanged.value
+        guard case .current(revision: 6) = try await check(fixture) else {
+            Issue.record("The downloaded document must not create another revision")
+            return
+        }
+    }
+
+    private static func export(_ snippets: [TerminalCommandTemplate], at date: Date) throws
+        -> SelectiveRemoteVaultDocument {
+        try SelectiveRemotePersonalVaultExporter.makeExport(
+            profiles: [], credentials: [], snippets: snippets, forwarding: [],
+            deviceID: deviceID, now: date
+        ).document
+    }
+
     private static let endpoint = URL(string: "https://personal-check.example.invalid")!
     private static let deviceID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private static var localSnippet: TerminalCommandTemplate {
@@ -557,6 +646,9 @@ private struct PersonalCheckFixture {
 
     init(remoteRevision: Int, verifyAuthorization: Bool = true,
          prerequisite: PersonalCheckPrerequisite = .available,
+         baseDocument: SelectiveRemoteVaultDocument? = nil,
+         remoteDocument: SelectiveRemoteVaultDocument? = nil,
+         historyRequests: PersonalCheckRequests = PersonalCheckRequests(),
          beforeResponse: (@Sendable (PersonalCheckKeyStore) async -> Void)? = nil,
          uploadResponse: (@Sendable (URLRequest, PersonalCheckRemote, PersonalCheckKeyStore) async throws -> (Data, URLResponse))? = nil) throws {
         let endpoint = URL(string: "https://personal-check.example.invalid")!
@@ -565,9 +657,10 @@ private struct PersonalCheckFixture {
         let wrapped = try SelectiveRemotePersonalVaultWrappedKey(
             salt: Data(repeating: 0x22, count: 16), value: Data(repeating: 0x33, count: 40)
         )
-        let document = try SelectiveRemoteVaultDocument(records: [])
+        let document = try baseDocument ?? SelectiveRemoteVaultDocument(records: [])
+        let requiresInitialDownload = prerequisite == .initialDownload
         let material = try SelectiveRemotePersonalVaultKeyMaterial(
-            vaultID: vaultID, vaultKey: key, wrappedKey: wrapped, revision: 5,
+            vaultID: vaultID, vaultKey: key, wrappedKey: wrapped, revision: requiresInitialDownload ? max(remoteRevision, 5) : 5,
             documentHash: Data(SHA256.hash(data: try document.encoded())),
             requiresInitialDownload: prerequisite == .initialDownload
         )
@@ -575,26 +668,38 @@ private struct PersonalCheckFixture {
         let requests = PersonalCheckRequests()
         let tokens = SelectiveRemoteCloudMemoryTokenStore()
         if prerequisite != .noSession { tokens.saveToken(String(repeating: "t", count: 43), for: endpoint) }
-        let envelope = try SelectiveRemotePersonalVaultCrypto.reseal(
-            document, vaultKey: key, wrappedKey: wrapped, baseRevision: remoteRevision - 1,
-            nonce: Data(repeating: 0x44, count: 12)
-        )
-        let body = try JSONSerialization.data(withJSONObject: [
-            "id": vaultID.canonicalCloudString,
-            "revision": remoteRevision,
-            "envelopeVersion": 1,
-            "wrappedKey": ["algorithm": wrapped.algorithm, "iterations": wrapped.iterations,
-                           "salt": wrapped.salt, "value": wrapped.value],
-            "ciphertext": envelope.ciphertext,
-            "nonce": envelope.nonce,
-            "authTag": envelope.authTag,
-            "contentHash": envelope.contentHash,
-            "updatedAt": "2026-10-09T00:00:00.000Z"
-        ])
+        func frame(_ document: SelectiveRemoteVaultDocument, revision: Int) throws -> Data {
+            let envelope = try SelectiveRemotePersonalVaultCrypto.reseal(
+                document, vaultKey: key, wrappedKey: wrapped, baseRevision: revision - 1,
+                nonce: Data(repeating: UInt8(truncatingIfNeeded: revision), count: 12)
+            )
+            return try JSONSerialization.data(withJSONObject: [
+                "id": vaultID.canonicalCloudString,
+                "revision": revision,
+                "envelopeVersion": 1,
+                "wrappedKey": ["algorithm": wrapped.algorithm, "iterations": wrapped.iterations,
+                               "salt": wrapped.salt, "value": wrapped.value],
+                "ciphertext": envelope.ciphertext,
+                "nonce": envelope.nonce,
+                "authTag": envelope.authTag,
+                "contentHash": envelope.contentHash,
+                "updatedAt": "2026-10-09T00:00:00.000Z"
+            ])
+        }
+        let history = try frame(document, revision: 5)
+        let body = try frame(remoteDocument ?? document, revision: remoteRevision)
         let remote = PersonalCheckRemote(body: body)
         let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
             if request.url?.path == "/v1/meta" {
                 return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
+            if request.url?.path == "/v1/vault/revisions/5" {
+                historyRequests.record()
+                #expect(request.url?.query == (requiresInitialDownload ? "thisDevice=1" : nil))
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(String(repeating: "t", count: 43))")
+                return (history, try #require(HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+                )))
             }
             requests.record()
             #expect(request.url?.path == "/v1/vault")

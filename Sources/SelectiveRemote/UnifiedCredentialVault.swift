@@ -179,13 +179,22 @@ final class UnifiedCredentialVault: @unchecked Sendable {
         index = updatedIndex
     }
 
-    func save(_ entries: [(reference: KeychainCredentialReference, secret: String)]) throws {
+    func save(
+        _ entries: [(reference: KeychainCredentialReference, secret: String)],
+        removing references: [KeychainCredentialReference] = []
+    ) throws {
         lock.lock()
         defer { lock.unlock() }
         let fileLock = try acquireInterprocessLock()
         defer { releaseInterprocessLock(fileLock) }
         var secrets = try loadCurrent()
         var updatedIndex = index
+        for reference in references {
+            let key = Self.entryKey(for: reference)
+            secrets.removeValue(forKey: key)
+            secrets[Self.suppressionKey(key)] = "1"
+            updatedIndex.remove(key)
+        }
         for entry in entries {
             let key = Self.entryKey(for: entry.reference)
             secrets[key] = entry.secret

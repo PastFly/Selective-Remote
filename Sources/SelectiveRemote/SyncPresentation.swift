@@ -60,6 +60,7 @@ enum SyncIssue: Equatable, Sendable {
 
     static func classifyPersonal(_ error: Error) -> Self {
         if isWriteTemporarilyUnavailable(error) { return .writeTemporarilyUnavailable }
+        if case .conflicts = error as? SelectiveRemotePersonalVaultImportError { return .conflict }
         if let error = error as? SelectiveRemotePersonalVaultError {
             switch error {
             case .uploadConflict, .remoteVaultNotEmpty: return .conflict
