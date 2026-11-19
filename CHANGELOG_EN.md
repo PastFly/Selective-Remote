@@ -1,3 +1,7 @@
+## 0.32.6
+
+- When you sign back in to Cloud, an already connected Personal Vault keeps its last applied revision and resumes syncing from it.
+
 ## 0.32.5
 
 - Community automatically downloads the published DMG, checks its SHA-256 digest, and opens the downloaded image from the update panel.
