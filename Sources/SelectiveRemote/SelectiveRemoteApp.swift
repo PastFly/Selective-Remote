@@ -6,6 +6,9 @@ extension Notification.Name {
     static let selectiveRemoteNewLocalTerminal = Notification.Name(
         "SelectiveRemote.newLocalTerminal"
     )
+    static let selectiveRemoteLocalPasswordChanged = Notification.Name(
+        "SelectiveRemote.localPasswordChanged"
+    )
     static let selectiveRemotePersonalVaultSyncNow = Notification.Name(
         "SelectiveRemote.personalVaultSyncNow"
     )
@@ -168,6 +171,8 @@ struct SelectiveRemoteApp: App {
     @StateObject private var appLock = AppLockStore()
     private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
     @State private var personalUploadGeneration = UUID()
+    @State private var applyingPersonalVaultDownload = false
+    @State private var personalSyncSnippets: [TerminalCommandTemplate] = []
     private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync.shared
     private let syncPresentation = SyncPresentationStore.shared
 
@@ -217,26 +222,45 @@ struct SelectiveRemoteApp: App {
                     .frame(minWidth: 1050, minHeight: 700)
                     .onAppear {
                         model.presentWhatsNewAfterUpgradeIfNeeded()
+                        personalSyncSnippets = TerminalCommandHistoryStore.shared.templates()
                         configureSyncPresentation()
-                        schedulePersonalVaultAutoSync()
                     }
                     .task {
                         await runPersonalVaultInboundSyncLoop()
                     }
-                    .onChange(of: model.profiles) { _, _ in schedulePersonalVaultAutoSync() }
-                    .onChange(of: model.independentPortForwards) { _, _ in schedulePersonalVaultAutoSync() }
-                    .onChange(of: model.sshKeys) { _, _ in schedulePersonalVaultAutoSync() }
-                    .onReceive(TerminalCommandHistoryStore.shared.$snippetRevision) { _ in
-                        schedulePersonalVaultAutoSync()
+                    .onChange(of: model.profiles) { old, new in
+                        schedulePersonalVaultEdits(from: old, to: new) { before, after in
+                            var previous = before
+                            previous.lastConnectedAt = after.lastConnectedAt
+                            return previous == after
+                        }
+                    }
+                    .onChange(of: model.independentPortForwards) { old, new in
+                        schedulePersonalVaultEdits(from: old, to: new)
+                    }
+                    .onChange(of: model.sshKeys) { old, new in
+                        schedulePersonalVaultEdits(from: old, to: new)
+                    }
+                    .onReceive(TerminalCommandHistoryStore.shared.$snippetRevision.dropFirst()) { _ in
+                        let previous = personalSyncSnippets
+                        personalSyncSnippets = TerminalCommandHistoryStore.shared.templates()
+                        schedulePersonalVaultEdits(from: previous, to: personalSyncSnippets)
+                    }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: .selectiveRemoteLocalPasswordChanged
+                    ).receive(on: RunLoop.main)) { notification in
+                        guard let id = notification.object as? UUID else { return }
+                        schedulePersonalVaultAutoSync(editDates: [id: Date()])
                     }
                     .onReceive(NotificationCenter.default.publisher(
                         for: .selectiveRemotePersonalVaultSyncNow
                     )) { _ in
                         schedulePersonalVaultAutoSync()
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .seconds(3))
-                            await downloadPersonalVaultChanges()
-                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: .selectiveRemoteCloudSessionChanged
+                    )) { _ in
+                        schedulePersonalVaultAutoSync()
                     }
                     .onReceive(NotificationCenter.default.publisher(
                         for: .selectiveRemoteTeamVaultSyncNow
@@ -540,23 +564,41 @@ struct SelectiveRemoteApp: App {
             ?? SelectiveRemoteCloudEndpoint.production
     }
 
-    private func schedulePersonalVaultAutoSync() {
+    @MainActor
+    private func schedulePersonalVaultEdits<T: Identifiable & Equatable>(
+        from old: [T], to new: [T], matching: (T, T) -> Bool = (==)
+    ) where T.ID == UUID {
+        let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let after = Dictionary(new.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let now = Date()
+        var changed: [UUID: Date] = [:]
+        for id in Set(before.keys).union(after.keys) {
+            if let previous = before[id], let value = after[id], matching(previous, value) { continue }
+            changed[id] = now
+        }
+        if !changed.isEmpty { schedulePersonalVaultAutoSync(editDates: changed) }
+    }
+
+    @discardableResult
+    @MainActor
+    private func schedulePersonalVaultAutoSync(editDates: [UUID: Date] = [:]) -> Task<Void, Never>? {
+        guard !applyingPersonalVaultDownload else { return nil }
         guard !appLock.isLocked else {
             syncPresentation.setPrerequisite(.personal, lifecycle: .locked)
-            return
+            return nil
         }
         guard UserDefaults.standard.object(
             forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
         ) as? Bool ?? true else {
             syncPresentation.setPrerequisite(.personal, lifecycle: .disabled)
-            return
+            return nil
         }
         guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpointPreference),
               let deviceText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1"),
               let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
         else {
             syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
-            return
+            return nil
         }
         let sessionEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         let profiles = model.profiles
@@ -568,13 +610,16 @@ struct SelectiveRemoteApp: App {
         let syncDeviceID = deviceID.uuidString
         let uploadGeneration = UUID()
         personalUploadGeneration = uploadGeneration
-        if ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
+        if !editDates.isEmpty, ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.recordPersonalPending()
         }
-        Task {
+        let legacyAppliedRevision = UserDefaults.standard.integer(
+            forKey: SelectiveRemotePersonalVaultSyncStatus.revisionKey
+        )
+        return Task {
             guard personalUploadGeneration == uploadGeneration,
                   syncPresentation.generation == syncGeneration else { return }
-            await personalVaultAutoSync.schedule(
+            let upload = await personalVaultAutoSync.schedule(
                 endpoint: endpoint,
                 deviceID: deviceID,
                 expectedSessionEpoch: sessionEpoch,
@@ -582,6 +627,8 @@ struct SelectiveRemoteApp: App {
                 snippets: snippets,
                 forwarding: forwarding,
                 sshKeys: sshKeys,
+                editDates: editDates,
+                legacyAppliedRevision: legacyAppliedRevision,
                 onFailure: { issue in
                     await MainActor.run {
                         guard personalUploadGeneration == uploadGeneration,
@@ -593,20 +640,25 @@ struct SelectiveRemoteApp: App {
                     }
                 }
             )
+            await upload.value
+            guard personalUploadGeneration == uploadGeneration, syncPresentation.generation == syncGeneration
+            else { return }
+            await downloadPersonalVaultChanges(afterReconciliation: true)
         }
     }
 
     @MainActor
     private func runPersonalVaultInboundSyncLoop() async {
+        await schedulePersonalVaultAutoSync()?.value
         while !Task.isCancelled {
-            await downloadPersonalVaultChanges()
             do { try await Task.sleep(for: .seconds(15)) }
             catch { return }
+            await downloadPersonalVaultChanges()
         }
     }
 
     @MainActor
-    private func downloadPersonalVaultChanges() async {
+    private func downloadPersonalVaultChanges(afterReconciliation: Bool = false) async {
         guard !appLock.isLocked else {
             syncPresentation.setPrerequisite(.personal, lifecycle: .locked)
             return
@@ -663,17 +715,25 @@ struct SelectiveRemoteApp: App {
                 syncPresentation.setPrerequisite(.personal, lifecycle: .setupRequired)
                 return
             case let .unconfirmedUpload(issue):
-                if let issue { syncPresentation.recordPersonalFailure(issue) }
-                else { syncPresentation.recordPersonalPending() }
+                if let issue {
+                    syncPresentation.recordPersonalFailure(issue)
+                    if !afterReconciliation { schedulePersonalVaultAutoSync() }
+                } else { syncPresentation.recordPersonalPending() }
                 return
             case let .current(revision):
                 SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: revision)
                 syncPresentation.recordPersonalSuccess(revision: revision, generation: syncGeneration)
                 return
             case let .download(newer):
+                guard afterReconciliation else {
+                    schedulePersonalVaultAutoSync()
+                    return
+                }
                 download = newer
             }
             let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
+            applyingPersonalVaultDownload = true
+            defer { applyingPersonalVaultDownload = false }
             let accepted = try personalVaultAutoSync.acceptDownload(
                 download,
                 endpoint: endpoint,
@@ -684,7 +744,10 @@ struct SelectiveRemoteApp: App {
                     ), syncPresentation.generation == syncGeneration,
                        personalUploadGeneration == uploadGeneration else { return false }
                     let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(snapshot.sshKeys)
-                    try KeychainService.savePasswords(snapshot.credentials)
+                    let sources = model.profiles.map(\.id) + model.independentPortForwards.map(\.id)
+                    try KeychainService.applySyncedPasswords(
+                        snapshot.credentials, tombstones: snapshot.tombstoneIDs, sourceIDs: sources
+                    )
                     if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
                     if model.independentPortForwards != snapshot.forwarding {
                         model.independentPortForwards = snapshot.forwarding

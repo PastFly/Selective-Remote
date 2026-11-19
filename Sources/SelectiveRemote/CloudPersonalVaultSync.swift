@@ -276,7 +276,7 @@ enum SelectiveRemotePersonalVaultExporter {
         return String(selected.prefix(120))
     }
 
-    private static func timestamp(_ value: Date) -> String {
+    static func timestamp(_ value: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: value)
@@ -584,7 +584,24 @@ enum SelectiveRemotePersonalVaultCrypto {
 extension SelectiveRemoteCloudAPIClient {
     func personalVault(endpoint: URL, session: SelectiveRemoteCloudSessionBinding? = nil) async throws -> SelectiveRemoteCloudPersonalVault {
         let (data, response) = try await authorizedResponse(endpoint: endpoint, path: "v1/vault", session: session)
-        guard (200..<300).contains(response.statusCode),
+        return try decodePersonalVault(data, status: response.statusCode)
+    }
+
+    func personalVaultRevision(
+        endpoint: URL, revision: Int, writtenByThisDevice: Bool,
+        session: SelectiveRemoteCloudSessionBinding
+    ) async throws -> SelectiveRemoteCloudPersonalVault? {
+        let (data, response) = try await authorizedResponse(
+            endpoint: endpoint, path: "v1/vault/revisions/\(revision)",
+            queryItems: writtenByThisDevice ? [URLQueryItem(name: "thisDevice", value: "1")] : [],
+            session: session
+        )
+        if response.statusCode == 404 { return nil }
+        return try decodePersonalVault(data, status: response.statusCode)
+    }
+
+    private func decodePersonalVault(_ data: Data, status: Int) throws -> SelectiveRemoteCloudPersonalVault {
+        guard (200..<300).contains(status),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == [
                 "id", "revision", "envelopeVersion", "wrappedKey", "ciphertext",
@@ -598,8 +615,8 @@ extension SelectiveRemoteCloudAPIClient {
               let updatedAt = object["updatedAt"] as? String,
               !updatedAt.isEmpty
         else {
-            if !(200..<300).contains(response.statusCode) {
-                throw SelectiveRemoteCloudError.serviceError(response.statusCode, nil)
+            if !(200..<300).contains(status) {
+                throw SelectiveRemoteCloudError.serviceError(status, nil)
             }
             throw SelectiveRemoteCloudError.invalidResponse
         }

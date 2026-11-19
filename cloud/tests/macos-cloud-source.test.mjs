@@ -575,7 +575,7 @@ test("macOS Personal Hosts use an unambiguous drag gesture and visible nested-fo
 
 
 test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
-  const [sync, crypto, settings, app, snippets, credentials, importer] = await Promise.all([
+  const [sync, crypto, settings, app, snippets, credentials, importer, reconciliation] = await Promise.all([
     readFile(new URL("CloudPersonalVaultAutoSync.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudPersonalVaultSync.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
@@ -583,6 +583,7 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
     readFile(new URL("TerminalCommandHistory.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudPersonalVaultCredentials.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudPersonalVaultImport.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudPersonalVaultReconciliation.swift", sourceRoot), "utf8"),
   ]);
   assert.doesNotMatch(sync, /!material\.includesCredentials/u);
   assert.match(sync, /SelectiveRemotePersonalVaultCrypto\.open/u);
@@ -598,11 +599,12 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(sync, /func checkForChanges\(/u);
   assert.match(sync, /enum CheckResult: Sendable/u);
   assert.match(sync, /func acceptDownload\(/u);
-  assert.match(sync, /func mergeConcurrent\(/u);
-  assert.match(sync, /mergedKeepingNewest/u);
+  assert.match(sync, /SelectiveRemotePersonalVaultReconciliation\.reconcile/u);
+  assert.match(sync, /personalVaultRevision\(/u);
+  assert.match(reconciliation, /if try equivalent\(before\[id\], changed\) \{ continue \}/u);
   assert.match(app, /runPersonalVaultInboundSyncLoop/u);
   assert.match(app, /Task\.sleep\(for: \.seconds\(15\)\)/u);
-  assert.match(app, /KeychainService\.savePasswords\(snapshot\.credentials\)/u);
+  assert.match(app, /KeychainService\.applySyncedPasswords\(\s*snapshot\.credentials/u);
   assert.match(app, /SelectiveRemotePersonalVaultSSHKeyStore\.install\(snapshot\.sshKeys\)/u);
   assert.match(snippets, /func replaceSyncedTemplates\(/u);
   assert.match(sync, /enum SelectiveRemotePersonalVaultSyncStatus/u);
@@ -614,7 +616,6 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(crypto, /"folder": \.string\(profile\.group\)/u);
   assert.match(crypto, /"tags": \.array\(profile\.tags\.map/u);
   assert.match(crypto, /"description": \.string\(profile\.profileDescription\)/u);
-  assert.match(sync, /isStandaloneCredential\(\$0\)/u);
   assert.match(importer, /Browser-created standalone credentials/u);
   assert.match(importer, /if source == nil, kindText == nil/u);
   assert.match(app, /selectiveRemotePersonalVaultSyncNow/u);

@@ -297,6 +297,13 @@ async function route(request, response) {
     if (method === "GET" && url.pathname === "/v1/vault") {
       return sendJSON(response, 200, await service.getVault(session));
     }
+    const vaultRevision = /^\/v1\/vault\/revisions\/([1-9][0-9]*)$/u.exec(url.pathname);
+    if (method === "GET" && vaultRevision) {
+      const revision = Number(vaultRevision[1]);
+      if (!Number.isSafeInteger(revision)) return sendError(response, 400, "invalid_request");
+      const vault = await service.getVaultRevision(session, revision, url.searchParams.get("thisDevice") === "1");
+      return vault ? sendJSON(response, 200, vault) : sendError(response, 404, "vault_revision_not_found");
+    }
     if (method === "PUT" && url.pathname === "/v1/vault") {
       try {
         const result = await service.putVault(session, unwrapV1Write(await readJSON(request)));

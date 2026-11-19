@@ -83,7 +83,7 @@ enum KeychainError: LocalizedError {
     }
 }
 
-enum KeychainCredentialKind: String, Sendable {
+enum KeychainCredentialKind: String, CaseIterable, Sendable {
     case rdp
     case gateway
     case ssh
@@ -402,6 +402,7 @@ enum KeychainService {
         }
         let reference = credentialReference(profileID: profileID, kind: kind)
         try UnifiedCredentialVault.shared.save(password, reference: reference)
+        notifyPersonalVaultPasswordChange(profileID: profileID, kind: kind)
     }
 
     static func savePasswords(_ credentials: [SelectiveRemotePersonalVaultCredentialInput]) throws {
@@ -411,6 +412,29 @@ enum KeychainService {
                 secret: $0.secret
             )
         })
+    }
+
+    static func applySyncedPasswords(
+        _ credentials: [SelectiveRemotePersonalVaultCredentialInput],
+        tombstones: Set<UUID>, sourceIDs: [UUID]
+    ) throws {
+        var deletions: [KeychainCredentialReference] = []
+        for sourceID in Set(sourceIDs) {
+            for kind in KeychainCredentialKind.allCases where kind != .sshKeyAuthorization {
+                let id = SelectiveRemotePersonalVaultExporter.derivedID(
+                    sourceID: sourceID, discriminator: "credential:\(kind.rawValue)"
+                )
+                guard tombstones.contains(id) else { continue }
+                deletions.append(credentialReference(profileID: sourceID, kind: kind))
+                if kind == .ssh || kind == .forwarding {
+                    deletions.append(.init(service: legacyService, account: kind.account(profileID: sourceID), kind: kind))
+                }
+            }
+        }
+        guard !credentials.isEmpty || !deletions.isEmpty else { return }
+        try UnifiedCredentialVault.shared.save(credentials.map {
+            (reference: credentialReference(profileID: $0.sourceID, kind: $0.kind), secret: $0.secret)
+        }, removing: deletions)
     }
 
     static var unifiedVaultEntryCount: Int {
@@ -464,6 +488,15 @@ enum KeychainService {
             )
             try UnifiedCredentialVault.shared.delete(reference: legacy)
         }
+        notifyPersonalVaultPasswordChange(profileID: profileID, kind: kind)
+    }
+
+    private static func notifyPersonalVaultPasswordChange(profileID: UUID, kind: KeychainCredentialKind) {
+        guard kind != .sshKeyAuthorization else { return }
+        let id = SelectiveRemotePersonalVaultExporter.derivedID(
+            sourceID: profileID, discriminator: "credential:\(kind.rawValue)"
+        )
+        NotificationCenter.default.post(name: .selectiveRemoteLocalPasswordChanged, object: id)
     }
 
     /// Recovery for a legacy login-keychain ACL that the current build can no

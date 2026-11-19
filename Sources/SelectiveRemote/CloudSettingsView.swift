@@ -427,6 +427,14 @@ struct CloudSettingsView: View {
             SelectiveRemoteCloudSessionTransition.notify()
         }
         .onChange(of: endpoint) { _, _ in showsTeamManagement = false }
+        .onChange(of: personalVaultSyncedRevision) { _, revision in
+            guard revision > 0, let session = accountSession else { return }
+            if personalVaultSetup == .connected {
+                personalVaultRevision = max(revision, personalVaultRevision ?? 0)
+            } else if personalVaultSetup == .initialDownload {
+                Task { await loadInventory(endpoint: session.endpoint) }
+            }
+        }
         .onChange(of: personalVaultSyncEnabled) { _, _ in
             NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
         }
