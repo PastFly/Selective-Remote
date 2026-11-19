@@ -2364,6 +2364,47 @@ struct PersonalVaultInitialDownloadDecoderTests {
         #expect(blocked.profiles.isEmpty)
     }
 
+    @Test("Initial download skips identical passwords and still blocks different or unknown passwords",
+          arguments: [true, false])
+    func existingCredentialComparison(matches: Bool) {
+        let host = ConnectionProfile(connectionType: .ssh)
+        let credential = SelectiveRemotePersonalVaultCredentialInput(
+            sourceID: host.id, kind: .ssh, title: "synthetic", username: "test", secret: "identical"
+        )
+        let snapshot = SelectiveRemotePersonalVaultImportSnapshot(
+            profiles: [host], credentials: [credential], snippets: [], forwarding: [], tombstoneIDs: []
+        )
+        let plan = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [host], localSnippets: [], localForwarding: [],
+            existingPassword: { id, kind in
+                id == host.id && kind == .ssh ? (matches ? "identical" : "different") : nil
+            }
+        )
+        #expect(plan.canApply == matches)
+        #expect(plan.credentials.isEmpty)
+        #expect(plan.credentialConflictIDs.contains(host.id) != matches)
+
+        let noKeychainAccess = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [host], localSnippets: [], localForwarding: []
+        )
+        #expect(noKeychainAccess.conflictIDs == [host.id])
+    }
+
+    @Test("Local Host connection history does not block an otherwise identical configuration")
+    func initialImportIgnoresLastConnectionTime() {
+        var host = ConnectionProfile(connectionType: .ssh)
+        host.host = "synthetic.example"
+        let snapshot = SelectiveRemotePersonalVaultImportSnapshot(
+            profiles: [host], credentials: [], snippets: [], forwarding: [], tombstoneIDs: []
+        )
+        host.lastConnectedAt = Date(timeIntervalSince1970: 123)
+        let plan = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [host], localSnippets: [], localForwarding: []
+        )
+        #expect(plan.canApply)
+        #expect(plan.profiles.isEmpty)
+    }
+
     @Test("remote tombstones never silently delete local resources")
     func tombstoneCollision() {
         let local = ConnectionProfile(connectionType: .rdp)

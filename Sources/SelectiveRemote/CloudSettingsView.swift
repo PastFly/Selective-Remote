@@ -45,6 +45,15 @@ struct CloudSettingsView: View {
     @State private var showsAccountSheet = false
     @State private var accountSheetMode = AccountSheetMode.signIn
     @State private var showsConflictReview = false
+    @State private var showsInitialVaultDifferences = false
+    @State private var initialVaultDifferences: [InitialVaultDifference] = []
+
+    private struct InitialVaultDifference: Identifiable {
+        let id: UUID
+        let title: String
+        let mayContainDifferentPassword: Bool
+        let deletedInCloud: Bool
+    }
     @State private var conflictReviewMessage: String?
     @State private var personalVaultRevision: Int?
     @State private var personalVaultMessage: String?
@@ -331,6 +340,13 @@ struct CloudSettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
+                    if !initialVaultDifferences.isEmpty {
+                        Button(UpdateLocalization.text(ru: "Посмотреть расхождения…", en: "View differences…"),
+                               systemImage: "list.bullet") {
+                            showsInitialVaultDifferences = true
+                        }
+                    }
+
                     Text(UpdateLocalization.text(
                         ru: "После входа Hosts, Snippets, Forwarding и сохранённые пароли синхронизируются автоматически. macOS может запросить доступ к Keychain. В Cloud хранятся только зашифрованные данные.",
                         en: "After sign-in, Hosts, Snippets, Forwarding, and saved passwords sync automatically. macOS may ask for Keychain access. Cloud stores only end-to-end encrypted data."
@@ -427,6 +443,9 @@ struct CloudSettingsView: View {
         .sheet(isPresented: $showsPersonalVaultUpload) {
             personalVaultUploadSheet
                 .interactiveDismissDisabled(personalVaultUploading)
+        }
+        .sheet(isPresented: $showsInitialVaultDifferences) {
+            initialVaultDifferencesSheet
         }
         .sheet(isPresented: $showsConflictReview) {
             conflictReviewSheet
@@ -981,17 +1000,49 @@ struct CloudSettingsView: View {
         guard remote.id == material.vaultID, remote.revision >= material.revision,
               let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey
         else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+        let generation = accountPresentationGeneration
         let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
         let snapshot = try SelectiveRemotePersonalVaultImporter.decode(document)
+        let credentialSources = Set(model.profiles.map(\.id) + model.independentPortForwards.map(\.id))
+        var existingSecrets: [String: String] = [:]
+        if snapshot.credentials.contains(where: { credentialSources.contains($0.sourceID) }) {
+            // Read the unified Vault once. An unavailable password remains a conflict.
+            existingSecrets = await Task.detached {
+                (try? UnifiedCredentialVault.shared.exportedSecrets()) ?? [:]
+            }.value
+        }
+        try await client.checkSession(session)
+        guard isCurrentPresentation(generation, session: session) else { throw CancellationError() }
         let history = TerminalCommandHistoryStore.shared
+        let localSnippets = history.templates()
         let plan = SelectiveRemotePersonalVaultImporter.plan(
             snapshot: snapshot,
             localProfiles: model.profiles,
-            localSnippets: history.templates(),
+            localSnippets: localSnippets,
             localForwarding: model.independentPortForwards,
-            localSSHKeys: model.sshKeys
+            localSSHKeys: model.sshKeys,
+            existingPassword: { id, kind in
+                let reference = KeychainService.credentialReference(profileID: id, kind: kind)
+                return existingSecrets[UnifiedCredentialVault.entryKey(for: reference)]
+            }
         )
+        initialVaultDifferences = []
         guard plan.canApply else {
+            let labels = Dictionary(
+                model.profiles.map { ($0.id, $0.friendlyName) }
+                    + localSnippets.map { ($0.id, $0.title) }
+                    + model.independentPortForwards.map { ($0.id, $0.rule.displayName) }
+                    + model.sshKeys.map { ($0.id, $0.name) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            initialVaultDifferences = plan.conflictIDs.compactMap { id in
+                guard let title = labels[id] else { return nil }
+                return InitialVaultDifference(
+                    id: id, title: title,
+                    mayContainDifferentPassword: plan.credentialConflictIDs.contains(id),
+                    deletedInCloud: snapshot.tombstoneIDs.contains(id)
+                )
+            }
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
         let applied = try SelectiveRemotePersonalVaultKeyMaterial(
@@ -1003,7 +1054,7 @@ struct CloudSettingsView: View {
             tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID,
             expected: material, material: applied
         ) {
-            try KeychainService.savePasswords(plan.credentials)
+            if !plan.credentials.isEmpty { try KeychainService.savePasswords(plan.credentials) }
             model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
             model.profiles.append(contentsOf: plan.profiles)
             model.independentPortForwards.append(contentsOf: plan.forwarding)
@@ -1030,6 +1081,8 @@ struct CloudSettingsView: View {
         personalVaultMessage = nil
         personalVaultMessageIsError = false
         personalVaultSetup = .checking
+        initialVaultDifferences = []
+        showsInitialVaultDifferences = false
         showsPersonalVaultUnlock = false
         showsPersonalVaultUpload = false
         personalVaultUnlockError = nil
@@ -1373,6 +1426,43 @@ struct CloudSettingsView: View {
             username: username,
             secret: secret
         ))
+    }
+
+    private var initialVaultDifferencesSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(UpdateLocalization.text(ru: "Расхождения в Personal Vault", en: "Personal Vault differences"))
+                .font(.title2.weight(.semibold))
+            Text(UpdateLocalization.text(
+                ru: "Сверьте отмеченные записи на Mac и в Cloud. После этого снова нажмите «Завершить подключение».",
+                en: "Review the listed records on this Mac and in Cloud, then choose Finish Connecting again."
+            ))
+            .foregroundStyle(.secondary)
+            List(initialVaultDifferences) { difference in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(difference.title).font(.headline)
+                    if difference.deletedInCloud {
+                        Text(UpdateLocalization.text(ru: "Запись удалена в Cloud", en: "Deleted in Cloud"))
+                    } else if difference.mayContainDifferentPassword {
+                        Text(UpdateLocalization.text(
+                            ru: "Проверьте настройки и учётные данные",
+                            en: "Check the settings and credentials"
+                        ))
+                    } else {
+                        Text(UpdateLocalization.text(ru: "Настройки различаются", en: "Settings differ"))
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            HStack {
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Готово", en: "Done")) {
+                    showsInitialVaultDifferences = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 480, minHeight: 325)
     }
 
     @ViewBuilder
