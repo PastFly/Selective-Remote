@@ -531,6 +531,9 @@ struct UpdateExperiencePopover: View {
 
     private var automaticDownloadModeSummary: String {
         if model.automaticUpdateDownloadDirectoryPath == nil {
+            if model.availableUpdateManifest == nil {
+                return UpdateLocalization.text(ru: "Системный каталог", en: "System folder")
+            }
             return UpdateLocalization.text(
                 ru: "Системный каталог · DMG удаляется после успешной установки",
                 en: "System folder · the DMG is removed after a successful installation"
