@@ -26,6 +26,7 @@ struct PersonalVaultEnrollmentSafetyTests {
     private static func fixture(
         password: String,
         trustedKey: Bool = false,
+        appliedRevision: Int = 5,
         wrappingPassphrase: String? = nil,
         remoteEmpty: Bool = false
     ) async throws -> (
@@ -49,7 +50,7 @@ struct PersonalVaultEnrollmentSafetyTests {
         )
         let initial = trustedKey ? try SelectiveRemotePersonalVaultKeyMaterial(
             vaultID: vaultID, vaultKey: setup.vaultKey, wrappedKey: setup.envelope.wrappedKey,
-            revision: 5, documentHash: Data(SHA256.hash(data: try original.encoded()))
+            revision: appliedRevision, documentHash: Data(SHA256.hash(data: try original.encoded()))
         ) : nil
         let keys = PasswordResetMemoryKeys(initial: initial)
         let http = PasswordResetMemoryHTTP(
@@ -109,6 +110,22 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(revision == 5)
         #expect(uploads.isEmpty)
         #expect(f.keys.savedMaterial?.requiresInitialDownload == true)
+    }
+
+    @Test("Signing in again preserves the applied Vault revision", arguments: [4, 5])
+    func repeatedSignInPreservesPreviouslyAppliedVault(appliedRevision: Int) async throws {
+        let f = try await Self.fixture(
+            password: Self.oldPassword, trustedKey: true, appliedRevision: appliedRevision
+        )
+        let previousMaterial = try #require(f.keys.savedMaterial)
+        let revision = try await f.enrollment.enrollOrCreate(
+            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
+            profiles: [], snippets: [f.local], forwarding: []
+        )
+        #expect(revision == appliedRevision)
+        #expect(f.keys.savedMaterial == previousMaterial)
+        #expect(f.keys.saveCount == 0)
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
     }
 
     @Test("Ambiguous legacy-wrapper auto-migration is suspended instead of replacing remote data")
