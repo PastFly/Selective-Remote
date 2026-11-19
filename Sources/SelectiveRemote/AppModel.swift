@@ -365,6 +365,10 @@ final class AppModel: NSObject, ObservableObject {
     var availableUpdateVersion: String? {
         availableUpdateManifest?.version ?? availableGitHubRelease?.version
     }
+
+    var availableUpdateDownloadURL: URL? {
+        availableUpdateManifest?.downloadURL ?? availableGitHubRelease?.download?.url
+    }
     @Published private(set) var isDownloadingUpdate = false
     @Published private(set) var updateDownloadProgress = 0.0
     @Published private(set) var updateDownloadStage: UpdateDownloadStage = .idle
@@ -383,20 +387,15 @@ final class AppModel: NSObject, ObservableObject {
             )
         }
     }
-    @Published var automaticallyDownloadUpdates = UserDefaults.standard.bool(
-        forKey: "SelectiveRemote.update.autoDownload.v1"
-    ) {
+    @Published var automaticallyDownloadUpdates = (
+        UserDefaults.standard.object(forKey: "SelectiveRemote.update.autoDownload.v1") as? Bool
+    ) ?? ((try? UpdatePublisherIdentity.official(from: .main)) == nil) {
         didSet {
             UserDefaults.standard.set(
                 automaticallyDownloadUpdates,
                 forKey: "SelectiveRemote.update.autoDownload.v1"
             )
-            if automaticallyDownloadUpdates,
-               availableUpdateManifest != nil,
-               downloadedUpdateDMGURL == nil,
-               !isDownloadingUpdate {
-                downloadAvailableUpdate()
-            }
+            downloadUpdateAutomaticallyIfNeeded()
         }
     }
     @Published var automaticUpdateDownloadDirectoryPath = UserDefaults.standard.string(
@@ -5077,7 +5076,7 @@ final class AppModel: NSObject, ObservableObject {
                     ?? "0.0.0"
                 let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0
                 let result = try await UpdateService.check(
-                    feedURL: try UpdateService.configuredFeedURL(),
+                    feedURL: try? UpdateService.configuredFeedURL(),
                     allowsInAppInstallation: (try? UpdatePublisherIdentity.official(from: .main)) != nil,
                     currentVersion: version,
                     currentBuild: build
@@ -5090,16 +5089,18 @@ final class AppModel: NSObject, ObservableObject {
                     successfulCheckDate.timeIntervalSince1970,
                     forKey: lastSuccessfulUpdateCheckKey
                 )
-                if case let .available(manifest) = result {
-                    if availableUpdateManifest != manifest {
-                        clearDownloadState()
-                    }
-                    availableUpdateManifest = manifest
-                } else {
-                    availableUpdateManifest = nil
+                let official: SelectiveRemoteUpdateManifest?
+                if case let .available(manifest) = result { official = manifest } else { official = nil }
+                let github: GitHubUpdateRelease?
+                if case let .githubRelease(release) = result { github = release } else { github = nil }
+                let downloadedFileMissing = downloadedUpdateDMGURL.map {
+                    !FileManager.default.fileExists(atPath: $0.path)
+                } ?? false
+                if availableUpdateManifest != official || availableGitHubRelease != github || downloadedFileMissing {
                     clearDownloadState()
                 }
-                availableGitHubRelease = nil
+                availableUpdateManifest = official
+                availableGitHubRelease = github
                 incompatibleUpdate = nil
 
                 switch result {
@@ -5117,9 +5118,6 @@ final class AppModel: NSObject, ObservableObject {
                         manualCheck: announcesUpToDate,
                         offersUpdateOnLaunch: offersUpdateOnLaunch
                     )
-                    if automaticallyDownloadUpdates && downloadedUpdateDMGURL == nil {
-                        downloadAvailableUpdate()
-                    }
                 case let .incompatible(manifest):
                     incompatibleUpdate = manifest
                     let minimum = manifest.minimumMacOS
@@ -5131,17 +5129,17 @@ final class AppModel: NSObject, ObservableObject {
                         )
                     }
                 case let .githubRelease(release):
-                    availableGitHubRelease = release
                     announceAvailableUpdate(
                         release.version,
                         message: UpdateLocalization.text(
-                            ru: "Версия \(release.version) доступна на GitHub для ручной установки.",
-                            en: "Version \(release.version) is available on GitHub for manual installation."
+                            ru: "Доступна новая версия \(AppBrand.name) \(release.version).",
+                            en: "A new version of \(AppBrand.name), \(release.version), is available."
                         ),
                         manualCheck: announcesUpToDate,
                         offersUpdateOnLaunch: offersUpdateOnLaunch
                     )
                 }
+                downloadUpdateAutomaticallyIfNeeded()
             } catch {
                 updateCheckFailed = true
                 if announcesUpToDate {
@@ -5189,11 +5187,18 @@ final class AppModel: NSObject, ObservableObject {
         downloadAvailableUpdate()
     }
 
+    private func downloadUpdateAutomaticallyIfNeeded() {
+        guard automaticallyDownloadUpdates,
+              availableUpdateDownloadURL != nil,
+              downloadedUpdateDMGURL == nil, !isDownloadingUpdate else { return }
+        downloadAvailableUpdate()
+    }
+
     func downloadAvailableUpdate() {
-        guard let manifest = availableUpdateManifest else { return }
+        guard let sourceURL = availableUpdateDownloadURL else { return }
         let destinationURL = automaticUpdateDownloadDirectoryPath.map {
             URL(fileURLWithPath: $0, isDirectory: true)
-                .appendingPathComponent(manifest.downloadURL.lastPathComponent)
+                .appendingPathComponent(sourceURL.lastPathComponent)
         }
         downloadAvailableUpdate(
             to: destinationURL,
@@ -5227,14 +5232,14 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func downloadAvailableUpdateChoosingDestination() {
-        guard let manifest = availableUpdateManifest,
+        guard let sourceURL = availableUpdateDownloadURL,
               !isDownloadingUpdate else { return }
         let panel = NSSavePanel()
         panel.title = UpdateLocalization.text(
             ru: "Сохранить обновление Selective Remote",
             en: "Save Selective Remote Update"
         )
-        panel.nameFieldStringValue = manifest.downloadURL.lastPathComponent
+        panel.nameFieldStringValue = sourceURL.lastPathComponent
         panel.allowedContentTypes = [.diskImage]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
@@ -5244,8 +5249,9 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func downloadAvailableUpdate(to destinationURL: URL?, userSelectedDestination: Bool) {
-        guard let manifest = availableUpdateManifest,
-              !isDownloadingUpdate else { return }
+        guard let sourceURL = availableUpdateDownloadURL,
+              !isDownloadingUpdate, updateDownloadStage != .installing else { return }
+        let publishedSHA256 = availableGitHubRelease?.download?.sha256
         isDownloadingUpdate = true
         updateDownloadProgress = 0
         updateDownloadStage = .downloading
@@ -5255,8 +5261,9 @@ final class AppModel: NSObject, ObservableObject {
             defer { self.isDownloadingUpdate = false }
             do {
                 self.downloadedUpdateDMGURL = try await UpdateInstaller.downloadAndValidateDMG(
-                    from: manifest.downloadURL,
+                    from: sourceURL,
                     destinationURL: destinationURL,
+                    publishedSHA256: publishedSHA256,
                     progress: { [weak self] value in
                         self?.updateDownloadProgress = value
                     },
@@ -5274,7 +5281,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func installDownloadedUpdateAndRestart() {
-        guard let downloadedUpdateDMGURL else { return }
+        guard availableUpdateManifest != nil, let downloadedUpdateDMGURL else { return }
         updateInstallError = nil
         updateDownloadStage = .installing
         do {
@@ -5288,6 +5295,17 @@ final class AppModel: NSObject, ObservableObject {
         } catch {
             updateDownloadStage = .ready
             updateInstallError = error.localizedDescription
+        }
+    }
+
+    func openDownloadedCommunityUpdate() {
+        guard availableUpdateManifest == nil, availableGitHubRelease?.download != nil,
+              let downloadedUpdateDMGURL else { return }
+        if !NSWorkspace.shared.open(downloadedUpdateDMGURL) {
+            updateInstallError = UpdateLocalization.text(
+                ru: "Не удалось открыть скачанный DMG.",
+                en: "Unable to open the downloaded DMG."
+            )
         }
     }
 

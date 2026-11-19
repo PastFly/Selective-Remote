@@ -11,8 +11,14 @@ struct SelectiveRemoteUpdateManifest: Codable, Equatable, Sendable {
 }
 
 struct GitHubUpdateRelease: Equatable, Sendable {
+    struct Download: Equatable, Sendable {
+        let url: URL
+        let sha256: String
+    }
+
     let version: String
     let pageURL: URL
+    let download: Download?
 }
 
 enum UpdateCheckResult: Equatable, Sendable {
@@ -54,6 +60,7 @@ enum UpdateService {
         struct Asset: Decodable {
             let name: String
             let state: String
+            let digest: String?
         }
 
         let tagName: String
@@ -68,7 +75,7 @@ enum UpdateService {
     }
 
     static func check(
-        feedURL: URL,
+        feedURL: URL?,
         allowsInAppInstallation: Bool,
         currentVersion: String,
         currentBuild: Int,
@@ -78,6 +85,7 @@ enum UpdateService {
         var officialResult: Result<UpdateCheckResult, Error> = .success(.upToDate)
         if allowsInAppInstallation {
             do {
+                guard let feedURL else { throw UpdateServiceError.feedNotConfigured }
                 let result = try await checkOfficialFeed(
                     feedURL: feedURL,
                     currentVersion: currentVersion,
@@ -157,17 +165,24 @@ enum UpdateService {
               tag.range(of: #"^v[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil
         else { return nil }
         let version = String(tag.dropFirst())
+        let assetName = "SelectiveRemote-\(version)-arm64.dmg"
         guard version.split(separator: ".").allSatisfy({ Int($0) != nil }),
               compareVersions(version, currentVersion) == .orderedDescending,
-              release.assets.contains(where: {
-                  $0.name == "SelectiveRemote-\(version)-arm64.dmg" && $0.state == "uploaded"
-              }),
+              let asset = release.assets.first(where: { $0.name == assetName && $0.state == "uploaded" }),
               let pageURL = URL(string: "https://github.com/\(githubRepository)/releases/tag/\(tag)")
         else { return nil }
 
-        // A GitHub release can offer its download page. Only the configured feed can
-        // produce an installable manifest, and the installer still verifies the publisher.
-        return GitHubUpdateRelease(version: version, pageURL: pageURL)
+        let download: GitHubUpdateRelease.Download?
+        if let digest = asset.digest,
+           digest.range(of: #"^sha256:[0-9a-fA-F]{64}$"#, options: .regularExpression) != nil,
+           digest.utf8.count == 71,
+           let url = URL(string: "https://github.com/\(githubRepository)/releases/download/\(tag)/\(assetName)") {
+            download = .init(url: url, sha256: String(digest.dropFirst(7)).lowercased())
+        } else {
+            download = nil
+        }
+        // Only the configured publisher feed can produce an installable manifest.
+        return GitHubUpdateRelease(version: version, pageURL: pageURL, download: download)
     }
 
     static func configuredFeedURL(bundle: Bundle = .main) throws -> URL {

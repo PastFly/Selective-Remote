@@ -1,3 +1,7 @@
+## 0.32.5
+
+- Community automatically downloads the published DMG, checks its SHA-256 digest, and opens the downloaded image from the update panel.
+
 ## 0.32.4
 
 - Set up Personal Vault auto-sync in the current Cloud session. When Keychain already has the key, no password is required.
