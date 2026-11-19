@@ -252,6 +252,16 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
             )
         } else {
             material = try await Self.unlockedMaterial(remote, passphrase: passphrase)
+            if let expectedMaterial, expectedMaterial.allowsUpload,
+               expectedMaterial.vaultID == material.vaultID,
+               expectedMaterial.vaultKey == material.vaultKey,
+               expectedMaterial.wrappedKey == material.wrappedKey,
+               expectedMaterial.revision <= material.revision,
+               expectedMaterial.revision < material.revision || expectedMaterial.documentHash == material.documentHash {
+                // Keep the last applied revision so the normal sync can fetch any newer data.
+                try await client.checkSession(session)
+                return expectedMaterial.revision
+            }
         }
         try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial)
         return material.revision
