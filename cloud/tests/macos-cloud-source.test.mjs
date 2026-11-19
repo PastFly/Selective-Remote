@@ -546,7 +546,7 @@ test("macOS Team workspace is wide, action-oriented, and maps invitation errors"
     readFile(new URL("CloudTeamManagementView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudVaultRecordModel.swift", sourceRoot), "utf8"),
-    readFile(new URL("CloudPersonalVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
   ]);
   assert.match(management, /minWidth: 1_020/u);
   assert.match(management, /HSplitView/u);
@@ -555,7 +555,7 @@ test("macOS Team workspace is wide, action-oriented, and maps invitation errors"
   assert.match(client, /case "team_member_exists"/u);
   assert.match(client, /case "account_not_found"/u);
   assert.match(records, /mergedKeepingNewest/u);
-  assert.match(sync, /mergedKeepingNewest/u);
+  assert.match(sync, /resolveRecordConflictsKeepingNewest/u);
 });
 
 test("macOS Personal Hosts use an unambiguous drag gesture and visible nested-folder creator", async () => {
