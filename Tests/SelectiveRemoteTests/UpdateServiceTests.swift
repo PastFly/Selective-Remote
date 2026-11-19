@@ -15,13 +15,16 @@ struct UpdateServiceTests {
         var prerelease = false
         var asset = "SelectiveRemote-0.32.1-arm64.dmg"
         var state = "uploaded"
+        var digest: String?
 
         func data() throws -> Data {
-            try JSONSerialization.data(withJSONObject: [
+            var assetFields = ["name": asset, "state": state, "browser_download_url": "https://example.test/ignore.dmg"]
+            assetFields["digest"] = digest
+            return try JSONSerialization.data(withJSONObject: [
                 "tag_name": tag,
                 "draft": draft,
                 "prerelease": prerelease,
-                "assets": [["name": asset, "state": state]],
+                "assets": [assetFields],
                 "html_url": "https://example.test/ignore-this-url"
             ])
         }
@@ -63,7 +66,8 @@ struct UpdateServiceTests {
         }
         #expect(result == .githubRelease(GitHubUpdateRelease(
             version: "0.32.1",
-            pageURL: URL(string: "https://github.com/PastFly/Selective-Remote/releases/tag/v0.32.1")!
+            pageURL: URL(string: "https://github.com/PastFly/Selective-Remote/releases/tag/v0.32.1")!,
+            download: nil
         )))
     }
 
@@ -79,18 +83,37 @@ struct UpdateServiceTests {
         #expect(result == .available(manifest))
     }
 
-    @Test func communityWithoutPublisherPinOnlyOffersTheReleasePage() async throws {
+    @Test(arguments: [nil, "sha256:abcd", "sha256:" + String(repeating: "g", count: 64)] as [String?])
+    func missingOrInvalidDigestOffersOnlyTheReleasePage(_ digest: String?) async throws {
         let result = try await UpdateService.check(
             feedURL: Self.feedURL, allowsInAppInstallation: false, currentVersion: "0.32.0", currentBuild: 163
         ) { request in
             #expect(request.url == Self.githubURL)
-            return try Self.response(url: Self.githubURL, data: GitHubRelease().data())
+            return try Self.response(url: Self.githubURL, data: GitHubRelease(digest: digest).data())
         }
         guard case let .githubRelease(release) = result else {
             Issue.record("Expected the manual GitHub release")
             return
         }
         #expect(release.version == "0.32.1")
+        #expect(release.download == nil)
+    }
+
+    @Test func communityDownloadsFromTheCanonicalAssetURLWithThePublishedHash() async throws {
+        let digest = String(repeating: "AB", count: 32)
+        let result = try await UpdateService.check(
+            feedURL: nil, allowsInAppInstallation: false, currentVersion: "0.32.0", currentBuild: 163
+        ) { request in
+            #expect(request.url == Self.githubURL)
+            return try Self.response(url: Self.githubURL, data: GitHubRelease(digest: "sha256:" + digest).data())
+        }
+        guard case let .githubRelease(release) = result else {
+            Issue.record("Expected the downloadable Community release")
+            return
+        }
+        #expect(release.download?.url.absoluteString ==
+                "https://github.com/PastFly/Selective-Remote/releases/download/v0.32.1/SelectiveRemote-0.32.1-arm64.dmg")
+        #expect(release.download?.sha256 == digest.lowercased())
     }
 
     @Test func releaseWithKnownIncompatibleMinimumRemainsIncompatible() async throws {

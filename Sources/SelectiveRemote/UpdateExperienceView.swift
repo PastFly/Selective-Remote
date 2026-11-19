@@ -182,8 +182,8 @@ private struct UpdateSettingsView: View {
     private var automaticDownloadRetentionDescription: String {
         if model.automaticUpdateDownloadDirectoryPath == nil {
             return UpdateLocalization.text(
-                ru: "Системный каталог используется по умолчанию. После успешной установки загруженный DMG удаляется автоматически.",
-                en: "The system folder is used by default. After a successful installation, the downloaded DMG is removed automatically."
+                ru: "Системный каталог используется по умолчанию. После установки из приложения загруженный DMG удаляется автоматически.",
+                en: "The system folder is used by default. The downloaded DMG is removed after successful in-app installation."
             )
         }
         return UpdateLocalization.text(
@@ -198,9 +198,9 @@ struct UpdateExperiencePopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let manifest = model.availableUpdateManifest {
-                updateHeader(version: manifest.version)
-                updateProgress(manifest)
+            if let version = model.availableUpdateVersion, model.availableUpdateDownloadURL != nil {
+                updateHeader(version: version)
+                updateProgress(version: version)
 
                 if let error = model.updateInstallError, !error.isEmpty {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -227,8 +227,8 @@ struct UpdateExperiencePopover: View {
                 Divider()
 
                 HStack(spacing: 8) {
-                    Button("Что нового") {
-                        model.openAvailableReleaseNotes()
+                    if model.availableUpdateManifest != nil {
+                        Button("Что нового") { model.openAvailableReleaseNotes() }
                     }
                     Spacer()
                     if model.downloadedUpdateDMGURL == nil {
@@ -241,11 +241,18 @@ struct UpdateExperiencePopover: View {
                         Button("Показать DMG") {
                             model.revealDownloadedUpdate()
                         }
-                        Button("Установить и перезапустить") {
-                            model.installDownloadedUpdateAndRestart()
+                        if model.availableUpdateManifest != nil {
+                            Button("Установить и перезапустить") {
+                                model.installDownloadedUpdateAndRestart()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.updateDownloadStage == .installing)
+                        } else {
+                            Button(UpdateLocalization.text(ru: "Открыть DMG", en: "Open DMG")) {
+                                model.openDownloadedCommunityUpdate()
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.updateDownloadStage == .installing)
                     }
                 }
 
@@ -270,13 +277,15 @@ struct UpdateExperiencePopover: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-                Text(UpdateLocalization.text(
-                    ru: "Selective Remote не использует sudo и не выполняет silent replacement. Если папка приложения недоступна для записи, будет предложена ручная замена из подключённого DMG.",
-                    en: "Selective Remote does not use sudo or perform a silent replacement. If the application folder is not writable, Finder will be opened for a manual replacement from the mounted DMG."
-                ))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                if model.availableUpdateManifest != nil {
+                    Text(UpdateLocalization.text(
+                        ru: "Если папка приложения недоступна для записи, Finder откроет образ для ручной замены.",
+                        en: "If the application folder is not writable, Finder will open the disk image for a manual replacement."
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             } else if let release = model.availableGitHubRelease {
                 updateHeader(version: release.version)
                 Text(UpdateLocalization.text(
@@ -376,11 +385,11 @@ struct UpdateExperiencePopover: View {
         )
     }
 
-    private func updateProgress(_ manifest: SelectiveRemoteUpdateManifest) -> some View {
+    private func updateProgress(version: String) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             updateStep(
                 title: UpdateLocalization.text(ru: "Доступно", en: "Available"),
-                detail: manifest.version,
+                detail: version,
                 state: .complete
             )
             updateStep(
@@ -398,17 +407,21 @@ struct UpdateExperiencePopover: View {
                 state: verificationStepState
             )
             updateStep(
-                title: UpdateLocalization.text(ru: "Готово к установке", en: "Ready to install"),
+                title: model.availableUpdateManifest != nil
+                    ? UpdateLocalization.text(ru: "Готово к установке", en: "Ready to install")
+                    : UpdateLocalization.text(ru: "DMG скачан", en: "DMG downloaded"),
                 detail: model.downloadedUpdateDMGURL?.lastPathComponent,
                 state: readyStepState
             )
-            updateStep(
-                title: UpdateLocalization.text(ru: "Установка", en: "Installation"),
-                detail: model.updateDownloadStage == .installing
-                    ? UpdateLocalization.text(ru: "Перезапуск приложения…", en: "Restarting application…")
-                    : nil,
-                state: model.updateDownloadStage == .installing ? .active : .pending
-            )
+            if model.availableUpdateManifest != nil {
+                updateStep(
+                    title: UpdateLocalization.text(ru: "Установка", en: "Installation"),
+                    detail: model.updateDownloadStage == .installing
+                        ? UpdateLocalization.text(ru: "Перезапуск приложения…", en: "Restarting application…")
+                        : nil,
+                    state: model.updateDownloadStage == .installing ? .active : .pending
+                )
+            }
 
             if model.updateDownloadStage == .downloading {
                 ProgressView(value: model.updateDownloadProgress)
@@ -518,6 +531,9 @@ struct UpdateExperiencePopover: View {
 
     private var automaticDownloadModeSummary: String {
         if model.automaticUpdateDownloadDirectoryPath == nil {
+            if model.availableUpdateManifest == nil {
+                return UpdateLocalization.text(ru: "Системный каталог", en: "System folder")
+            }
             return UpdateLocalization.text(
                 ru: "Системный каталог · DMG удаляется после успешной установки",
                 en: "System folder · the DMG is removed after a successful installation"

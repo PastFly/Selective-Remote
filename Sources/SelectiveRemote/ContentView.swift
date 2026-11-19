@@ -365,16 +365,25 @@ struct ContentView: View {
             get: { model.updateMessage != nil },
             set: { if !$0 { model.dismissUpdateMessage() } }
         )) {
-            if !model.updateCheckFailed, model.availableUpdateManifest != nil {
+            if !model.updateCheckFailed, model.availableUpdateDownloadURL != nil {
                 if model.downloadedUpdateDMGURL != nil {
-                    Button("Установить и перезапустить") { model.installDownloadedUpdateAndRestart() }
+                    if model.availableUpdateManifest != nil {
+                        Button("Установить и перезапустить") { model.installDownloadedUpdateAndRestart() }
+                    } else {
+                        Button(UpdateLocalization.text(ru: "Открыть DMG", en: "Open DMG")) {
+                            model.openDownloadedCommunityUpdate()
+                        }
+                    }
                 } else {
                     Button("Скачать DMG") { model.openAvailableUpdate() }
                         .disabled(model.isDownloadingUpdate)
                 }
-                Button("Что нового") { model.openAvailableReleaseNotes() }
+                if model.availableUpdateManifest != nil {
+                    Button("Что нового") { model.openAvailableReleaseNotes() }
+                }
             }
-            if !model.updateCheckFailed, model.availableGitHubRelease != nil {
+            if !model.updateCheckFailed, model.availableGitHubRelease != nil,
+               model.availableUpdateDownloadURL == nil {
                 Button(UpdateLocalization.text(ru: "Открыть релиз на GitHub", en: "Open GitHub Release")) {
                     model.openGitHubUpdateRelease()
                 }

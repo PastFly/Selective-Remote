@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import CryptoKit
 import Foundation
 
@@ -138,7 +139,7 @@ enum UpdateInstallerError: LocalizedError, Sendable {
         case .checksumUnavailable:
             UpdateLocalization.text(ru: "Не удалось получить SHA-256 для опубликованного DMG.", en: "The published DMG SHA-256 could not be retrieved.")
         case .checksumMismatch:
-            UpdateLocalization.text(ru: "SHA-256 загруженного DMG не совпадает с опубликованным значением. Установка остановлена.", en: "The downloaded DMG SHA-256 does not match the published value. Installation was stopped.")
+            UpdateLocalization.text(ru: "SHA-256 загруженного DMG не совпадает с опубликованным значением.", en: "The downloaded DMG SHA-256 does not match the published value.")
         case let .commandFailed(message):
             UpdateLocalization.text(ru: "Не удалось подготовить обновление: \(message)", en: "Unable to prepare the update: \(message)")
         case .mountedVolumeMissing:
@@ -215,9 +216,6 @@ private final class UpdateDownloadOperation: @unchecked Sendable {
                         at: destinationURL.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
-                    if fileManager.fileExists(atPath: destinationURL.path) {
-                        try fileManager.removeItem(at: destinationURL)
-                    }
                     try fileManager.moveItem(at: temporaryURL, to: destinationURL)
                     let values = try destinationURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
                     guard values.isRegularFile == true,
@@ -249,6 +247,7 @@ enum UpdateInstaller {
     static func downloadAndValidateDMG(
         from sourceURL: URL,
         destinationURL requestedDestinationURL: URL? = nil,
+        publishedSHA256: String? = nil,
         progress: @escaping @MainActor (Double) -> Void,
         stage: @escaping @MainActor (UpdateDownloadStage) -> Void
     ) async throws -> URL {
@@ -267,7 +266,26 @@ enum UpdateInstaller {
             let cacheRoot = try defaultDownloadDirectoryURL()
             destinationURL = cacheRoot.appendingPathComponent(sourceURL.lastPathComponent)
         }
-        let operation = UpdateDownloadOperation(sourceURL: sourceURL, destinationURL: destinationURL)
+        let files = FileManager.default
+        if let publishedSHA256,
+           let attributes = try? destinationURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+           attributes.isRegularFile == true, attributes.isSymbolicLink != true,
+           (attributes.fileSize ?? 0) > 1_048_576 {
+            stage(.verifying)
+            if try await sha256Hex(of: destinationURL) == publishedSHA256 {
+                try markWebDownload(destinationURL, sourceURL: sourceURL)
+                progress(1)
+                return destinationURL
+            }
+        }
+
+        let stagingDirectory = destinationURL.deletingLastPathComponent().appendingPathComponent(
+            ".selective-remote-\(UUID().uuidString)", isDirectory: true
+        )
+        try files.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: stagingDirectory) }
+        let stagedDMG = stagingDirectory.appendingPathComponent(destinationURL.lastPathComponent)
+        let operation = UpdateDownloadOperation(sourceURL: sourceURL, destinationURL: stagedDMG)
         stage(.downloading)
 
         let progressTask = Task { @MainActor in
@@ -281,9 +299,22 @@ enum UpdateInstaller {
         let downloadedURL = try await operation.start()
         progress(0.985)
         stage(.verifying)
-        try await validatePublishedChecksum(for: downloadedURL, sourceURL: sourceURL)
+        try await validatePublishedChecksum(for: downloadedURL, sourceURL: sourceURL, publishedSHA256: publishedSHA256)
+        try Task.checkCancellation()
+        if publishedSHA256 != nil {
+            try markWebDownload(downloadedURL, sourceURL: sourceURL)
+        }
+        if files.fileExists(atPath: destinationURL.path) {
+            let attributes = try destinationURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard attributes.isRegularFile == true, attributes.isSymbolicLink != true else {
+                throw UpdateInstallerError.invalidDownload
+            }
+            _ = try files.replaceItemAt(destinationURL, withItemAt: downloadedURL, options: .usingNewMetadataOnly)
+        } else {
+            try files.moveItem(at: downloadedURL, to: destinationURL)
+        }
         progress(1)
-        return downloadedURL
+        return destinationURL
     }
 
     static func mountValidatedDMG(_ dmgURL: URL) throws -> MountedSelectiveRemoteUpdate {
@@ -412,10 +443,35 @@ enum UpdateInstaller {
         NSWorkspace.shared.activateFileViewerSelecting([dmgURL])
     }
 
+    private static func markWebDownload(_ file: URL, sourceURL: URL) throws {
+        var file = file
+        var values = try file.resourceValues(forKeys: [.quarantinePropertiesKey])
+        guard values.quarantineProperties == nil else { return }
+        values.quarantineProperties = [
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload,
+            kLSQuarantineDataURLKey as String: sourceURL
+        ]
+        try file.setResourceValues(values)
+    }
+
     private static func validatePublishedChecksum(
         for dmgURL: URL,
-        sourceURL: URL
+        sourceURL: URL,
+        publishedSHA256: String?
     ) async throws {
+        let expected: String
+        if let publishedSHA256 {
+            expected = publishedSHA256
+        } else {
+            expected = try await fetchPublishedChecksum(for: sourceURL)
+        }
+        let actual = try await sha256Hex(of: dmgURL)
+        guard actual.caseInsensitiveCompare(expected) == .orderedSame else {
+            throw UpdateInstallerError.checksumMismatch
+        }
+    }
+
+    private static func fetchPublishedChecksum(for sourceURL: URL) async throws -> String {
         guard let checksumURL = URL(string: sourceURL.absoluteString + ".sha256") else {
             throw UpdateInstallerError.checksumUnavailable
         }
@@ -427,11 +483,7 @@ enum UpdateInstaller {
               expected.count == 64 else {
             throw UpdateInstallerError.checksumUnavailable
         }
-        let actual = try await sha256Hex(of: dmgURL)
-        guard actual.caseInsensitiveCompare(expected) == .orderedSame else {
-            try? FileManager.default.removeItem(at: dmgURL)
-            throw UpdateInstallerError.checksumMismatch
-        }
+        return expected
     }
 
     private static func sha256Hex(of url: URL) async throws -> String {
