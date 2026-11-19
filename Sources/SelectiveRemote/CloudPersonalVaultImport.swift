@@ -10,7 +10,7 @@ enum SelectiveRemotePersonalVaultImportError: LocalizedError, Equatable {
         switch self {
         case let .conflicts(ids):
             UpdateLocalization.text(
-                ru: "Initial download остановлен: локальные и Cloud-данные конфликтуют (\(ids.count)). Ничего не перезаписано.",
+                ru: "Подключение приостановлено: расхождений между Mac и Cloud — \(ids.count). Обе копии сохранены.",
                 en: "Initial download stopped because local and Cloud data conflict (\(ids.count)). Nothing was overwritten."
             )
         case .unsupportedWebForwarding:
@@ -59,6 +59,7 @@ struct SelectiveRemotePersonalVaultImportPlan: Equatable {
     let forwarding: [IndependentPortForward]
     let sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
     let conflictIDs: [UUID]
+    let credentialConflictIDs: Set<UUID>
 
     var canApply: Bool { conflictIDs.isEmpty }
 }
@@ -110,9 +111,14 @@ enum SelectiveRemotePersonalVaultImporter {
         localProfiles: [ConnectionProfile],
         localSnippets: [TerminalCommandTemplate],
         localForwarding: [IndependentPortForward],
-        localSSHKeys: [SSHKeyRecord] = []
+        localSSHKeys: [SSHKeyRecord] = [],
+        existingPassword: (UUID, KeychainCredentialKind) -> String? = { _, _ in nil }
     ) -> SelectiveRemotePersonalVaultImportPlan {
-        let profiles = additions(remote: snapshot.profiles, local: localProfiles)
+        let profiles = additions(remote: snapshot.profiles, local: localProfiles) { local, remote in
+            var comparable = remote
+            comparable.lastConnectedAt = local.lastConnectedAt
+            return comparable == local
+        }
         let snippets = additions(remote: snapshot.snippets, local: localSnippets)
         let forwarding = additions(remote: snapshot.forwarding, local: localForwarding)
         let localSSHByID = Dictionary(uniqueKeysWithValues: localSSHKeys.map { ($0.id, $0) })
@@ -129,27 +135,43 @@ enum SelectiveRemotePersonalVaultImporter {
         conflicts.formUnion(sshKeyConflicts)
         let localIDs = Set(localProfiles.map(\.id) + localSnippets.map(\.id) + localForwarding.map(\.id))
         conflicts.formUnion(snapshot.tombstoneIDs.intersection(localIDs))
-        let existingProfileIDs = Set(localProfiles.map(\.id))
-        conflicts.formUnion(snapshot.credentials.lazy.map(\.sourceID).filter(existingProfileIDs.contains))
+        let existingCredentialSources = Set(localProfiles.map(\.id) + localForwarding.map(\.id))
+        var credentialConflicts = Set<UUID>()
+        var additions: [SelectiveRemotePersonalVaultCredentialInput] = []
+        for credential in snapshot.credentials {
+            if existingCredentialSources.contains(credential.sourceID) {
+                let local = existingPassword(credential.sourceID, credential.kind)
+                if local?.utf8.elementsEqual(credential.secret.utf8) != true {
+                    credentialConflicts.insert(credential.sourceID)
+                }
+            } else {
+                additions.append(credential)
+            }
+        }
+        conflicts.formUnion(credentialConflicts)
         return .init(
             profiles: profiles.values,
-            credentials: snapshot.credentials.filter { !conflicts.contains($0.sourceID) },
+            credentials: additions.filter { !conflicts.contains($0.sourceID) },
             snippets: snippets.values,
             forwarding: forwarding.values,
             sshKeys: sshKeys,
-            conflictIDs: conflicts.sorted { $0.uuidString < $1.uuidString }
+            conflictIDs: conflicts.sorted { $0.uuidString < $1.uuidString },
+            credentialConflictIDs: credentialConflicts
         )
     }
 
-    private static func additions<T: Identifiable & Equatable>(remote: [T], local: [T])
-        -> (values: [T], conflicts: [UUID]) where T.ID == UUID
+    private static func additions<T: Identifiable & Equatable>(
+        remote: [T],
+        local: [T],
+        matches: (T, T) -> Bool = { $0 == $1 }
+    ) -> (values: [T], conflicts: [UUID]) where T.ID == UUID
     {
         let localByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         var values: [T] = []
         var conflicts: [UUID] = []
         for value in remote {
             if let existing = localByID[value.id] {
-                if existing != value { conflicts.append(value.id) }
+                if !matches(existing, value) { conflicts.append(value.id) }
             } else {
                 values.append(value)
             }
