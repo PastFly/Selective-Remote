@@ -365,21 +365,23 @@ struct ContentView: View {
             get: { model.updateMessage != nil },
             set: { if !$0 { model.dismissUpdateMessage() } }
         )) {
-            if !model.updateCheckFailed, model.availableUpdateDownloadURL != nil {
-                if model.downloadedUpdateDMGURL != nil {
-                    if model.availableUpdateManifest != nil {
-                        Button("Установить и перезапустить") { model.installDownloadedUpdateAndRestart() }
-                    } else {
-                        Button(UpdateLocalization.text(ru: "Открыть DMG", en: "Open DMG")) {
-                            model.openDownloadedCommunityUpdate()
+            if !model.updateCheckFailed, model.availableUpdateDownloadURL != nil,
+               model.updateDownloadStage != .installing {
+                if model.availableUpdateManifest != nil {
+                    if !model.isUpdateInstallationQueued {
+                        Button(UpdateLocalization.text(ru: "Установить и перезапустить", en: "Install and Restart")) {
+                            model.requestAvailableUpdateInstallation()
                         }
                     }
-                } else {
-                    Button("Скачать DMG") { model.openAvailableUpdate() }
-                        .disabled(model.isDownloadingUpdate)
-                }
-                if model.availableUpdateManifest != nil {
                     Button("Что нового") { model.openAvailableReleaseNotes() }
+                } else if model.downloadedUpdateDMGURL != nil {
+                    Button(UpdateLocalization.text(ru: "Открыть DMG", en: "Open DMG")) {
+                        model.openDownloadedCommunityUpdate()
+                    }
+                } else if !model.isDownloadingUpdate {
+                    Button(UpdateLocalization.text(ru: "Скачать DMG", en: "Download DMG")) {
+                        model.downloadAvailableUpdate()
+                    }
                 }
             }
             if !model.updateCheckFailed, model.availableGitHubRelease != nil,
@@ -390,7 +392,8 @@ struct ContentView: View {
             }
             Button("OK", role: .cancel) { model.dismissUpdateMessage() }
         } message: {
-            Text(model.updateMessage ?? "")
+            Text([model.updateMessage, model.updateOperationDescription, model.updateInstallError]
+                .compactMap { $0 }.joined(separator: "\n\n"))
         }
         .alert(
             UpdateLocalization.text(

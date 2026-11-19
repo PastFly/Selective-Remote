@@ -103,15 +103,17 @@ struct UpdatePublisherVerificationTests {
         #expect(requirement.contains("1.2.840.113635.100.6.2.6"))
     }
 
-    @Test("Transactional installer revalidates publisher before deleting rollback backup")
+    @Test("Transactional installer verifies and opens the replacement before deleting its backup")
     func postCopyPublisherVerificationPrecedesBackupDeletion() throws {
         let script = UpdateInstallationScript.make()
         let copy = try #require(script.range(of: #"/usr/bin/ditto "$SRC" "$DST""#))
         let verify = try #require(script.range(of: #"/usr/bin/codesign --verify --deep --strict -R "$PUBLISHER_REQUIREMENT" "$DST""#))
+        let launch = try #require(script.range(of: #"/usr/bin/open "$DST""#, range: verify.upperBound..<script.endIndex))
         let deleteBackup = try #require(script.range(of: #"/bin/rm -rf "$BACKUP""#, range: verify.upperBound..<script.endIndex))
 
         #expect(copy.lowerBound < verify.lowerBound)
-        #expect(verify.lowerBound < deleteBackup.lowerBound)
+        #expect(verify.lowerBound < launch.lowerBound)
+        #expect(launch.lowerBound < deleteBackup.lowerBound)
     }
 
     @Test("Mounted update verifies both the installed trust root and candidate before install")

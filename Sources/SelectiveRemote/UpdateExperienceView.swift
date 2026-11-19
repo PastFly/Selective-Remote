@@ -91,6 +91,20 @@ private struct UpdateSettingsView: View {
                 Toggle("Проверять обновления при запуске и каждые 5 часов", isOn: $model.automaticallyCheckForUpdates)
                 Toggle("Автоматически загружать найденные обновления", isOn: $model.automaticallyDownloadUpdates)
                     .disabled(!model.automaticallyCheckForUpdates)
+                if model.supportsAutomaticUpdateInstallation {
+                    Toggle(UpdateLocalization.text(
+                        ru: "При запуске устанавливать обновление и перезапускать приложение",
+                        en: "Install updates and restart the app at launch"
+                    ), isOn: $model.automaticallyInstallUpdatesOnLaunch)
+                    .disabled(!model.automaticallyCheckForUpdates || !model.automaticallyDownloadUpdates)
+                } else {
+                    Text(UpdateLocalization.text(
+                        ru: "В Community для установки откройте скачанный DMG. Установка с перезапуском из приложения доступна сборкам с Developer ID.",
+                        en: "In Community, open the downloaded DMG to install the update. In-app installation and restart are available in Developer ID builds."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 LabeledContent("Место автоматической загрузки") {
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(automaticDownloadModeTitle)
@@ -231,28 +245,27 @@ struct UpdateExperiencePopover: View {
                         Button("Что нового") { model.openAvailableReleaseNotes() }
                     }
                     Spacer()
-                    if model.downloadedUpdateDMGURL == nil {
-                        Button("Сохранить DMG…") {
-                            model.downloadAvailableUpdateChoosingDestination()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.isDownloadingUpdate)
-                    } else {
+                    if model.downloadedUpdateDMGURL != nil {
                         Button("Показать DMG") {
                             model.revealDownloadedUpdate()
                         }
-                        if model.availableUpdateManifest != nil {
-                            Button("Установить и перезапустить") {
-                                model.installDownloadedUpdateAndRestart()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.updateDownloadStage == .installing)
-                        } else {
-                            Button(UpdateLocalization.text(ru: "Открыть DMG", en: "Open DMG")) {
-                                model.openDownloadedCommunityUpdate()
-                            }
-                            .buttonStyle(.borderedProminent)
+                        .disabled(model.updateDownloadStage == .installing)
+                    } else if !model.isDownloadingUpdate {
+                        Button("Сохранить DMG…") {
+                            model.downloadAvailableUpdateChoosingDestination()
                         }
+                    }
+                    if model.availableUpdateManifest != nil, !model.isUpdateInstallationQueued,
+                       model.updateDownloadStage != .installing {
+                        Button(UpdateLocalization.text(ru: "Установить и перезапустить", en: "Install and Restart")) {
+                            model.requestAvailableUpdateInstallation()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else if model.availableUpdateManifest == nil, model.downloadedUpdateDMGURL != nil {
+                        Button(UpdateLocalization.text(ru: "Открыть DMG", en: "Open DMG")) {
+                            model.openDownloadedCommunityUpdate()
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                 }
 

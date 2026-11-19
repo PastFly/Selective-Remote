@@ -53,15 +53,20 @@ struct SelectiveRemotePersonalVaultImportSnapshot: Equatable {
 }
 
 struct SelectiveRemotePersonalVaultImportPlan: Equatable {
+    enum CredentialDifference: Equatable {
+        case missingOnMac, differs, keychainUnavailable
+    }
+
     let profiles: [ConnectionProfile]
     let credentials: [SelectiveRemotePersonalVaultCredentialInput]
     let snippets: [TerminalCommandTemplate]
     let forwarding: [IndependentPortForward]
     let sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
     let conflictIDs: [UUID]
-    let credentialConflictIDs: Set<UUID>
+    let credentialDifferences: [UUID: [KeychainCredentialKind: CredentialDifference]]
 
     var canApply: Bool { conflictIDs.isEmpty }
+    var credentialConflictIDs: Set<UUID> { Set(credentialDifferences.keys) }
 }
 
 enum SelectiveRemotePersonalVaultImporter {
@@ -112,6 +117,7 @@ enum SelectiveRemotePersonalVaultImporter {
         localSnippets: [TerminalCommandTemplate],
         localForwarding: [IndependentPortForward],
         localSSHKeys: [SSHKeyRecord] = [],
+        existingPasswordsReadable: Bool = true,
         existingPassword: (UUID, KeychainCredentialKind) -> String? = { _, _ in nil }
     ) -> SelectiveRemotePersonalVaultImportPlan {
         let profiles = additions(remote: snapshot.profiles, local: localProfiles) { local, remote in
@@ -136,19 +142,21 @@ enum SelectiveRemotePersonalVaultImporter {
         let localIDs = Set(localProfiles.map(\.id) + localSnippets.map(\.id) + localForwarding.map(\.id))
         conflicts.formUnion(snapshot.tombstoneIDs.intersection(localIDs))
         let existingCredentialSources = Set(localProfiles.map(\.id) + localForwarding.map(\.id))
-        var credentialConflicts = Set<UUID>()
+        var credentialDifferences: [UUID: [KeychainCredentialKind: SelectiveRemotePersonalVaultImportPlan.CredentialDifference]] = [:]
         var additions: [SelectiveRemotePersonalVaultCredentialInput] = []
         for credential in snapshot.credentials {
             if existingCredentialSources.contains(credential.sourceID) {
                 let local = existingPassword(credential.sourceID, credential.kind)
-                if local?.utf8.elementsEqual(credential.secret.utf8) != true {
-                    credentialConflicts.insert(credential.sourceID)
+                if existingPasswordsReadable, local?.utf8.elementsEqual(credential.secret.utf8) == true {
+                    continue
                 }
+                credentialDifferences[credential.sourceID, default: [:]][credential.kind] =
+                    !existingPasswordsReadable ? .keychainUnavailable : (local == nil ? .missingOnMac : .differs)
             } else {
                 additions.append(credential)
             }
         }
-        conflicts.formUnion(credentialConflicts)
+        conflicts.formUnion(credentialDifferences.keys)
         return .init(
             profiles: profiles.values,
             credentials: additions.filter { !conflicts.contains($0.sourceID) },
@@ -156,8 +164,27 @@ enum SelectiveRemotePersonalVaultImporter {
             forwarding: forwarding.values,
             sshKeys: sshKeys,
             conflictIDs: conflicts.sorted { $0.uuidString < $1.uuidString },
-            credentialConflictIDs: credentialConflicts
+            credentialDifferences: credentialDifferences
         )
+    }
+
+    static func differingProfileFields(local: ConnectionProfile, cloud: ConnectionProfile) -> [String] {
+        var cloud = cloud
+        cloud.lastConnectedAt = local.lastConnectedAt
+        guard local != cloud,
+              let localFields = try? profileFields(local), let cloudFields = try? profileFields(cloud)
+        else { return [] }
+        return Set(localFields.keys).union(cloudFields.keys)
+            .filter { key in
+                if key == "selectedDisplayIDs" { return local.selectedDisplayIDs != cloud.selectedDisplayIDs }
+                return (localFields[key] as? NSObject) != (cloudFields[key] as? NSObject)
+            }
+            .sorted()
+    }
+
+    private static func profileFields(_ profile: ConnectionProfile) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(profile)
+        return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
     private static func additions<T: Identifiable & Equatable>(

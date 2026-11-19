@@ -372,6 +372,22 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var isDownloadingUpdate = false
     @Published private(set) var updateDownloadProgress = 0.0
     @Published private(set) var updateDownloadStage: UpdateDownloadStage = .idle
+    private enum UpdateInstallRequest { case user, launch }
+    @Published private var updateInstallRequest: UpdateInstallRequest?
+    var isUpdateInstallationQueued: Bool { updateInstallRequest != nil }
+    var updateOperationDescription: String? {
+        switch updateDownloadStage {
+        case .downloading:
+            let percent = Int(updateDownloadProgress * 100)
+            return UpdateLocalization.text(ru: "Загрузка DMG… \(percent)%", en: "Downloading DMG… \(percent)%")
+        case .verifying:
+            return UpdateLocalization.text(ru: "Проверка DMG…", en: "Verifying DMG…")
+        case .installing:
+            return UpdateLocalization.text(ru: "Установка и перезапуск…", en: "Installing and restarting…")
+        case .idle, .ready:
+            return nil
+        }
+    }
     @Published private(set) var downloadedUpdateDMGURL: URL?
     @Published private(set) var downloadedUpdateUsesCustomDestination = false
     @Published private(set) var lastSuccessfulUpdateCheckDate: Date?
@@ -397,6 +413,19 @@ final class AppModel: NSObject, ObservableObject {
             )
             downloadUpdateAutomaticallyIfNeeded()
         }
+    }
+    @Published var automaticallyInstallUpdatesOnLaunch = UserDefaults.standard.bool(
+        forKey: "SelectiveRemote.update.autoInstallOnLaunch.v1"
+    ) {
+        didSet {
+            UserDefaults.standard.set(
+                automaticallyInstallUpdatesOnLaunch,
+                forKey: "SelectiveRemote.update.autoInstallOnLaunch.v1"
+            )
+        }
+    }
+    var supportsAutomaticUpdateInstallation: Bool {
+        (try? UpdatePublisherIdentity.official(from: .main)) != nil
     }
     @Published var automaticUpdateDownloadDirectoryPath = UserDefaults.standard.string(
         forKey: "SelectiveRemote.update.autoDownloadDirectory.v1"
@@ -5077,7 +5106,7 @@ final class AppModel: NSObject, ObservableObject {
                 let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0
                 let result = try await UpdateService.check(
                     feedURL: try? UpdateService.configuredFeedURL(),
-                    allowsInAppInstallation: (try? UpdatePublisherIdentity.official(from: .main)) != nil,
+                    allowsInAppInstallation: supportsAutomaticUpdateInstallation,
                     currentVersion: version,
                     currentBuild: build
                 )
@@ -5109,15 +5138,19 @@ final class AppModel: NSObject, ObservableObject {
                         updateMessage = UpdateLocalization.text(ru: "Установлена актуальная версия \(AppBrand.name) \(version).", en: "The current version \(AppBrand.name) \(version) is installed.")
                     }
                 case let .available(manifest):
-                    announceAvailableUpdate(
-                        manifest.version,
-                        message: UpdateLocalization.text(
-                            ru: "Доступна новая версия \(AppBrand.name) \(manifest.version).",
-                            en: "A new version \(AppBrand.name) \(manifest.version) is available."
-                        ),
-                        manualCheck: announcesUpToDate,
-                        offersUpdateOnLaunch: offersUpdateOnLaunch
-                    )
+                    if offersUpdateOnLaunch && canInstallUpdateAutomatically {
+                        updateInstallRequest = .launch
+                    } else {
+                        announceAvailableUpdate(
+                            manifest.version,
+                            message: UpdateLocalization.text(
+                                ru: "Доступна новая версия \(AppBrand.name) \(manifest.version).",
+                                en: "Version \(manifest.version) of \(AppBrand.name) is available."
+                            ),
+                            manualCheck: announcesUpToDate,
+                            offersUpdateOnLaunch: offersUpdateOnLaunch
+                        )
+                    }
                 case let .incompatible(manifest):
                     incompatibleUpdate = manifest
                     let minimum = manifest.minimumMacOS
@@ -5171,6 +5204,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func clearDownloadState() {
+        updateInstallRequest = nil
         downloadedUpdateDMGURL = nil
         downloadedUpdateUsesCustomDestination = false
         updateInstallError = nil
@@ -5183,8 +5217,22 @@ final class AppModel: NSObject, ObservableObject {
         NSWorkspace.shared.open(release.pageURL)
     }
 
-    func openAvailableUpdate() {
-        downloadAvailableUpdate()
+    func requestAvailableUpdateInstallation() {
+        guard availableUpdateManifest != nil, updateDownloadStage != .installing else { return }
+        if downloadedUpdateDMGURL != nil {
+            installDownloadedUpdateAndRestart()
+        } else {
+            updateInstallRequest = .user
+            if !isDownloadingUpdate { downloadAvailableUpdate() }
+        }
+    }
+
+    private var canInstallUpdateAutomatically: Bool {
+        automaticallyCheckForUpdates && automaticallyDownloadUpdates
+            && automaticallyInstallUpdatesOnLaunch
+            && !isSessionRunning && runningSSHTunnelCount == 0
+            && runningSSHTerminalCount == 0 && runningLocalTerminalCount == 0
+            && sftpWorkspace.activeTransferCount == 0 && NSApp?.modalWindow == nil
     }
 
     private func downloadUpdateAutomaticallyIfNeeded() {
@@ -5258,7 +5306,15 @@ final class AppModel: NSObject, ObservableObject {
         updateInstallError = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.isDownloadingUpdate = false }
+            defer {
+                self.isDownloadingUpdate = false
+                let request = self.updateInstallRequest
+                self.updateInstallRequest = nil
+                if self.updateDownloadStage == .ready,
+                   request == .user || (request == .launch && self.canInstallUpdateAutomatically) {
+                    self.installDownloadedUpdateAndRestart()
+                }
+            }
             do {
                 self.downloadedUpdateDMGURL = try await UpdateInstaller.downloadAndValidateDMG(
                     from: sourceURL,
@@ -5281,7 +5337,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func installDownloadedUpdateAndRestart() {
-        guard availableUpdateManifest != nil, let downloadedUpdateDMGURL else { return }
+        guard availableUpdateManifest != nil, !isDownloadingUpdate,
+              updateDownloadStage != .installing, let downloadedUpdateDMGURL else { return }
         updateInstallError = nil
         updateDownloadStage = .installing
         do {
