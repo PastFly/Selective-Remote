@@ -90,21 +90,35 @@ backup_name="selective-remote-cloud-${timestamp}.dump"
 backup_path="${backup_dir}/${backup_name}"
 checksum_path="${backup_path}.sha256"
 
-if [[ -e "${backup_path}" || -e "${checksum_path}" ]]; then
+reservation="${backup_dir}/.${backup_name}.lock"
+if ! mkdir -- "${reservation}"; then
+    echo "Refusing to overwrite an existing backup or one being created." >&2
+    exit 73
+fi
+
+temporary_backup=""
+temporary_checksum=""
+publishing_backup=false
+backup_published=false
+cleanup() {
+    if [[ "${publishing_backup}" == true && "${backup_published}" != true ]]; then
+        rm -f -- "${backup_path}" "${checksum_path}"
+    fi
+    rm -f -- "${temporary_backup}" "${temporary_checksum}"
+    rmdir -- "${reservation}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ -e "${backup_path}" || -L "${backup_path}" ||
+      -e "${checksum_path}" || -L "${checksum_path}" ]]; then
     echo "Refusing to overwrite an existing backup." >&2
     exit 73
 fi
 
-temporary_backup="$(mktemp "${backup_dir}/.selective-remote-cloud.XXXXXX")"
-temporary_checksum="$(mktemp "${backup_dir}/.selective-remote-cloud-sha256.XXXXXX")"
-backup_published=false
-cleanup() {
-    rm -f -- "${temporary_backup}" "${temporary_checksum}"
-    if [[ "${backup_published}" != true ]]; then
-        rm -f -- "${backup_path}" "${checksum_path}"
-    fi
-}
-trap cleanup EXIT INT TERM
+temporary_backup="$(mktemp "${reservation}/dump.XXXXXX")"
+temporary_checksum="$(mktemp "${reservation}/checksum.XXXXXX")"
 
 "${compose[@]}" exec -T postgres sh -ceu \
     'exec pg_dump --format=custom --compress=9 --no-owner --no-privileges --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
@@ -116,17 +130,14 @@ if [[ ! -s "${temporary_backup}" ]]; then
 fi
 
 "${compose[@]}" exec -T postgres pg_restore --list < "${temporary_backup}" >/dev/null
-chmod 600 "${temporary_backup}"
-mv -- "${temporary_backup}" "${backup_path}"
+checksum="$(write_sha256 "${temporary_backup}" | awk '{ print $1 }')"
+printf '%s  %s\n' "${checksum}" "${backup_name}" > "${temporary_checksum}"
+chmod 600 "${temporary_backup}" "${temporary_checksum}"
 
-(
-    cd -- "${backup_dir}"
-    write_sha256 "${backup_name}" > "${temporary_checksum}"
-)
-chmod 600 "${temporary_checksum}"
+publishing_backup=true
+mv -- "${temporary_backup}" "${backup_path}"
 mv -- "${temporary_checksum}" "${checksum_path}"
 
 backup_published=true
-trap - EXIT INT TERM
 echo "Backup created: ${backup_path}"
 echo "Checksum created: ${checksum_path}"
