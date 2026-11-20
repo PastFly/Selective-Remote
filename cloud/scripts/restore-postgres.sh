@@ -74,17 +74,31 @@ if [[ "${actual_hash}" != "${recorded_hash}" ]]; then
 fi
 
 compose=(docker compose --project-directory "${cloud_dir}" -f "${cloud_dir}/compose.yaml")
-running_services="$("${compose[@]}" ps --status running --services 2>/dev/null || true)"
-if grep -Fxq "cloud" <<< "${running_services}"; then
-    echo "Stop the Cloud service before restoring the database." >&2
-    exit 75
-fi
-if ! grep -Fxq "postgres" <<< "${running_services}"; then
-    echo "The PostgreSQL service must be running for restore." >&2
-    exit 69
-fi
+verify_compose_state() {
+    local service_states service state postgres_running=false
+    if ! service_states="$("${compose[@]}" ps --all --format '{{.Service}} {{.State}}' 2>/dev/null)"; then
+        echo "Could not verify the state of the Cloud and PostgreSQL services." >&2
+        return 69
+    fi
+    while read -r service state; do
+        case "${service}:${state}" in
+            cloud:created|cloud:exited|cloud:dead) ;;
+            cloud:*)
+                echo "Stop the Cloud service before restoring the database." >&2
+                return 75
+                ;;
+            postgres:running) postgres_running=true ;;
+        esac
+    done <<< "${service_states}"
+    if [[ "${postgres_running}" != true ]]; then
+        echo "The PostgreSQL service must be running for restore." >&2
+        return 69
+    fi
+}
 
+verify_compose_state
 "${compose[@]}" exec -T postgres pg_restore --list < "${backup_path}" >/dev/null
+verify_compose_state
 
 echo "Checksum and archive format verified; restoring database objects."
 "${compose[@]}" exec -T postgres sh -ceu \
