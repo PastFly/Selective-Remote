@@ -10,5 +10,8 @@ export function createConfiguredMigrationFence({fencePath,anchor},{Pool=pg.Pool}
  const pool=new Pool({connectionString:anchor.connectionString,ssl:{ca:anchor.ca,rejectUnauthorized:true,
   checkServerIdentity:(_reportedHost,certificate)=>checkServerIdentity(hostname,certificate)},max:2,
   connectionTimeoutMillis:5000,query_timeout:10000});
+ pool.on('error',()=>{
+  console.error(JSON.stringify({level:'error',message:'Idle publication anchor connection lost'}));
+ });
  return {fence:new MigrationFence(fencePath,{anchor:new PostgresFenceAnchor(pool,anchor.deploymentID)}),close:()=>pool.end()};
 }

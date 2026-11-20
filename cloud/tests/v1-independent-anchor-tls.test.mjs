@@ -9,9 +9,10 @@ import pg from 'pg';
 import {loadFenceAnchorConfig} from '../src/fence-anchor-config.mjs';
 import {createConfiguredMigrationFence} from '../src/configured-migration-fence.mjs';
 import {fenceHistoryHead} from '../src/fence-history-head.mjs';
+import {trackTestPoolClosure,verifyIdlePoolReconnect} from './postgres-pool-teardown.mjs';
 const url=process.env.SR_TEST_ANCHOR_TLS_URL,certPath=process.env.SR_TEST_ANCHOR_TLS_CA;
 
-test('configured anchor uses certificate-verified TLS and rejects a different CA',{skip:!url||!certPath},async()=>{
+test('configured anchor reconnects over verified TLS and rejects a different CA',{skip:!url||!certPath},async context=>{
  const admin=new pg.Pool({connectionString:url,ssl:{ca:await readFile(certPath,'utf8'),rejectUnauthorized:true}});
  const db='sr_anchor_tls_'+randomUUID().replaceAll('-','');await admin.query(`CREATE DATABASE ${db}`);
  const dbURL=new URL(url);dbURL.pathname='/'+db;const target=dbURL.toString();
@@ -29,13 +30,20 @@ test('configured anchor uses certificate-verified TLS and rejects a different CA
    PUBLICATION_FENCE_ANCHOR_CA_BASE64:(await readFile(certPath)).toString('base64')};
   const anchor=loadFenceAnchorConfig(values,'postgresql://runtime:synthetic@separate-primary.invalid/app');
   const configured=createConfiguredMigrationFence({fencePath:path,anchor});
+  const pool=trackTestPoolClosure(configured.fence.anchor.queryable);
   try{
    assert.equal((await configured.fence.anchor.read()).position,0);
-   const ssl=await configured.fence.anchor.queryable.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()');
+   const ssl=await pool.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()');
    assert.equal(ssl.rows[0].ssl,true);
    const id2='11111111-1111-4111-8111-111111111111';
    await configured.fence.intent({teamID:id2,vaultID:id2,attemptID:id2,manifestHash:'a'.repeat(64),schemaFloor:19});
    assert.equal((await configured.fence.anchor.read()).position,1);
+   const log=context.mock.method(console,'error',()=>{});
+   await verifyIdlePoolReconnect(pool,setup);
+   assert.equal((await configured.fence.anchor.read()).position,1);
+   assert.deepEqual(log.mock.calls.map(call=>call.arguments),[[
+    JSON.stringify({level:'error',message:'Idle publication anchor connection lost'}),
+   ]]);
   }finally{await configured.close();}
   const wrong=loadFenceAnchorConfig({...values,PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64')},'postgresql://runtime:synthetic@separate-primary.invalid/app');
   const rejected=createConfiguredMigrationFence({fencePath:path,anchor:wrong});

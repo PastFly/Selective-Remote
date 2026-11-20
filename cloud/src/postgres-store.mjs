@@ -131,6 +131,11 @@ async function finishResourceMutation(client, receipt, { teamID, vaultID }, resu
 export class PostgresStore {
   constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null } = {}) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
+    if (!pool) {
+      this.pool.on("error", () => {
+        console.error(JSON.stringify({ level: "error", message: "Idle Cloud database connection lost" }));
+      });
+    }
     this.access = new AccessSurfaceStore(this.pool);
     this.writerFence = writerFence;
     this.v1Fence = v1Fence;
