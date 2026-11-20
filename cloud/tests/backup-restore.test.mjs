@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -48,7 +49,6 @@ test("restore fails closed around confirmation, integrity and active writes", as
   assert.match(script, /recorded_name.*backup_name/);
   assert.match(script, /generated backup format/);
   assert.match(script, /exactly one record/);
-  assert.match(script, /grep -Fxq "cloud"/);
   assert.match(script, /pg_restore --list/);
   assert.match(script, /--clean --if-exists/);
   assert.match(script, /--exit-on-error --single-transaction/);
@@ -70,8 +70,17 @@ case "$*" in
   "compose version") exit 0 ;;
   *"exec -T postgres pg_isready"*) exit 0 ;;
   *"pg_dump --format=custom"*) printf 'PGDMP-controlled-test-archive' ;;
-  *"exec -T postgres pg_restore --list"*) cat >/dev/null ;;
-  *"ps --status running --services"*) printf 'postgres\\n' ;;
+  *"exec -T postgres pg_restore --list"*)
+    cat >/dev/null
+    if [[ -n "\${COMPOSE_STATE_AFTER_LIST:-}" ]]; then touch "$DOCKER_LOG.listed"; fi
+    exit "\${ARCHIVE_LIST_EXIT:-0}"
+    ;;
+  *"ps --all --format {{.Service}} {{.State}}"*)
+    state="\${COMPOSE_CLOUD_STATE:-exited}"
+    if [[ -f "$DOCKER_LOG.listed" ]]; then state="$COMPOSE_STATE_AFTER_LIST"; fi
+    printf 'postgres %s\\ncloud %s\\n' "\${COMPOSE_POSTGRES_STATE:-running}" "$state"
+    exit "\${COMPOSE_STATUS_EXIT:-0}"
+    ;;
   *"pg_restore --clean --if-exists"*) cat >/dev/null ;;
   *) printf 'Unexpected docker call: %s\\n' "$*" >&2; exit 90 ;;
 esac
@@ -94,15 +103,68 @@ esac
     assert.ok(entries.includes(`${dumpName}.sha256`), "checksum was not created");
     assert.equal((await stat(join(backupDir, dumpName))).mode & 0o777, 0o600);
 
-    const restore = spawnSync(
-      "bash",
-      [restorePath, "--confirm-restore", join(backupDir, dumpName)],
-      { encoding: "utf8", env },
-    );
+    const restoreArgs = [restorePath, "--confirm-restore", join(backupDir, dumpName)];
+    const failedStatus = spawnSync("bash", restoreArgs, {
+      encoding: "utf8",
+      env: { ...env, COMPOSE_STATUS_EXIT: "1" },
+    });
+    assert.equal(failedStatus.status, 69, failedStatus.stderr);
+    assert.match(failedStatus.stderr, /Could not verify the state of the Cloud and PostgreSQL services/);
+    assert.doesNotMatch(await readFile(dockerLog, "utf8"), /pg_restore --clean/);
+
+    for (const state of ["running", "paused", "restarting", "removing"]) {
+      const activeCloud = spawnSync("bash", restoreArgs, {
+        encoding: "utf8",
+        env: { ...env, COMPOSE_CLOUD_STATE: state },
+      });
+      assert.equal(activeCloud.status, 75, `Cloud state ${state}: ${activeCloud.stderr}`);
+      assert.match(activeCloud.stderr, /Stop the Cloud service before restoring the database/);
+    }
+    assert.doesNotMatch(await readFile(dockerLog, "utf8"), /pg_restore --clean/);
+
+    const restartedCloud = spawnSync("bash", restoreArgs, {
+      encoding: "utf8",
+      env: { ...env, COMPOSE_STATE_AFTER_LIST: "running" },
+    });
+    assert.equal(restartedCloud.status, 75, restartedCloud.stderr);
+    assert.match(restartedCloud.stderr, /Stop the Cloud service before restoring the database/);
+    assert.doesNotMatch(await readFile(dockerLog, "utf8"), /pg_restore --clean/);
+    await rm(`${dockerLog}.listed`, { force: true });
+
+    const pausedDatabase = spawnSync("bash", restoreArgs, {
+      encoding: "utf8",
+      env: { ...env, COMPOSE_POSTGRES_STATE: "paused" },
+    });
+    assert.equal(pausedDatabase.status, 69, pausedDatabase.stderr);
+    assert.match(pausedDatabase.stderr, /PostgreSQL service must be running/);
+
+    const dumpPath = join(backupDir, dumpName);
+    const originalDump = await readFile(dumpPath);
+    const originalChecksum = await readFile(`${dumpPath}.sha256`);
+    const corruptedDump = Buffer.from("truncated");
+    await writeFile(dumpPath, corruptedDump);
+    assert.match(await readFile(dockerLog, "utf8"), /pg_dump --format=custom/);
+    await writeFile(dockerLog, "");
+    const mismatchedChecksum = spawnSync("bash", restoreArgs, { encoding: "utf8", env });
+    assert.equal(mismatchedChecksum.status, 65, mismatchedChecksum.stderr);
+    assert.match(mismatchedChecksum.stderr, /Backup checksum verification failed/);
+    assert.doesNotMatch(await readFile(dockerLog, "utf8"), /pg_restore --list|pg_restore --clean/);
+
+    const corruptedHash = createHash("sha256").update(corruptedDump).digest("hex");
+    await writeFile(`${dumpPath}.sha256`, `${corruptedHash}  ${dumpName}\n`);
+    const malformedArchive = spawnSync("bash", restoreArgs, {
+      encoding: "utf8",
+      env: { ...env, ARCHIVE_LIST_EXIT: "1" },
+    });
+    assert.equal(malformedArchive.status, 1, malformedArchive.stderr);
+    assert.doesNotMatch(await readFile(dockerLog, "utf8"), /pg_restore --clean/);
+    await writeFile(dumpPath, originalDump);
+    await writeFile(`${dumpPath}.sha256`, originalChecksum);
+
+    const restore = spawnSync("bash", restoreArgs, { encoding: "utf8", env });
     assert.equal(restore.status, 0, restore.stderr);
 
     const calls = await readFile(dockerLog, "utf8");
-    assert.match(calls, /pg_dump --format=custom/);
     assert.match(calls, /pg_restore --list/);
     assert.match(calls, /pg_restore --clean --if-exists/);
   } finally {
