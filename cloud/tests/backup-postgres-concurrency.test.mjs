@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -57,11 +58,10 @@ esac
     await rm(root, { recursive: true, force: true });
   });
 
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (await stat(firstDumpStarted, { throwIfNoEntry: false })) break;
+  for (let attempt = 0; attempt < 250 && !existsSync(firstDumpStarted); attempt++) {
     await delay(20);
   }
-  assert.ok(await stat(firstDumpStarted, { throwIfNoEntry: false }), "first backup did not start dumping");
+  assert.ok(existsSync(firstDumpStarted), "first backup did not start dumping");
   const second = spawnSync("bash", [script, backups], {
     env: { ...env, BACKUP_WORKER: "second" },
     encoding: "utf8",
