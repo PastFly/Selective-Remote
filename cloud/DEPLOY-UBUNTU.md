@@ -110,15 +110,20 @@ Keep at least one encrypted off-host copy under a separately controlled backup
 policy. A backup is not accepted until a restore drill succeeds on disposable
 staging infrastructure.
 
-Restore is destructive and fails unless the checksum is valid, PostgreSQL is
-running, Cloud is stopped and the exact confirmation flag is supplied:
+Restore requires a valid checksum and archive, PostgreSQL running, all Cloud
+containers stopped and the exact confirmation flag. Keep Cloud and any other
+database writers stopped throughout the operation. A paused or restarting Cloud
+container blocks restore. The script checks Compose state again after it reads
+the archive's table of contents.
+
+The following drill is for a disposable Compose project. Restart Cloud only
+after restore succeeds:
 
 ```bash
-docker compose -f cloud/compose.yaml stop cloud
+docker compose -f cloud/compose.yaml stop cloud &&
 bash cloud/scripts/restore-postgres.sh --confirm-restore \
-  /var/backups/selective-remote-cloud/selective-remote-cloud-YYYYMMDDTHHMMSSZ.dump
-docker compose -f cloud/compose.yaml up -d cloud
-curl --fail --silent --show-error https://cloud.pastfly.ru/healthz
+  /var/backups/selective-remote-cloud/selective-remote-cloud-YYYYMMDDTHHMMSSZ.dump &&
+docker compose -f cloud/compose.yaml up -d --wait cloud
 ```
 
 Do not perform the first restore drill against the only production database.
