@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
 import {rootCertificates} from 'node:tls';
 import {loadFenceAnchorConfig} from '../src/fence-anchor-config.mjs';
 const db='postgresql://main:test@primary.example:5432/app';
@@ -21,17 +22,27 @@ test('anchor rejects same server, URL SSL overrides, invalid IDs and invalid CA'
  ])assert.throws(()=>loadFenceAnchorConfig({...env,...overrides},db),/invalid_deployment_anchor_configuration/);
 });
 
-test('configured fence passes verified TLS and anchor into the real journal, and closes its pool',async()=>{
+test('configured fence verifies TLS and handles idle connection errors on its owned pool',async context=>{
  const {createConfiguredMigrationFence}=await import('../src/configured-migration-fence.mjs');
- let options,closed=false;
- class TestPool {constructor(value){options=value;} async end(){closed=true;} async query(){throw Error('unused');}}
+ let options,pool,closed=false;
+ class TestPool extends EventEmitter {
+  constructor(value){super();options=value;pool=this;}
+  async end(){closed=true;}
+  async query(){throw Error('unused');}
+ }
  const anchor=loadFenceAnchorConfig(env,db);
  const result=createConfiguredMigrationFence({fencePath:'/tmp/test-journal',anchor},{Pool:TestPool});
  assert.equal(options.connectionString,env.PUBLICATION_FENCE_ANCHOR_URL);
  assert.equal(options.ssl.rejectUnauthorized,true);assert.equal(options.ssl.ca,anchor.ca);
  assert.equal(typeof options.ssl.checkServerIdentity,'function');
  assert.ok(options.ssl.checkServerIdentity('localhost',{subjectaltname:'DNS:localhost',subject:{CN:'localhost'}}));
- assert.ok(result.fence.anchor);await result.close();assert.equal(closed,true);
+ assert.ok(result.fence.anchor);
+ const log=context.mock.method(console,'error',()=>{});
+ assert.doesNotThrow(()=>pool.emit('error',Error('synthetic connection details')));
+ assert.deepEqual(log.mock.calls.map(call=>call.arguments),[[
+  JSON.stringify({level:'error',message:'Idle publication anchor connection lost'}),
+ ]]);
+ await result.close();assert.equal(closed,true);
  const ipAnchor=loadFenceAnchorConfig({...env,PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:test@127.0.0.1:55432/fence'},db);
  const ipResult=createConfiguredMigrationFence({fencePath:'/tmp/test-journal',anchor:ipAnchor},{Pool:TestPool});
  assert.ok(options.ssl.checkServerIdentity('localhost',{subjectaltname:'DNS:localhost',subject:{CN:'localhost'}}));

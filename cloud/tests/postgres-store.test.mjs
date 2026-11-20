@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PostgresStore } from "../src/postgres-store.mjs";
 
+test("an idle connection error on the owned pool is handled without logging connection details", async (context) => {
+  const store = new PostgresStore("postgresql://synthetic@localhost/synthetic");
+  context.after(() => store.close());
+  const log = context.mock.method(console, "error", () => {});
+  assert.doesNotThrow(() => store.pool.emit("error", Error("synthetic connection details")));
+  assert.deepEqual(log.mock.calls.map(call => call.arguments), [[
+    JSON.stringify({ level: "error", message: "Idle Cloud database connection lost" }),
+  ]]);
+});
+
 function recordingStore(respond = () => ({ rows: [] })) {
   const queries = [];
   let released = false;
