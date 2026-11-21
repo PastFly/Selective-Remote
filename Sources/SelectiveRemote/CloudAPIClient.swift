@@ -473,6 +473,10 @@ actor SelectiveRemoteCloudAPIClient {
         let (_, response) = try await dataLoader(request)
         try checkSession(session)
         try boundPublicationSession?.check()
+        if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+           http.value(forHTTPHeaderField: "X-Selective-V1-Write-Status") == "vault_write_temporarily_unavailable" {
+            throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+        }
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
               http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"

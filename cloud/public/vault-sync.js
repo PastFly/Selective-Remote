@@ -565,6 +565,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     const response = await fetchValue("/v1/meta", { headers: { Accept: "application/json" },
       cache: "no-store", credentials: "same-origin", referrerPolicy: "no-referrer" });
     requireCurrent();
+    if (response.ok && response.headers?.get("x-selective-v1-write-status") === "vault_write_temporarily_unavailable") {
+      throw new Error("vault_write_temporarily_unavailable");
+    }
     if (!response.ok || response.headers?.get("x-selective-v1-write-fence") !== "1") {
       throw new Error("vault_client_upgrade_required");
     }
