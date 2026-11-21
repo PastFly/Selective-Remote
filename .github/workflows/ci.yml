@@ -75,6 +75,13 @@ jobs:
         working-directory: cloud
         run: npm ci
 
+      - name: Test Cloud controller startup with Docker Compose
+        timeout-minutes: 6
+        working-directory: cloud
+        env:
+          SR_TEST_DOCKER_COMPOSE: '1'
+        run: node --test tests/staging-controller-compose-startup.test.mjs
+
       - name: Test separately running TLS fence anchor
         working-directory: cloud
         env:
