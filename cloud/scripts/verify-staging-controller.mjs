@@ -216,6 +216,26 @@ async function invoke(file,args,options={}){
     fail(/^[a-z_]+$/.test(diagnostic??'')?diagnostic:'deployment_controller_command_failed');
   }
 }
+export async function runControllerTrafficStage(stage, { docker, compose, inspectProject }) {
+  if (stage === 'close-traffic') {
+    return docker([...compose, 'stop', 'cloud', 'caddy']);
+  }
+  if (stage === 'assert-closed') {
+    const { stdout } = await docker([...compose, 'ps', '--status', 'running', '--services']);
+    const running = stdout.trim().split(/\s+/);
+    if (running.includes('cloud') || running.includes('caddy')) fail('deployment_traffic_not_closed');
+    return inspectProject();
+  }
+  if (stage === 'start-cloud' || stage === 'open-traffic') {
+    const service = stage === 'start-cloud' ? 'cloud' : 'caddy';
+    return docker([...compose, 'up', '--wait', '--wait-timeout', '90', '--no-build', '--pull', 'never', '--no-deps', service]);
+  }
+  if (stage === 'verify-cloud-ready') {
+    return docker([...compose, 'exec', '-T', 'cloud', 'node', '--input-type=module', '--eval', cloudReadinessProbe]);
+  }
+  fail('invalid_deployment_stage');
+}
+
 export async function runController({maintenance=false}={}){
   if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==controllerRoot)fail('deployment_controller_owner');
   await protectedPath(join(controllerRoot,'settings.json'));
@@ -270,11 +290,6 @@ export async function runController({maintenance=false}={}){
         await writeFile(join(temp,'effective.env'),Object.entries(effective).map(([key,value])=>key+'='+value).join('\n')+'\n',{mode:0o600,flag:'wx'});return;
       }
       if(stage==='assert-project')return inspectProject();
-      if(stage==='close-traffic')return docker([...compose,'stop','cloud','caddy']);
-      if(stage==='assert-closed'){
-        const running=(await docker([...compose,'ps','--status','running','--services'])).stdout.trim().split(/\s+/);
-        if(running.some(name=>name==='cloud'||name==='caddy'))fail('deployment_traffic_not_closed');await inspectProject();return;
-      }
       if(stage==='check'){
         // A fresh process reads the independently retained checker + journal.
         // Candidate code is never used to decide whether it is safe to start.
@@ -287,14 +302,7 @@ export async function runController({maintenance=false}={}){
       }
       if(stage==='migrate')return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
         '--env-file',join(temp,'effective.env'),'--entrypoint','node',settings.imageDigest,'scripts/migrate.mjs']);
-      if (stage === 'start-cloud' || stage === 'open-traffic') {
-        const service = stage === 'start-cloud' ? 'cloud' : 'caddy';
-        return docker([...compose, 'up', '--wait', '--wait-timeout', '90', '--no-build', '--pull', 'never', '--no-deps', service]);
-      }
-      if (stage === 'verify-cloud-ready') {
-        return docker([...compose, 'exec', '-T', 'cloud', 'node', '--input-type=module', '--eval', cloudReadinessProbe]);
-      }
-      fail('invalid_deployment_stage');
+      return runControllerTrafficStage(stage, { docker, compose, inspectProject });
     }});
   }finally{if(temp)await rm(temp,{recursive:true,force:true});await rm(lock,{recursive:true});}
 }
