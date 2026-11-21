@@ -47,6 +47,10 @@ test('Personal and Team V1 writes fail closed while current data remains readabl
     let ready=false;
     for(let i=0;i<100;i++){if(child.exitCode!==null)throw Error('test_cloud_start_failed');try{if((await fetch(`${origin}/readyz`)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}
     assert.equal(ready,true);
+    const metadata=await fetch(`${origin}/v1/meta`);
+    assert.equal(metadata.status,200);
+    assert.equal(metadata.headers.get('x-selective-v1-write-fence'),'1');
+    assert.equal(metadata.headers.get('x-selective-v1-write-status'),'vault_write_temporarily_unavailable');
     const headers={Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Selective-V1-Write-Fence':'1','Idempotency-Key':'synthetic-cutover-test'};
     const read=await fetch(`${origin}/v1/vault`,{headers});assert.equal(read.status,200);
     for(const path of ['/v1/vault',`/v1/teams/${team}/vaults/${vault}`]){

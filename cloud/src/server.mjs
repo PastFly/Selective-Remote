@@ -40,6 +40,7 @@ const maxBodyBytes = 34 * 1024 * 1024;
 const maxTeamBodyBytes = 16 * 1024;
 const maxInvitationWrapperBodyBytes = 1024 * 1024;
 const browserSessionCookie = "sr_session";
+const v1WriteStopReason = "vault_write_temporarily_unavailable";
 
 const server = createServer(async (request, response) => {
   const requestID = crypto.randomUUID();
@@ -69,6 +70,7 @@ async function route(request, response) {
   }
   if (method === "GET" && url.pathname === "/v1/meta") {
     if (deploymentEvidence?.writerFloor === 1) response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
+    response.setHeader("X-Selective-V1-Write-Status", v1WriteStopReason);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "GET" && url.pathname === "/v1/auth/username-availability") {
@@ -148,7 +150,7 @@ async function route(request, response) {
     // writer can still publish a snapshot missing late legacy local edits.
     // Keep both V1 whole-Vault routes read-only, including for current clients.
     if (v1WriteRequiresFence(method, url.pathname)) {
-      return sendError(response, 503, "vault_write_temporarily_unavailable");
+      return sendError(response, 503, v1WriteStopReason);
     }
     // Team membership, roles and device trust are not yet included in the
     // anchored history. A restored database can otherwise resurrect access.

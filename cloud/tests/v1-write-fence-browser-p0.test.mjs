@@ -40,6 +40,26 @@ test("current browser refuses a Personal write when Cloud has no safe writer cap
   assert.equal(writes, 0);
 });
 
+test("the server's write stop prevents both Personal and Team uploads at preflight", async () => {
+  const { wrappedKey: _, ...teamEnvelope } = envelope;
+  let writes = 0;
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path, options) => {
+    if (path === "/v1/auth/login") return login();
+    if (path === "/v1/meta") return Response.json({}, { headers: {
+      "X-Selective-V1-Write-Fence": "1",
+      "X-Selective-V1-Write-Status": "vault_write_temporarily_unavailable",
+    } });
+    assert.equal(options.method, "PUT");
+    writes++;
+    return Response.json({ conflict: false, revision: 1 });
+  } });
+  await client.login({ email: "test@example.invalid", password: "synthetic", deviceID: device });
+  await assert.rejects(client.putVault(personalVaultScope, envelope), /vault_write_temporarily_unavailable/u);
+  await assert.rejects(client.putTeamVault({ type: "team", teamID: user, vaultID: device },
+    { ...teamEnvelope, keyGeneration: 1 }, "synthetic-idempotency-key"), /vault_write_temporarily_unavailable/u);
+  assert.equal(writes, 0);
+});
+
 test("current browser sends a framed Personal write only to capable Cloud", async () => {
   let body, marker;
   const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
