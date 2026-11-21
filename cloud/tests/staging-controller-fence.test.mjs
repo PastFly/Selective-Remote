@@ -39,11 +39,11 @@ function compose(s){return {name:'cloud',networks:{private:{name:s.network}},ser
  caddy:{restart:'on-failure:3',networks:{private:{}}},
 }};}
 async function fixtureController({query,fence,metadata=currentCapabilities,maintenance=false,command=async()=>{}}){
- const stages=[],queries=[];
- const promise=verifyControllerFixture({candidate:settings(),maintenance,runCommand:async event=>{
+ const stages=[],queries=[],reports=[];
+ const promise=verifyControllerFixture({candidate:settings(),maintenance,report:event=>reports.push(event),runCommand:async event=>{
   stages.push(event.stage);await command(event);if(event.stage==='candidate-metadata')return metadata;
   if(event.stage==='check')return verifyDeploymentCompatibility({candidate:event.metadata,mode:event.mode,fence,query:(sql,values)=>{queries.push(sql);return query(sql,values);}});
- }});return {promise,stages,queries};
+ }});return {promise,stages,queries,reports};
 }
 const emptyFence={snapshot:async()=>({schemaFloor:19,pending:[],committed:[],outcomes:[]}),verifySchemaFloor:async()=>true,verify:async()=>true};
 const emptyDB=async sql=>({rows:sql.includes('schema_migrations')?[{version:'22'}]:[]});
@@ -66,7 +66,8 @@ test('ordinary old-schema startup never queries publications, migrates or starts
 });
 test('explicit initial maintenance closes traffic before schema12 check and repeats check after migrations',async()=>{
  let schema='12';const f=await fixtureController({maintenance:true,fence:emptyFence,query:async sql=>({rows:sql.includes('schema_migrations')?[{version:schema}]:[]}),command:async e=>{if(e.stage==='migrate')schema='22';}});
- await f.promise;assert.deepEqual(f.stages,['attest','candidate-metadata','storage','assert-project','close-traffic','assert-closed','check','migrate','check','attest','open-traffic']);
+ await f.promise;assert.deepEqual(f.stages,['attest','candidate-metadata','storage','assert-project','close-traffic','assert-closed','check','migrate','check','attest','start-cloud','verify-cloud-ready','open-traffic']);
+ assert.deepEqual(f.reports.at(-1),{stage:'complete',trafficOpened:true});
  assert.equal(f.queries.filter(sql=>sql.includes('vault_migration_attempts')).length,1);
 });
 test('failure to close traffic, second attestation or post-migration pending prevents any up command',async()=>{
@@ -76,6 +77,41 @@ test('failure to close traffic, second attestation or post-migration pending pre
   await assert.rejects(f.promise);assert.ok(!f.stages.includes('open-traffic'));
  }
 });
+test('startup failures close both traffic services and readiness gates the proxy', async () => {
+  for (const failedStage of ['start-cloud', 'verify-cloud-ready', 'open-traffic']) {
+    const failure = Error('synthetic_startup_failure');
+    const fixture = await fixtureController({
+      query: emptyDB,
+      fence: emptyFence,
+      command: async event => {
+        if (event.stage === failedStage) throw failure;
+      },
+    });
+    await assert.rejects(fixture.promise, error => error === failure);
+    assert.deepEqual(fixture.stages.slice(-3), [failedStage, 'close-traffic', 'assert-closed']);
+    if (failedStage !== 'open-traffic') assert.ok(!fixture.stages.includes('open-traffic'));
+    assert.ok(!fixture.reports.some(event => event.stage === 'complete'));
+  }
+});
+
+test('startup distinguishes an unconfirmed traffic closure from a readiness failure', async () => {
+  let closingAfterFailure = false;
+  const fixture = await fixtureController({
+    query: emptyDB,
+    fence: emptyFence,
+    command: async event => {
+      if (event.stage === 'verify-cloud-ready') {
+        closingAfterFailure = true;
+        throw Error('synthetic_readiness_failure');
+      }
+      if (closingAfterFailure && event.stage === 'assert-closed') throw Error('synthetic_closure_failure');
+    },
+  });
+  await assert.rejects(fixture.promise, /deployment_traffic_closure_unconfirmed/);
+  assert.deepEqual(fixture.stages.slice(-3), ['verify-cloud-ready', 'close-traffic', 'assert-closed']);
+  assert.ok(!fixture.reports.some(event => event.stage === 'complete'));
+});
+
 async function withDatabases(work){
  const base=new URL(database);assert.ok(['127.0.0.1','localhost','[::1]'].includes(base.hostname));
  const admin=createTestPool({connectionString:database,max:1}),created=[],pools=[],directory=await mkdtemp(join(tmpdir(),'prc-controller-restore-'));

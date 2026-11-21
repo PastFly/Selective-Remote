@@ -12,6 +12,20 @@ export const controllerRoot='/opt/selective-remote-controller';
 export const controllerState='/var/lib/selective-remote-controller';
 export const publicationFenceOverlayDigest='170dd70074fb4735fc15b17d1609101cb283961fb2b1bdbe1d83a16c7b8d9576';
 const nodeImage='node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b';
+const cloudReadinessProbe = `
+  try {
+    const response = await fetch('http://127.0.0.1:8080/readyz', {
+      redirect: 'error',
+      signal: AbortSignal.timeout(10000),
+    });
+    if (response.status !== 200 || (await response.json()).status !== 'ready') {
+      process.exitCode = 1;
+    }
+  } catch {
+    process.exitCode = 1;
+  }
+  if (process.exitCode) console.error('deployment_cloud_not_ready');
+`;
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const validHash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const contains=(parent,path)=>path===parent||path.startsWith(parent+'/');
@@ -168,7 +182,19 @@ export async function verifyControllerFixture({candidate,runCommand,report=()=>{
   await step('migrate');
   await step('check',{metadata,mode:'traffic'});
   await step('attest');
-  await step('open-traffic');
+  try {
+    await step('start-cloud');
+    await step('verify-cloud-ready');
+    await step('open-traffic');
+  } catch (error) {
+    try {
+      await step('close-traffic');
+      await step('assert-closed');
+    } catch {
+      fail('deployment_traffic_closure_unconfirmed');
+    }
+    throw error;
+  }
   report({stage:'complete',trafficOpened:true});
   return {compatible:true,trafficOpened:true};
 }
@@ -261,7 +287,13 @@ export async function runController({maintenance=false}={}){
       }
       if(stage==='migrate')return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
         '--env-file',join(temp,'effective.env'),'--entrypoint','node',settings.imageDigest,'scripts/migrate.mjs']);
-      if(stage==='open-traffic')return docker([...compose,'up','-d','--no-build','--pull','never','--no-deps','cloud','caddy']);
+      if (stage === 'start-cloud' || stage === 'open-traffic') {
+        const service = stage === 'start-cloud' ? 'cloud' : 'caddy';
+        return docker([...compose, 'up', '--wait', '--wait-timeout', '90', '--no-build', '--pull', 'never', '--no-deps', service]);
+      }
+      if (stage === 'verify-cloud-ready') {
+        return docker([...compose, 'exec', '-T', 'cloud', 'node', '--input-type=module', '--eval', cloudReadinessProbe]);
+      }
       fail('invalid_deployment_stage');
     }});
   }finally{if(temp)await rm(temp,{recursive:true,force:true});await rm(lock,{recursive:true});}
