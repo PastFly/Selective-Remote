@@ -75,6 +75,11 @@ jobs:
         working-directory: cloud
         run: npm ci
 
+      - name: Verify installed Cloud controller without changing services
+        timeout-minutes: 5
+        working-directory: cloud
+        run: sudo env SR_TEST_INSTALLED_CONTROLLER=1 "$(command -v node)" --test tests/staging-controller-installed.test.mjs
+
       - name: Test Cloud controller startup with Docker Compose
         timeout-minutes: 6
         working-directory: cloud

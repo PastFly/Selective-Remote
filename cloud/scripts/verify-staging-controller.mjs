@@ -236,7 +236,8 @@ export async function runControllerTrafficStage(stage, { docker, compose, inspec
   fail('invalid_deployment_stage');
 }
 
-export async function runController({maintenance=false}={}){
+export async function runController({maintenance=false, verifyInstallation=false}={}){
+  if (maintenance && verifyInstallation) fail('invalid_deployment_arguments');
   if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==controllerRoot)fail('deployment_controller_owner');
   await protectedPath(join(controllerRoot,'settings.json'));
   const settings=validateControllerSettings(JSON.parse(await readFile(join(controllerRoot,'settings.json'),'utf8')));
@@ -249,7 +250,6 @@ export async function runController({maintenance=false}={}){
   try{await mkdir(lock,{mode:0o700});}catch{fail('deployment_controller_locked');}
   let temp;
   try{
-    temp=await mkdtemp(join(controllerState,'candidate-'));
     const env={PATH:'/usr/bin:/bin',...settings.storage,PUBLICATION_IMAGE_DIGEST:settings.imageDigest,PUBLICATION_FENCE_DIRECTORY:dirname(settings.fencePath)};
     const compose=['compose','--project-name','cloud','--project-directory',settings.cloudDirectory,'--env-file',settings.envPath,...settings.composeFiles.flatMap(f=>['-f',f.path])];
     const docker=(args,options={})=>invoke('/usr/bin/docker',args,{env,...options});
@@ -263,6 +263,14 @@ export async function runController({maintenance=false}={}){
       const image=JSON.parse((await docker(['image','inspect','--format','{{json .}}',settings.imageDigest])).stdout);
       validateCandidateIdentity(settings,image);imageEnvironment=image.Config?.Env;
     };
+    if (verifyInstallation) {
+      await attest();
+      const { sourceSHA, imageDigest, controllerDigest } = settings;
+      const result = { installationVerified: true, sourceSHA, imageDigest, controllerDigest };
+      process.stdout.write(JSON.stringify(result) + '\n');
+      return result;
+    }
+    temp=await mkdtemp(join(controllerState,'candidate-'));
     const inspectProject=async()=>{
       const network=JSON.parse((await docker(['network','inspect','--format','{{json .}}',settings.network])).stdout);
       const ids=(await docker(['ps','--quiet','--no-trunc'])).stdout.trim().split(/\s+/).filter(Boolean);
@@ -309,7 +317,9 @@ export async function runController({maintenance=false}={}){
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
     const args=process.argv.slice(2);
-    if(args.length>1||args.length===1&&args[0]!=='--maintenance-upgrade')fail('invalid_deployment_arguments');
-    await runController({maintenance:args.length===1});
+    const [mode] = args;
+    if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation'].includes(mode))
+      fail('invalid_deployment_arguments');
+    await runController({ maintenance: mode === '--maintenance-upgrade', verifyInstallation: mode === '--verify-installation' });
   }catch(error){process.stderr.write(/^[a-z_]+$/.test(error?.message??'')?error.message+'\n':'deployment_controller_failed\n');process.exitCode=1;}
 }

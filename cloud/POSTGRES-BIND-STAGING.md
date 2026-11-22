@@ -50,6 +50,12 @@ unpublished, and the existing image/security/backup gates still apply.
    starts only the pinned cloud/caddy services. It uses the separately retained
    Node runtime and pinned checker image; no system Node installation is needed.
 
+To check an already installed controller before a service operation, run
+`scripts/start-staging-guarded.sh --verify-installation` as root. It checks
+the retained runtime and bundle, the pinned environment and Compose files,
+and the locally stored image identity. It does not start or stop services,
+run migrations, or check database and journal compatibility.
+
 Normal start, using only the reviewed protected settings:
 
 ```bash
