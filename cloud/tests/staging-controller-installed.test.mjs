@@ -109,6 +109,14 @@ test('installed controller verifies pinned files and image without changing serv
   assert.deepEqual(await readdir(state), ['publication']);
   assert.equal(await readFile(fencePath, 'utf8'), '');
 
+  await chmod(root, 0o770);
+  try {
+    await assert.rejects(verify(), error =>
+      error.code === 77 && error.stderr.trim() === 'deployment_controller_permissions' && error.stdout === '');
+  } finally {
+    await chmod(root, 0o700);
+  }
+
   await appendFile(envPath, 'CHANGED=1\n');
   await assert.rejects(verify(), error =>
     error.code === 1 && error.stderr.trim() === 'deployment_candidate_digest' && error.stdout === '');

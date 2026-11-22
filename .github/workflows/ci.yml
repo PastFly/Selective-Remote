@@ -78,7 +78,15 @@ jobs:
       - name: Verify installed Cloud controller without changing services
         timeout-minutes: 5
         working-directory: cloud
-        run: sudo env SR_TEST_INSTALLED_CONTROLLER=1 "$(command -v node)" --test tests/staging-controller-installed.test.mjs
+        run: |
+          set -euo pipefail
+          runtime_copy="$(mktemp -d)"
+          trap 'rm -r -- "$runtime_copy"' EXIT
+          install -m 0755 "$(command -v node)" "$runtime_copy/node"
+          sudo unshare --mount --propagation private /bin/bash -ceu '
+            mount -t tmpfs -o mode=0755 tmpfs /opt
+            exec env SR_TEST_INSTALLED_CONTROLLER=1 "$1" --test tests/staging-controller-installed.test.mjs
+          ' bash "$runtime_copy/node"
 
       - name: Test Cloud controller startup with Docker Compose
         timeout-minutes: 6
