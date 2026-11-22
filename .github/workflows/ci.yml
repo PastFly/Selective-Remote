@@ -84,7 +84,7 @@ jobs:
           trap 'rm -r -- "$runtime_copy"' EXIT
           install -m 0755 "$(command -v node)" "$runtime_copy/node"
           sudo unshare --mount --propagation private /bin/bash -ceu '
-            mount -t tmpfs -o mode=0755 tmpfs /opt
+            mount -t tmpfs -o mode=0755,uid=0,gid=0 tmpfs /opt
             exec env SR_TEST_INSTALLED_CONTROLLER=1 "$1" --test tests/staging-controller-installed.test.mjs
           ' bash "$runtime_copy/node"
 

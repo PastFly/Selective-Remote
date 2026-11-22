@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFile, chmod, chown, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, chown, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -102,6 +102,14 @@ test('installed controller verifies pinned files and image without changing serv
   const verify = () => command('/bin/bash', [join(cloud, 'scripts/start-staging-guarded.sh'), '--verify-installation']);
   const containers = () => docker('ps', '--all', '--no-trunc', '--quiet', '--filter', 'label=com.docker.compose.project=cloud');
   const before = await containers();
+
+  for (const path of ['/opt', root, join(root, 'scripts'), join(root, 'runtime'),
+    dirname(dirname(join(root, runtime))), dirname(join(root, runtime)), join(root, runtime),
+    ...sources.map(file => join(root, file)),
+    ...['runtime-node.sha256', 'bundle.sha256', 'settings.json'].map(file => join(root, file))]) {
+    const info = await lstat(path);
+    assert.ok(info.uid === 0 && (info.mode & 0o022) === 0 && !info.isSymbolicLink(), `fixture ownership or mode: ${path}`);
+  }
 
   const valid = await verify();
   assert.equal(valid.stderr, '');
