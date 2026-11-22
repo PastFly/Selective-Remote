@@ -10,7 +10,7 @@ Usage: restore-postgres.sh --confirm-restore /absolute/path/backup.dump
 
 Restores a validated custom-format backup into the Compose PostgreSQL service.
 The Cloud service must already be stopped. This operation replaces database
-objects and is intentionally blocked without the exact confirmation flag.
+objects and expires restored sessions. It requires the exact confirmation flag.
 USAGE
 }
 
@@ -101,8 +101,21 @@ verify_compose_state
 verify_compose_state
 
 echo "Checksum and archive format verified; restoring database objects."
-"${compose[@]}" exec -T postgres sh -ceu \
-    'exec pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error --single-transaction --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
-    < "${backup_path}"
+# Send COMMIT only after pg_restore has produced the complete SQL stream.
+# psql rolls back on disconnect if the archive reader fails partway through.
+{
+    printf 'BEGIN;\n'
+    "${compose[@]}" exec -T postgres \
+        pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error --file=- \
+        < "${backup_path}" || exit "$?"
+    printf '\n'
+    cat <<'SQL'
+UPDATE public.sessions
+SET revoked_at = CURRENT_TIMESTAMP
+WHERE revoked_at IS NULL;
+COMMIT;
+SQL
+} | "${compose[@]}" exec -T postgres sh -ceu \
+    'exec psql --no-psqlrc --no-password --quiet --set=ON_ERROR_STOP=1 --file=- --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"'
 
-echo "Restore completed. Start Cloud, verify migrations, health and application data."
+echo "Restore completed and restored sessions revoked. Verify recovery before reopening Cloud traffic."

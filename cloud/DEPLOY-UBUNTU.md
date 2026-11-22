@@ -114,10 +114,11 @@ Restore requires a valid checksum and archive, PostgreSQL running, all Cloud
 containers stopped and the exact confirmation flag. Keep Cloud and any other
 database writers stopped throughout the operation. A paused or restarting Cloud
 container blocks restore. The script checks Compose state again after it reads
-the archive's table of contents.
+the archive's table of contents. A successful restore revokes restored sessions
+in the same transaction as the data restore. Users sign in again after reopening.
 
 The following drill is for a disposable Compose project. Restart Cloud only
-after restore succeeds:
+after restore succeeds. Check that a new sign-in works before reopening traffic.
 
 ```bash
 docker compose -f cloud/compose.yaml stop cloud &&
