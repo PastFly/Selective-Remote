@@ -95,13 +95,25 @@ enum UpdateService {
                 )
                 if case .available = result { return result }
                 officialResult = .success(result)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 try Task.checkCancellation()
                 officialResult = .failure(error)
             }
         }
 
-        if let release = try await latestGitHubRelease(after: currentVersion, load: load) {
+        let githubRelease: GitHubUpdateRelease?
+        do {
+            githubRelease = try await latestGitHubRelease(after: currentVersion, load: load)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            guard allowsInAppInstallation, case let .success(result) = officialResult else { throw error }
+            return result
+        }
+        if let release = githubRelease {
             if case let .success(.incompatible(manifest)) = officialResult,
                compareVersions(release.version, manifest.version) != .orderedDescending {
                 return .incompatible(manifest)
