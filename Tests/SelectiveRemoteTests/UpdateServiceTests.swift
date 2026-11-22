@@ -130,6 +130,56 @@ struct UpdateServiceTests {
         #expect(result == .incompatible(manifest))
     }
 
+    @Test(arguments: [false, true])
+    func successfulOfficialCheckSurvivesGitHubRateLimit(_ requiresNewerMacOS: Bool) async throws {
+        let manifest = Self.manifest(
+            version: requiresNewerMacOS ? "0.32.1" : "0.32.0",
+            minimum: requiresNewerMacOS ? "26.0" : "15.0"
+        )
+        let result = try await UpdateService.check(
+            feedURL: Self.feedURL, allowsInAppInstallation: true, currentVersion: "0.32.0", currentBuild: 164,
+            currentMacOS: Self.macOS15
+        ) { request in
+            if request.url == Self.feedURL {
+                return try Self.response(url: Self.feedURL, data: JSONEncoder().encode(manifest))
+            }
+            #expect(request.url == Self.githubURL)
+            return try Self.response(url: Self.githubURL, status: 403)
+        }
+        #expect(result == (requiresNewerMacOS ? .incompatible(manifest) : .upToDate))
+    }
+
+    @Test func signedBuildReportsFailureWhenBothSourcesFail() async {
+        await #expect(throws: UpdateServiceError.self) {
+            try await UpdateService.check(
+                feedURL: Self.feedURL, allowsInAppInstallation: true, currentVersion: "0.32.0", currentBuild: 164,
+                currentMacOS: Self.macOS15
+            ) { request in
+                let url = try #require(request.url)
+                return try Self.response(url: url, status: 503)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func cancellationStopsUpdateCheck(_ cancelsOfficialFeed: Bool) async {
+        await #expect(throws: CancellationError.self) {
+            try await UpdateService.check(
+                feedURL: Self.feedURL, allowsInAppInstallation: true, currentVersion: "0.32.0", currentBuild: 164,
+                currentMacOS: Self.macOS15
+            ) { request in
+                if request.url == Self.feedURL {
+                    if cancelsOfficialFeed { throw CancellationError() }
+                    let manifest = Self.manifest(version: "0.32.0")
+                    return try Self.response(url: Self.feedURL, data: JSONEncoder().encode(manifest))
+                }
+                #expect(!cancelsOfficialFeed)
+                #expect(request.url == Self.githubURL)
+                throw CancellationError()
+            }
+        }
+    }
+
     @Test(arguments: [
         GitHubRelease(draft: true),
         GitHubRelease(prerelease: true),
