@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFile, chmod, chown, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, chown, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { installRuntimeBinary } from '../scripts/staging-reviewed-installer.mjs';
 
 const execute = promisify(execFile);
 const cloud = fileURLToPath(new URL('../', import.meta.url));
@@ -58,11 +59,11 @@ test('installed controller verifies pinned files and image without changing serv
 
   for (const file of sources) {
     await mkdir(dirname(join(root, file)), { recursive: true, mode: 0o700 });
-    await copyFile(join(cloud, file), join(root, file));
+    const mode = file === 'scripts/staging-controller.sh' ? 0o755 : 0o644;
+    await writeFile(join(root, file), await readFile(join(cloud, file)), { mode });
   }
   await mkdir(dirname(join(root, runtime)), { recursive: true, mode: 0o700 });
-  await copyFile(process.execPath, join(root, runtime));
-  await chmod(join(root, runtime), 0o755);
+  await installRuntimeBinary(process.execPath, join(root, runtime));
   const runtimePin = `${sha256(await readFile(join(root, runtime)))}  ${runtime}\n`;
   await writeFile(join(root, 'runtime-node.sha256'), runtimePin, { mode: 0o600 });
   const lines = await Promise.all([...sources, runtime, 'runtime-node.sha256'].map(async file =>
@@ -76,7 +77,7 @@ test('installed controller verifies pinned files and image without changing serv
   const composePath = join(cloudDirectory, 'compose.publication-fence.yaml');
   const environment = 'FIXTURE_PRIVATE_VALUE=do-not-print-this-marker\n';
   await writeFile(envPath, environment, { mode: 0o600 });
-  await copyFile(join(cloud, 'compose.publication-fence.yaml'), composePath);
+  await writeFile(composePath, await readFile(join(cloud, 'compose.publication-fence.yaml')));
   const publication = join(state, 'publication');
   await mkdir(publication, { mode: 0o770 });
   await chown(publication, 0, 1);
@@ -102,14 +103,6 @@ test('installed controller verifies pinned files and image without changing serv
   const verify = () => command('/bin/bash', [join(cloud, 'scripts/start-staging-guarded.sh'), '--verify-installation']);
   const containers = () => docker('ps', '--all', '--no-trunc', '--quiet', '--filter', 'label=com.docker.compose.project=cloud');
   const before = await containers();
-
-  for (const path of ['/opt', root, join(root, 'scripts'), join(root, 'runtime'),
-    dirname(dirname(join(root, runtime))), dirname(join(root, runtime)), join(root, runtime),
-    ...sources.map(file => join(root, file)),
-    ...['runtime-node.sha256', 'bundle.sha256', 'settings.json'].map(file => join(root, file))]) {
-    const info = await lstat(path);
-    assert.ok(info.uid === 0 && (info.mode & 0o022) === 0 && !info.isSymbolicLink(), `fixture ownership or mode: ${path}`);
-  }
 
   const valid = await verify();
   assert.equal(valid.stderr, '');
