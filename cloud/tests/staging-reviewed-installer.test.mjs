@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {runReviewedInstallation} from '../scripts/staging-reviewed-installer.mjs';
+import {runReviewedInstallation,verifyRestoredBackup} from '../scripts/staging-reviewed-installer.mjs';
 const h=c=>c.repeat(64),sha=c=>c.repeat(40);
 const identity={sourceSHA:sha('a'),tree:sha('b'),imageDigest:'sha256:'+h('c'),controllerDigest:h('d')};
 const plan=()=>({version:1,environment:'staging',runID:'run-1',sourceSHA:identity.sourceSHA,tree:identity.tree,ref:'refs/heads/codex/staging-controller-fence',
@@ -44,4 +44,29 @@ test('changed public candidate ref/tree denies prepare before creating its run d
  for(const ref of [{sourceSHA:sha('0'),tree:identity.tree},{sourceSHA:identity.sourceSHA,tree:sha('0')}]){
   const f=await fixture('prepare',{ref});await assert.rejects(f.result,/candidate_source/);assert.deepEqual(f.stages,['inspect','candidate-ref']);
  }
+});
+
+test('the restored verifier database is revoked and checked before cleanup',async()=>{
+ const stages=[];
+ const action=stage=>async target=>{stages.push([stage,target]);};
+ const operations={runID:'Run-1',liveDatabase:'selective_remote',create:action('create'),restore:action('restore'),
+  revokeSessions:action('revoke'),verify:action('verify'),drop:action('drop')};
+ await verifyRestoredBackup(operations);
+ assert.deepEqual(stages,['create','restore','revoke','verify','drop'].map(stage=>[stage,'prc_restore_run_1']));
+ stages.length=0;
+ await assert.rejects(verifyRestoredBackup({...operations,liveDatabase:'prc_restore_run_1'}),/restore_scope/);
+ assert.deepEqual(stages,[]);
+});
+
+test('failed session revocation prevents attestation and drops only the temporary database',async()=>{
+ const stages=[];
+ await assert.rejects(verifyRestoredBackup({
+  runID:'Run-2',liveDatabase:'selective_remote',
+  create:async target=>{stages.push(['create',target]);},
+  restore:async target=>{stages.push(['restore',target]);},
+  revokeSessions:async target=>{stages.push(['revoke',target]);throw Error('synthetic_revoke_failure');},
+  verify:async target=>{stages.push(['verify',target]);},
+  drop:async target=>{stages.push(['drop',target]);}
+ }),/synthetic_revoke_failure/);
+ assert.deepEqual(stages,['create','restore','revoke','drop'].map(stage=>[stage,'prc_restore_run_2']));
 });

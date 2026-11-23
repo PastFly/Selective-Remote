@@ -117,6 +117,12 @@ container blocks restore. The script checks Compose state again after it reads
 the archive's table of contents. A successful restore revokes restored sessions
 in the same transaction as the data restore. Users sign in again after reopening.
 
+If recovery used an external PostgreSQL tool or a storage snapshot, leave all
+Cloud writers stopped. After PostgreSQL recovery completes, run
+`bash cloud/scripts/restore-postgres.sh --confirm-finalize-recovery` from the
+approved deployment checkout before bringing Cloud online. If it fails, keep
+traffic closed and resolve the database error before retrying.
+
 The following drill is for a disposable Compose project. Restart Cloud only
 after restore succeeds. Check that a new sign-in works before reopening traffic.
 

@@ -195,6 +195,19 @@ esac
     });
     assert.equal(failedSQL.status, 3, failedSQL.stderr);
     assert.doesNotMatch(failedSQL.stdout, /Restore completed/);
+
+    await rm(dockerLog + ".sql", { force: true });
+    const finalizeArgs = [restorePath, "--confirm-finalize-recovery"];
+    const refusedFinalization = spawnSync("bash", finalizeArgs, {
+      encoding: "utf8",
+      env: { ...env, COMPOSE_CLOUD_STATE: "running" },
+    });
+    assert.equal(refusedFinalization.status, 75, refusedFinalization.stderr);
+    await assert.rejects(stat(dockerLog + ".sql"), { code: "ENOENT" });
+    const finalized = spawnSync("bash", finalizeArgs, { encoding: "utf8", env });
+    assert.equal(finalized.status, 0, finalized.stderr);
+    assert.match(await readFile(dockerLog + ".sql", "utf8"),
+      /^UPDATE public\.sessions\s+SET revoked_at = CURRENT_TIMESTAMP\s+WHERE revoked_at IS NULL;\n$/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -269,6 +282,23 @@ esac
     assert.equal(restored.status, 0, restored.stderr);
     assert.deepEqual((await db.pool.query("SELECT value FROM public.restore_probe")).rows, [{ value: "from backup" }]);
     assert.deepEqual((await db.pool.query("SELECT revoked_at IS NULL AS active FROM public.sessions")).rows, [{ active: false }]);
+
+    const externalRestore = spawnSync("pg_restore", [
+      "--clean", "--if-exists", "--single-transaction", "--no-owner", "--no-privileges",
+      "--no-password", "--dbname", database, dump,
+    ], { env, encoding: "utf8" });
+    assert.equal(externalRestore.status, 0, externalRestore.stderr);
+    assert.deepEqual((await db.pool.query("SELECT revoked_at FROM public.sessions")).rows, [{ revoked_at: null }]);
+
+    const finalizeArgs = [restorePath, "--confirm-finalize-recovery"];
+    const finalized = spawnSync("bash", finalizeArgs, { env, encoding: "utf8" });
+    assert.equal(finalized.status, 0, finalized.stderr);
+    const firstRevocation = (await db.pool.query("SELECT revoked_at FROM public.sessions")).rows;
+    assert.ok(firstRevocation[0]?.revoked_at instanceof Date);
+    assert.deepEqual((await db.pool.query("SELECT value FROM public.restore_probe")).rows, [{ value: "from backup" }]);
+    const retried = spawnSync("bash", finalizeArgs, { env, encoding: "utf8" });
+    assert.equal(retried.status, 0, retried.stderr);
+    assert.deepEqual((await db.pool.query("SELECT revoked_at FROM public.sessions")).rows, firstRevocation);
   } finally {
     try { await db?.cleanup(); }
     finally { await rm(root, { recursive: true, force: true }); }
@@ -280,5 +310,6 @@ test("deployment guide requires an off-host backup and restore drill", async () 
   assert.match(guide, /off-host copy/);
   assert.match(guide, /restore drill/);
   assert.match(guide, /--confirm-restore/);
+  assert.match(guide, /--confirm-finalize-recovery/);
   assert.match(guide, /registration remains disabled/i);
 });
