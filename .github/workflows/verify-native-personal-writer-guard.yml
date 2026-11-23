@@ -1,0 +1,24 @@
+name: Verify native Personal Vault write guard
+on:
+  push:
+    branches: [codex/verify-native-personal-writer-guard]
+permissions:
+  contents: read
+jobs:
+  native:
+    name: Swift migration and Personal Vault tests
+    runs-on: macos-15
+    timeout-minutes: 18
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 869eac13a948fafaac743a278e77c55666de38bb
+      - name: Verify exact candidate source
+        run: |
+          test "$(git rev-parse HEAD)" = "869eac13a948fafaac743a278e77c55666de38bb"
+          test "$(git rev-parse HEAD^{tree})" = "1349403dcdc9f2934412a1627e3e2c69f2445eee"
+          swift --version
+      - name: Test native writer and legacy data
+        run: swift test --jobs 4 --filter 'CloudV1WriteFenceTests|CloudPersonalVaultSyncTests|PersonalVaultEnrollmentSafetyTests|PersonalVaultAutoSyncCheckTests|[lL]egacy.*(Profile|PersonalVault)|[pP]ersonalVaultSources|detectsLateLegacyProfileWrite|detectsLegacySingleProfileAdditionAndRemoval|rejectsUnverifiableLegacyComparison'
