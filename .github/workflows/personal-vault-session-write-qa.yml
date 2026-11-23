@@ -1,0 +1,52 @@
+name: Verify Personal Vault session commit authorization
+on:
+  push:
+    branches: [codex/verify-personal-vault-session-write]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: 6c91bb5648bad1f7b4f5cf1e807821d7f7e398c7
+  CANDIDATE_TREE: 7ca86a3d9a10790e8fd1090afc52b417c1bf0892
+jobs:
+  personal-session:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact product source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.18.0'
+      - name: Verify service and browser contracts
+        working-directory: cloud
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/service.test.mjs tests/service-error.test.mjs tests/public-vault-sync.test.mjs
+      - name: Verify session-bound PostgreSQL writes
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/selective_remote_test
+        run: |
+          set -o pipefail
+          node --test --test-name-pattern='Personal Vault commit requires|lost Personal COMMIT reply|crash after durable V1 intent|concurrent current Personal writers' tests/v1-commit-fence-postgres.test.mjs | tee "$RUNNER_TEMP/personal-vault-session.tap"
+          grep -Fx '# pass 4' "$RUNNER_TEMP/personal-vault-session.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/personal-vault-session.tap"
