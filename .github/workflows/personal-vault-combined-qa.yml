@@ -5,8 +5,8 @@ on:
 permissions:
   contents: read
 env:
-  CANDIDATE_SHA: 584cb24949d79e11118279d7ab03401c9a5ead4f
-  CANDIDATE_TREE: 741c29dfc3496a457d87bd42fcce8d9420ca384d
+  CANDIDATE_SHA: 808d81875415fa6dc75043f154a948a073c2c063
+  CANDIDATE_TREE: b44b10d881daa3b482b5cada1f5333a23019eeb8
 jobs:
   cloud-postgres:
     runs-on: ubuntu-24.04
