@@ -48,5 +48,5 @@ jobs:
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
           node --test tests/backup-restore.test.mjs | tee "$RUNNER_TEMP/db-restore.tap"
-          grep -Fx '# pass 5' "$RUNNER_TEMP/db-restore.tap"
+          grep -Fx '# pass 7' "$RUNNER_TEMP/db-restore.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/db-restore.tap"
