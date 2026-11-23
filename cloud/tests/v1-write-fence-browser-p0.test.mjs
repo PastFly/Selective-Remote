@@ -61,12 +61,13 @@ test("the server's write stop prevents both Personal and Team uploads at preflig
 });
 
 test("current browser sends a framed Personal write only to capable Cloud", async () => {
-  let body, marker;
+  let body, marker, personalWriter;
   const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
     if (path === "/v1/auth/login") return login();
     if (path === "/v1/meta") return Response.json({}, { headers: { "X-Selective-V1-Write-Fence": "1" } });
     if (path === "/v1/vault" && options.method === "PUT") {
       body = JSON.parse(options.body); marker = options.headers["X-Selective-V1-Write-Fence"];
+      personalWriter = options.headers["X-Selective-Personal-Vault-Writer"];
       return Response.json({ conflict: false, revision: 1 });
     }
     throw Error("unexpected_request");
@@ -74,6 +75,7 @@ test("current browser sends a framed Personal write only to capable Cloud", asyn
   await client.login({ email: "test@example.invalid", password: "synthetic", deviceID: device });
   assert.deepEqual(await client.putVault(personalVaultScope, envelope), { conflict: false, revision: 1 });
   assert.equal(marker, "1");
+  assert.equal(personalWriter, "migration-checkpoint-v1");
   assert.deepEqual(body, { protocol: "framed-v1", envelope });
 });
 

@@ -120,6 +120,7 @@ struct CloudV1WriteFenceTests {
         _ = try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session)
         let request = try #require(await calls.last)
         #expect(request.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1")
+        #expect(request.value(forHTTPHeaderField: "X-Selective-Personal-Vault-Writer") == "migration-checkpoint-v1")
         let body = try #require(request.httpBody)
         let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(object["protocol"] as? String == "framed-v1")

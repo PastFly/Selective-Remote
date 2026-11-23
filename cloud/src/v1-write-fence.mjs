@@ -3,14 +3,17 @@
 export const v1WriteFenceHeader = "x-selective-v1-write-fence";
 export const v1WriteFenceValue = "1";
 export const v1WriteProtocol = "framed-v1";
+const personalVaultWriterHeader = "x-selective-personal-vault-writer";
+const personalVaultWriterVersion = "migration-checkpoint-v1";
 
 export function v1WriteRequiresFence(method, path) {
   return method === "PUT" && (path === "/v1/vault"
     || /^\/v1\/teams\/[^/]+\/vaults\/[^/]+$/iu.test(path));
 }
 
-export function v1WriteFenceAccepted(headers) {
-  return headers?.[v1WriteFenceHeader] === v1WriteFenceValue;
+export function v1WriteFenceAccepted(headers, path) {
+  return headers?.[v1WriteFenceHeader] === v1WriteFenceValue
+    && (path !== "/v1/vault" || headers[personalVaultWriterHeader] === personalVaultWriterVersion);
 }
 
 export function unwrapV1Write(value) {

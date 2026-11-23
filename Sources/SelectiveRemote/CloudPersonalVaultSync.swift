@@ -685,7 +685,10 @@ extension SelectiveRemoteCloudAPIClient {
             path: "v1/vault",
             method: "PUT",
             body: body,
-            headers: ["X-Selective-V1-Write-Fence": "1"],
+            headers: [
+                "X-Selective-V1-Write-Fence": "1",
+                "X-Selective-Personal-Vault-Writer": "migration-checkpoint-v1"
+            ],
             session: session
         )
         if response.statusCode == 426 || (response.statusCode == 400 &&

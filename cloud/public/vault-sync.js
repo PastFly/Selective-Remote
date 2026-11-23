@@ -1415,7 +1415,10 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       requireCurrent();
       const response = await authorizedRequest("/v1/vault", {
         method: "PUT",
-        headers: { "X-Selective-V1-Write-Fence": "1" },
+        headers: {
+          "X-Selective-V1-Write-Fence": "1",
+          "X-Selective-Personal-Vault-Writer": "migration-checkpoint-v1",
+        },
         body: JSON.stringify({ protocol: "framed-v1", envelope: normalized }),
       });
       const result = await responseJSON(response, "vault_upload_failed");

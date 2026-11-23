@@ -140,7 +140,7 @@ async function route(request, response) {
     const browserBinding = browserSessionBinding({ sessionID: session.session_id, bearer, cookie, method,
       path: url.pathname, supplied: request.headers["x-selective-session-binding"] });
     if (!browserBinding.allowed) return sendError(response, 409, "browser_session_changed");
-    if (v1WriteRequiresFence(method, url.pathname) && !v1WriteFenceAccepted(request.headers)) {
+    if (v1WriteRequiresFence(method, url.pathname) && !v1WriteFenceAccepted(request.headers, url.pathname)) {
       return sendError(response, 426, "vault_client_upgrade_required");
     }
     if (v1WriteRequiresFence(method, url.pathname) && deploymentEvidence?.writerFloor !== 1) {
