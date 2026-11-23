@@ -1,0 +1,65 @@
+name: Personal Vault combined verification
+on:
+  push:
+    branches: [codex/verify-personal-vault-combined]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: 584cb24949d79e11118279d7ab03401c9a5ead4f
+  CANDIDATE_TREE: 741c29dfc3496a457d87bd42fcce8d9420ca384d
+jobs:
+  cloud-postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify product source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - name: Verify recovery and Personal Vault
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          set -o pipefail
+          node --test tests/backup-restore.test.mjs tests/staging-reviewed-installer.test.mjs tests/personal-vault-history.test.mjs tests/service.test.mjs tests/public-vault-sync.test.mjs | tee "$RUNNER_TEMP/personal-vault.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/personal-vault.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/personal-vault.tap"
+          grep -Fx '# todo 0' "$RUNNER_TEMP/personal-vault.tap"
+  native-macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify product source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Verify native Personal Vault
+        run: |
+          set -o pipefail
+          swift test --jobs 4 --filter 'CloudPersonalVaultSyncTests|CloudV1WriteFenceTests|NativeLegacyProfileChangeTests|PersonalVaultAutoSyncCheckTests|PersonalVaultEnrollmentSafetyTests|PersonalSnippetFolderSyncTests|SyncPresentationTests' 2>&1 | tee "$RUNNER_TEMP/personal-vault-swift.log"
+          grep -E 'Test run with [1-9][0-9]* tests.*passed' "$RUNNER_TEMP/personal-vault-swift.log"
