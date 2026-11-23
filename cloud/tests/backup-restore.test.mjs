@@ -12,6 +12,14 @@ const backupPath = fileURLToPath(new URL("../scripts/backup-postgres.sh", import
 const restorePath = fileURLToPath(new URL("../scripts/restore-postgres.sh", import.meta.url));
 const deploymentGuidePath = fileURLToPath(new URL("../DEPLOY-UBUNTU.md", import.meta.url));
 
+const readCloudStateSequence = `
+if [[ -n "\${CLOUD_STATE_SEQUENCE:-}" ]]; then
+  read -r state < "$CLOUD_STATE_SEQUENCE"
+  tail -n +2 "$CLOUD_STATE_SEQUENCE" > "$CLOUD_STATE_SEQUENCE.next"
+  mv "$CLOUD_STATE_SEQUENCE.next" "$CLOUD_STATE_SEQUENCE"
+fi
+`;
+
 for (const [name, scriptPath] of [["backup", backupPath], ["restore", restorePath]]) {
   test(`${name} script has valid shell syntax and help works without Docker`, () => {
     const syntax = spawnSync("bash", ["-n", scriptPath], { encoding: "utf8" });
@@ -80,6 +88,7 @@ case "$*" in
   *"ps --all --format {{.Service}} {{.State}}"*)
     state="\${COMPOSE_CLOUD_STATE:-exited}"
     if [[ -f "$DOCKER_LOG.listed" ]]; then state="$COMPOSE_STATE_AFTER_LIST"; fi
+    ${readCloudStateSequence}
     printf 'postgres %s\\ncloud %s\\n' "\${COMPOSE_POSTGRES_STATE:-running}" "$state"
     exit "\${COMPOSE_STATUS_EXIT:-0}"
     ;;
@@ -171,6 +180,16 @@ esac
     await writeFile(dumpPath, originalDump);
     await writeFile(`${dumpPath}.sha256`, originalChecksum);
 
+    const stateSequence = join(root, "cloud-state-sequence");
+    const lateStartEnv = { ...env, CLOUD_STATE_SEQUENCE: stateSequence };
+    await writeFile(stateSequence, "exited\nexited\nrunning\n");
+    const interruptedRestore = spawnSync("bash", restoreArgs, { encoding: "utf8", env: lateStartEnv });
+    assert.equal(interruptedRestore.status, 75, interruptedRestore.stderr);
+    assert.doesNotMatch(interruptedRestore.stdout, /Restore completed/);
+    const interruptedSQL = await readFile(dockerLog + ".sql", "utf8");
+    assert.match(interruptedSQL, /^BEGIN;\nCREATE TABLE restore_probe/u);
+    assert.doesNotMatch(interruptedSQL, /^COMMIT;$/mu);
+
     const restore = spawnSync("bash", restoreArgs, { encoding: "utf8", env });
     assert.equal(restore.status, 0, restore.stderr);
 
@@ -204,10 +223,17 @@ esac
     });
     assert.equal(refusedFinalization.status, 75, refusedFinalization.stderr);
     await assert.rejects(stat(dockerLog + ".sql"), { code: "ENOENT" });
+
+    await writeFile(stateSequence, "exited\nrunning\n");
+    const interruptedFinalization = spawnSync("bash", finalizeArgs, { encoding: "utf8", env: lateStartEnv });
+    assert.equal(interruptedFinalization.status, 75, interruptedFinalization.stderr);
+    assert.doesNotMatch(interruptedFinalization.stdout, /Restored sessions revoked/);
+    assert.doesNotMatch(await readFile(dockerLog + ".sql", "utf8"), /^COMMIT;$/mu);
+
     const finalized = spawnSync("bash", finalizeArgs, { encoding: "utf8", env });
     assert.equal(finalized.status, 0, finalized.stderr);
     assert.match(await readFile(dockerLog + ".sql", "utf8"),
-      /^UPDATE public\.sessions\s+SET revoked_at = CURRENT_TIMESTAMP\s+WHERE revoked_at IS NULL;\n$/u);
+      /^BEGIN;\n+UPDATE public\.sessions\s+SET revoked_at = CURRENT_TIMESTAMP\s+WHERE revoked_at IS NULL;\n+COMMIT;\n$/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -237,7 +263,11 @@ test("PostgreSQL restore commits application data and session revocation togethe
 set -euo pipefail
 case "$*" in
   "compose version") exit 0 ;;
-  *"ps --all --format {{.Service}} {{.State}}"*) printf 'postgres running\\ncloud exited\\n' ;;
+  *"ps --all --format {{.Service}} {{.State}}"*)
+    state=exited
+    ${readCloudStateSequence}
+    printf 'postgres running\\ncloud %s\\n' "$state"
+    ;;
   *"exec -T postgres "*)
     while [[ "$1" != postgres ]]; do shift; done
     shift
@@ -278,6 +308,14 @@ esac
     assert.deepEqual((await db.pool.query("SELECT value FROM public.restore_probe")).rows, [{ value: "before restore" }]);
     assert.deepEqual((await db.pool.query("SELECT revoked_at IS NULL AS active FROM public.sessions")).rows, [{ active: true }]);
 
+    const stateSequence = join(root, "cloud-state-sequence");
+    const lateStartEnv = { ...env, CLOUD_STATE_SEQUENCE: stateSequence };
+    await writeFile(stateSequence, "exited\nexited\nrunning\n");
+    const interrupted = spawnSync("bash", restoreArgs, { env: lateStartEnv, encoding: "utf8" });
+    assert.equal(interrupted.status, 75, interrupted.stderr);
+    assert.deepEqual((await db.pool.query("SELECT value FROM public.restore_probe")).rows, [{ value: "before restore" }]);
+    assert.deepEqual((await db.pool.query("SELECT revoked_at FROM public.sessions")).rows, [{ revoked_at: null }]);
+
     const restored = spawnSync("bash", restoreArgs, { env, encoding: "utf8" });
     assert.equal(restored.status, 0, restored.stderr);
     assert.deepEqual((await db.pool.query("SELECT value FROM public.restore_probe")).rows, [{ value: "from backup" }]);
@@ -291,6 +329,11 @@ esac
     assert.deepEqual((await db.pool.query("SELECT revoked_at FROM public.sessions")).rows, [{ revoked_at: null }]);
 
     const finalizeArgs = [restorePath, "--confirm-finalize-recovery"];
+    await writeFile(stateSequence, "exited\nrunning\n");
+    const refusedFinalization = spawnSync("bash", finalizeArgs, { env: lateStartEnv, encoding: "utf8" });
+    assert.equal(refusedFinalization.status, 75, refusedFinalization.stderr);
+    assert.deepEqual((await db.pool.query("SELECT revoked_at FROM public.sessions")).rows, [{ revoked_at: null }]);
+
     const finalized = spawnSync("bash", finalizeArgs, { env, encoding: "utf8" });
     assert.equal(finalized.status, 0, finalized.stderr);
     const firstRevocation = (await db.pool.query("SELECT revoked_at FROM public.sessions")).rows;

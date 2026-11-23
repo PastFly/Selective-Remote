@@ -71,9 +71,20 @@ apply_recovery_sql() {
         'exec psql --no-psqlrc --no-password --quiet --set=ON_ERROR_STOP=1 --file=- --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"'
 }
 
+commit_recovery_with_session_revocation() {
+    printf '\n'
+    cat -- "${script_dir}/revoke-restored-sessions.sql" || return "$?"
+    # Withhold COMMIT if Cloud came back while recovery was in progress.
+    verify_compose_state || return "$?"
+    printf '\nCOMMIT;\n'
+}
+
 if [[ "$finalize_recovery" == true ]]; then
     verify_compose_state
-    apply_recovery_sql < "${script_dir}/revoke-restored-sessions.sql"
+    {
+        printf 'BEGIN;\n'
+        commit_recovery_with_session_revocation
+    } | apply_recovery_sql
     echo "Restored sessions revoked. Verify recovery before reopening Cloud traffic."
     exit 0
 fi
@@ -128,9 +139,7 @@ echo "Checksum and archive format verified; restoring database objects."
     compose exec -T postgres \
         pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error --file=- \
         < "${backup_path}" || exit "$?"
-    printf '\n'
-    cat -- "${script_dir}/revoke-restored-sessions.sql" || exit "$?"
-    printf '\nCOMMIT;\n'
+    commit_recovery_with_session_revocation
 } | apply_recovery_sql
 
 echo "Restore completed and restored sessions revoked. Verify recovery before reopening Cloud traffic."
