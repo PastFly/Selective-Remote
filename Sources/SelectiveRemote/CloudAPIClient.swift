@@ -401,6 +401,7 @@ actor SelectiveRemoteCloudAPIClient {
     private let sessionLost: @Sendable (SelectiveRemoteCloudSessionLoss) async -> Void
     let tokenStore: any SelectiveRemoteCloudTokenStore
     let publicationStore: @Sendable () throws -> SelectiveRemoteVaultPublicationStore
+    let checkLocalPersonalVaultWrite: @Sendable () throws -> Void
     var publicationRetirementSessions: [String: SelectiveRemotePublicationSession] = [:]
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -416,13 +417,17 @@ actor SelectiveRemoteCloudAPIClient {
         sessionLost: @escaping @Sendable (SelectiveRemoteCloudSessionLoss) async -> Void = { loss in
             await MainActor.run { NotificationCenter.default.post(name: .selectiveRemoteCloudSessionLost, object: loss) }
         },
-        publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try SelectiveRemoteVaultPublicationStore() }
+        publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try SelectiveRemoteVaultPublicationStore() },
+        checkLocalPersonalVaultWrite: @escaping @Sendable () throws -> Void = {
+            try LegacyProfileChangeDetector.requireUnchangedPersonalVaultSources(UserDefaults.standard)
+        }
     ) {
         self.tokenStore = tokenStore
         self.boundPublicationSession = boundPublicationSession
         self.cleanupWarning = cleanupWarning
         self.sessionLost = sessionLost
         self.publicationStore = publicationStore
+        self.checkLocalPersonalVaultWrite = checkLocalPersonalVaultWrite
         self.dataLoader = dataLoader ?? { request in
             try await session.data(for: request)
         }
@@ -432,7 +437,8 @@ actor SelectiveRemoteCloudAPIClient {
         .init(tokenStore: tokenStore, dataLoader: dataLoader, boundPublicationSession: session,
               cleanupWarning: cleanupWarning,
               sessionLost: sessionLost,
-              publicationStore: publicationStore)
+              publicationStore: publicationStore,
+              checkLocalPersonalVaultWrite: checkLocalPersonalVaultWrite)
     }
 
     func metadata(endpoint: URL) async throws -> SelectiveRemoteCloudMetadata {

@@ -67,13 +67,14 @@ enum NativeStorageMigration {
 
     static var versionedKeys: [String] { legacyKeys.compactMap { newKey(for: $0) } }
 
-    /// Return the legacy Host data at migration and now, without mutating it.
-    static func legacyProfileData(_ defaults: any NativePreferencesAccess) throws -> [(Data?, Data?)] {
+    /// Read legacy data at migration and now, without mutating either store.
+    static func legacyData(_ keys: [String], _ defaults: any NativePreferencesAccess) throws -> [(Data?, Data?)] {
         guard defaults.synchronize(), let bytes = defaults.object(forKey: snapshotKey) as? Data,
-              defaults.object(forKey: markerKey) as? String == "complete:" + digest(bytes)
+              defaults.object(forKey: markerKey) as? String == "complete:" + digest(bytes),
+              keys.allSatisfy(legacyKeys.contains)
         else { throw MigrationError.inconsistentCheckpoint }
         let snapshot = try decodeSnapshot(bytes)
-        return try ["SelectiveRemote.connectionProfiles.v2", "SelectiveRemote.connectionProfile.v1"].map { key in
+        return try keys.map { key in
             let original = snapshot[key], current = defaults.object(forKey: key)
             guard original == nil || original is Data, current == nil || current is Data else {
                 throw MigrationError.invalidSource

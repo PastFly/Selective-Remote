@@ -716,7 +716,7 @@ private struct PersonalCheckFixture {
                 headerFields: ["Content-Type": "application/json"]
             ))
             return (remote.body, response)
-        })
+        }, checkLocalPersonalVaultWrite: {})
         self.keys = keys
         self.requests = requests
         self.remote = remote

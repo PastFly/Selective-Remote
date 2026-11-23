@@ -60,7 +60,8 @@ struct PersonalVaultEnrollmentSafetyTests {
         let client = SelectiveRemoteCloudAPIClient(
             tokenStore: SelectiveRemoteCloudMemoryTokenStore(),
             dataLoader: { request in try await http.data(for: request) },
-            publicationStore: { throw PasswordResetReproError.forbiddenPersistentStore }
+            publicationStore: { throw PasswordResetReproError.forbiddenPersistentStore },
+            checkLocalPersonalVaultWrite: {}
         )
         // Model a successful authentication after a server password reset. The server auth
         // transaction itself is separately covered by cloud/tests/service.test.mjs:416.

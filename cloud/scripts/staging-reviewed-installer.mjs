@@ -79,6 +79,18 @@ async function command(file,args,options={}){
  catch{fail('command_failed');}
 }
 export const archiveListShell='pg_restore --list; cat >/dev/null';
+export async function verifyRestoredBackup({runID,liveDatabase,create,restore,revokeSessions,verify,drop}){
+ const target='prc_restore_'+runID.replaceAll('-','_').toLowerCase();
+ if(!/^prc_restore_[a-z0-9_]{1,60}$/.test(target)||target.length>63||target===liveDatabase)fail('restore_scope');
+ await create(target);
+ try{
+  await restore(target);
+  await revokeSessions(target);
+  await verify(target);
+ }finally{
+  await drop(target);
+ }
+}
 export async function streamProcess(file,args,{input,output,env={PATH:'/usr/bin:/bin'}}){
  const child=spawn(file,args,{env,stdio:['pipe',output?'pipe':'ignore','ignore']});
  const done=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(Error('staging_install_command_failed')));});
@@ -212,12 +224,19 @@ async function runHost(phase,planPath,archivePath,dryRun){
    await streamDocker(['exec','cloud-postgres-1','sh','-ceu','exec pg_dump --format=custom --no-owner --no-privileges --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"'],{output:backup});
    const durableBackup=await open(backup,'r');try{await durableBackup.sync();}finally{await durableBackup.close();}
    await streamDocker(['exec','-i','cloud-postgres-1','sh','-ceu',archiveListShell],{input:backup});const backupSHA256=hash(await privateFile(backup));await save(backup+'.sha256',backupSHA256+'  backup.dump\n');
-   const restoreName='prc_restore_'+plan.runID.replaceAll('-','_').toLowerCase();if(!/^prc_restore_[a-z0-9_]{1,60}$/.test(restoreName)||restoreName.length>63)fail('restore_scope');
-   const env=parseEnvironment((await privateFile(join(run,'effective.env'))).toString().trimEnd().split('\n')),url=new URL(env.DATABASE_URL);if(url.pathname.slice(1)===restoreName)fail('restore_scope');
-   await docker(['exec','cloud-postgres-1','sh','-ceu','exec createdb --template=template0 --username="$POSTGRES_USER" "$1"','sh',restoreName]);
-   try{await streamDocker(['exec','-i','cloud-postgres-1','sh','-ceu','exec pg_restore --exit-on-error --no-owner --no-privileges --username="$POSTGRES_USER" --dbname="$1"','sh',restoreName],{input:backup});
-    if(Number((await pg('SELECT max(version) FROM schema_migrations',restoreName)).stdout.trim())!==12)fail('restore_schema');url.pathname='/'+restoreName;await inventory('verify',url.href);
-   }finally{await docker(['exec','cloud-postgres-1','sh','-ceu','exec dropdb --username="$POSTGRES_USER" "$1"','sh',restoreName]);}
+   const env=parseEnvironment((await privateFile(join(run,'effective.env'))).toString().trimEnd().split('\n')),url=new URL(env.DATABASE_URL);
+   const revokeSessionsSQL=await readFile(new URL('./revoke-restored-sessions.sql',import.meta.url),'utf8');
+   await verifyRestoredBackup({
+    runID:plan.runID,liveDatabase:decodeURIComponent(url.pathname.slice(1)),
+    create:target=>docker(['exec','cloud-postgres-1','sh','-ceu','exec createdb --template=template0 --username="$POSTGRES_USER" "$1"','sh',target]),
+    restore:target=>streamDocker(['exec','-i','cloud-postgres-1','sh','-ceu','exec pg_restore --exit-on-error --no-owner --no-privileges --single-transaction --username="$POSTGRES_USER" --dbname="$1"','sh',target],{input:backup}),
+    revokeSessions:target=>pg(revokeSessionsSQL,target),
+    verify:async target=>{
+     if(Number((await pg('SELECT max(version) FROM schema_migrations',target)).stdout.trim())!==12)fail('restore_schema');
+     const restoredURL=new URL(url);restoredURL.pathname='/'+target;await inventory('verify',restoredURL.href);
+    },
+    drop:target=>docker(['exec','cloud-postgres-1','sh','-ceu','exec dropdb --username="$POSTGRES_USER" "$1"','sh',target])
+   });
    const controllerIdentity={sourceSHA:prepared.identity.sourceSHA,imageDigest:prepared.identity.imageDigest,controllerDigest:prepared.identity.controllerDigest};
    await save(join(run,'restore-attestation.json'),{formatVersion:1,isolatedRestoreVerified:true,backupSHA256,controllerIdentity});
    await save(join(run,'backup-proof.json'),{formatVersion:1,identity:prepared.identity,verified:true,baselineVerified:true,backupSHA256,baselineSHA256:hash(await privateFile(join(run,'ordinary.json'))),baseline});

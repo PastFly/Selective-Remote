@@ -1221,14 +1221,13 @@ export class PostgresStore {
     return result.rows[0] ?? null;
   }
 
-  async getVaultRevision(userID, revision, writerDeviceID) {
+  async getVaultRevision(userID, revision) {
     const result = await this.pool.query(
       `SELECT v.id, r.revision, r.envelope_version, r.wrapped_key, r.ciphertext,
               r.nonce, r.auth_tag, r.content_hash, r.created_at AS updated_at
        FROM personal_vaults v JOIN vault_revisions r ON r.vault_id = v.id
-       WHERE v.user_id = $1 AND r.revision = $2
-         AND ($3::uuid IS NULL OR r.updated_by_device_id = $3)`,
-      [userID, revision, writerDeviceID],
+       WHERE v.user_id = $1 AND r.revision = $2 AND r.revision <= v.revision`,
+      [userID, revision],
     );
     return result.rows[0] ?? null;
   }

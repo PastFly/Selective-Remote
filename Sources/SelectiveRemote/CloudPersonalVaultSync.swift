@@ -10,6 +10,7 @@ enum SelectiveRemotePersonalVaultError: LocalizedError, Equatable {
     case emptyLocalVault
     case remoteVaultNotEmpty(Int)
     case legacyMigrationRequiresLocalData
+    case legacyStorageNeedsReview
     case uploadConflict(Int)
 
     var errorDescription: String? {
@@ -38,6 +39,11 @@ enum SelectiveRemotePersonalVaultError: LocalizedError, Equatable {
             UpdateLocalization.text(
                 ru: "Legacy Personal Vault ожидает автоматической миграции с Mac, на котором сохранены локальные данные.",
                 en: "The legacy Personal Vault is waiting for automatic migration from a Mac that has local data."
+            )
+        case .legacyStorageNeedsReview:
+            UpdateLocalization.text(
+                ru: "Запись в Personal Vault приостановлена: нужно проверить данные предыдущей версии на этом Mac. Локальные копии сохранены.",
+                en: "Personal Vault upload is paused while this Mac’s previous-version data needs review. Local copies are preserved."
             )
         case let .uploadConflict(revision):
             UpdateLocalization.text(
@@ -673,6 +679,7 @@ extension SelectiveRemoteCloudAPIClient {
     ) async throws -> SelectiveRemoteCloudPersonalVaultWriteResult {
         try await requireV1WriteFence(endpoint: endpoint, session: session)
         let body = try JSONEncoder().encode(SelectiveRemoteV1WriteFrame(envelope: envelope))
+        try checkLocalPersonalVaultWrite()
         let (data, response) = try await authorizedResponse(
             endpoint: endpoint,
             path: "v1/vault",
