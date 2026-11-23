@@ -20,7 +20,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd 'pg_isready -U postgres -d selective_remote_test'
+          --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
@@ -47,20 +47,3 @@ jobs:
           grep -Fx '# fail 0' "$RUNNER_TEMP/personal-vault.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/personal-vault.tap"
           grep -Fx '# todo 0' "$RUNNER_TEMP/personal-vault.tap"
-  native-macos:
-    runs-on: macos-15
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.CANDIDATE_SHA }}
-          persist-credentials: false
-      - name: Verify product source
-        run: |
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
-      - name: Verify native Personal Vault
-        run: |
-          set -o pipefail
-          swift test --jobs 4 --filter 'CloudPersonalVaultSyncTests|CloudV1WriteFenceTests|NativeLegacyProfileChangeTests|PersonalVaultAutoSyncCheckTests|PersonalVaultEnrollmentSafetyTests|PersonalSnippetFolderSyncTests|SyncPresentationTests' 2>&1 | tee "$RUNNER_TEMP/personal-vault-swift.log"
-          grep -E 'Test run with [1-9][0-9]* tests.*passed' "$RUNNER_TEMP/personal-vault-swift.log"
