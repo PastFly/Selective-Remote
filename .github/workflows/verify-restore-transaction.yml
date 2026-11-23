@@ -47,6 +47,69 @@ jobs:
           pg_dump --version
           pg_restore --version
           node --test tests/backup-restore.test.mjs tests/backup-postgres-concurrency.test.mjs tests/staging-reviewed-installer.test.mjs tests/staging-installer-archive-stream.test.mjs tests/staging-installer-writer-capability.test.mjs tests/staging-installer-live-binding.test.mjs tests/personal-vault-history.test.mjs
+      - name: Finalize a disposable physical PostgreSQL backup
+        working-directory: cloud
+        env:
+          SOURCE_DB_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          scratch=$(mktemp -d)
+          export SR_REAL_DOCKER="$(command -v docker)"
+          export SR_RESTORE_CLONE="sr-physical-restore-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          volume="$SR_RESTORE_CLONE-data"
+          cleanup() {
+            "$SR_REAL_DOCKER" rm -f "$SR_RESTORE_CLONE" >/dev/null 2>&1 || true
+            "$SR_REAL_DOCKER" volume rm "$volume" >/dev/null 2>&1 || true
+            rm -r -- "$scratch"
+          }
+          trap cleanup EXIT
+          docker exec -i "$SOURCE_DB_CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U restore_fixture -d restore_test <<'SQL'
+          CREATE TABLE public.sessions (id integer PRIMARY KEY, revoked_at timestamptz);
+          INSERT INTO public.sessions VALUES (1, NULL), (2, '2020-01-01 00:00:00+00');
+          CREATE TABLE public.restore_probe (value text NOT NULL);
+          INSERT INTO public.restore_probe VALUES ('survived physical recovery');
+          SQL
+          docker exec -u postgres "$SOURCE_DB_CONTAINER" pg_basebackup -D /tmp/physical-recovery -U restore_fixture -X stream -w
+          docker volume create "$volume" >/dev/null
+          docker cp "$SOURCE_DB_CONTAINER:/tmp/physical-recovery/." - |
+            docker run --rm -i --mount "type=volume,source=$volume,target=/copy" --entrypoint sh "$image" \
+              -ceu 'tar -xf - -C /copy; test -s /copy/PG_VERSION'
+          docker run -d --name "$SR_RESTORE_CLONE" --network none \
+            --env POSTGRES_DB=restore_test --env POSTGRES_USER=restore_fixture \
+            --mount "type=volume,source=$volume,target=/var/lib/postgresql/data" "$image" >/dev/null
+          for wait in {1..30}; do
+            if docker exec "$SR_RESTORE_CLONE" pg_isready -q -U restore_fixture -d restore_test; then break; fi
+            sleep 1
+          done
+          docker exec "$SR_RESTORE_CLONE" pg_isready -q -U restore_fixture -d restore_test
+          query() { "$SR_REAL_DOCKER" exec "$SR_RESTORE_CLONE" psql -XAt -v ON_ERROR_STOP=1 -U restore_fixture -d restore_test -c "$1"; }
+          test "$(query 'SELECT count(*) FROM public.sessions WHERE revoked_at IS NULL')" = 1
+          cat > "$scratch/docker" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "$*" in
+            *'ps --all --format {{.Service}} {{.State}}'*)
+              [[ $("$SR_REAL_DOCKER" inspect --format '{{.State.Running}}' "$SR_RESTORE_CLONE") == true ]]
+              printf 'postgres running\ncloud exited\n'
+              ;;
+            *'exec -T postgres '*)
+              while [[ "$1" != postgres ]]; do shift; done
+              shift
+              exec "$SR_REAL_DOCKER" exec -i "$SR_RESTORE_CLONE" "$@"
+              ;;
+            *) exit 90 ;;
+          esac
+          SH
+          chmod 700 "$scratch/docker"
+          PATH="$scratch:$PATH" bash scripts/restore-postgres.sh --confirm-finalize-recovery
+          test "$(query 'SELECT count(*) FROM public.sessions WHERE revoked_at IS NULL')" = 0
+          test "$(query "SELECT revoked_at = '2020-01-01 00:00:00+00'::timestamptz FROM public.sessions WHERE id=2")" = t
+          test "$(query 'SELECT value FROM public.restore_probe')" = 'survived physical recovery'
+          marker=$(query 'SELECT revoked_at FROM public.sessions WHERE id=1')
+          PATH="$scratch:$PATH" bash scripts/restore-postgres.sh --confirm-finalize-recovery
+          test "$(query 'SELECT revoked_at FROM public.sessions WHERE id=1')" = "$marker"
+          echo 'Physical PostgreSQL recovery and repeated session finalization passed.'
       - name: Check public HTTPS writer admission without changing data
         run: |
           set -euo pipefail
