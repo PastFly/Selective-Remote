@@ -1,0 +1,52 @@
+name: Verify Personal Vault database recovery paths
+on:
+  push:
+    branches: [codex/verify-personal-vault-restore]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: b3ebbcc39c5dc8f76299220e2c6caa00a39c4e2c
+  CANDIDATE_TREE: 3017fb73d78cb4665047995e513a5397df259a5a
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.18.0'
+      - name: Verify exact source and PostgreSQL client
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+          if [[ ! -x /usr/lib/postgresql/16/bin/pg_dump ]]; then
+            sudo apt-get -qq update && sudo apt-get -qq install -y postgresql-client-16
+          fi
+          echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Verify both documented restore paths against disposable PostgreSQL
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/selective_remote_test
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test tests/backup-restore.test.mjs | tee "$RUNNER_TEMP/db-restore.tap"
+          grep -Fx '# pass 5' "$RUNNER_TEMP/db-restore.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/db-restore.tap"
