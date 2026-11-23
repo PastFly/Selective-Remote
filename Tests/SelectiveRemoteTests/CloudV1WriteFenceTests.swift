@@ -38,7 +38,7 @@ struct CloudV1WriteFenceTests {
                 return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
             }
             return (Data("{\"error\":\"vault_write_temporarily_unavailable\"}".utf8), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!)
-        })
+        }, checkLocalPersonalVaultWrite: {})
         let session = try await client.sessionBinding(endpoint: endpoint)
         let wrapped = try SelectiveRemotePersonalVaultWrappedKey(salt: Data(repeating: 1, count: 16), value: Data(repeating: 2, count: 40))
         let envelope = try SelectiveRemotePersonalVaultEnvelope(baseRevision: 1, wrappedKey: wrapped, ciphertext: Data([1]), nonce: Data(repeating: 3, count: 12), authTag: Data(repeating: 4, count: 16))
@@ -113,7 +113,7 @@ struct CloudV1WriteFenceTests {
             }
             await calls.record(request)
             return (Data("{\"conflict\":false,\"revision\":1}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-        })
+        }, checkLocalPersonalVaultWrite: {})
         let session = try await client.sessionBinding(endpoint: endpoint)
         let wrapped = try SelectiveRemotePersonalVaultWrappedKey(salt: Data(repeating: 1, count: 16), value: Data(repeating: 2, count: 40))
         let envelope = try SelectiveRemotePersonalVaultEnvelope(baseRevision: 0, wrappedKey: wrapped, ciphertext: Data([1]), nonce: Data(repeating: 3, count: 12), authTag: Data(repeating: 4, count: 16))
@@ -150,6 +150,46 @@ struct CloudV1WriteFenceTests {
         await barrier.release()
         await #expect(throws: CancellationError.self) { try await pending.value }
         #expect(await calls.count == 0)
+    }
+
+    @Test("Personal upload rechecks legacy sources after negotiating the writer capability")
+    func legacyEditDuringNegotiationBlocksUpload() async throws {
+        let defaults = IsolatedPreferences()
+        let key = "SelectiveRemote.connectionProfiles.v2"
+        let initial = Data("[]".utf8)
+        let legacyEdit = Data("[{\"host\":\"late.invalid\"}]".utf8)
+        defaults.set(initial, forKey: key)
+        try NativeStorageMigration.prepare(defaults)
+
+        let endpoint = URL(string: "https://fence-\(UUID()).example.invalid")!
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        tokens.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        let calls = CloudV1FenceCalls(), barrier = CloudV1FenceBarrier()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            if request.url?.path == "/v1/meta" {
+                await barrier.pause()
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200,
+                    httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            }
+            await calls.record(request)
+            return (Data("{\"conflict\":false,\"revision\":1}".utf8), HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, checkLocalPersonalVaultWrite: {
+            try LegacyProfileChangeDetector.requireUnchangedPersonalVaultSources(defaults)
+        })
+        let session = try await client.sessionBinding(endpoint: endpoint)
+        let wrapped = try SelectiveRemotePersonalVaultWrappedKey(salt: Data(repeating: 1, count: 16), value: Data(repeating: 2, count: 40))
+        let envelope = try SelectiveRemotePersonalVaultEnvelope(baseRevision: 0, wrappedKey: wrapped, ciphertext: Data([1]),
+            nonce: Data(repeating: 3, count: 12), authTag: Data(repeating: 4, count: 16))
+        let pending = Task { try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session) }
+        await barrier.waitUntilStarted()
+        defaults.set(legacyEdit, forKey: key)
+        await barrier.release()
+        await #expect(throws: SelectiveRemotePersonalVaultError.legacyStorageNeedsReview) { try await pending.value }
+        #expect(await calls.count == 0)
+        #expect(defaults.object(forKey: key) as? Data == legacyEdit)
+        let versioned = try #require(NativeStorageMigration.newKey(for: key))
+        #expect(defaults.object(forKey: versioned) as? Data == initial)
     }
 }
 

@@ -25,6 +25,7 @@ enum SelectiveRemotePersonalVaultSyncStatus {
             case .emptyLocalVault: value = "personalVault.emptyLocalVault"
             case let .remoteVaultNotEmpty(revision): value = "personalVault.remoteVaultNotEmpty:\(revision)"
             case .legacyMigrationRequiresLocalData: value = "personalVault.legacyMigrationRequiresLocalData"
+            case .legacyStorageNeedsReview: value = "personalVault.legacyStorageNeedsReview"
             case let .uploadConflict(revision): value = "personalVault.uploadConflict:\(revision)"
             }
         } else {
@@ -44,6 +45,7 @@ enum SelectiveRemotePersonalVaultSyncStatus {
         case "personalVault.emptyLocalVault": error = .emptyLocalVault
         case "personalVault.remoteVaultNotEmpty": error = revision.map { .remoteVaultNotEmpty($0) }
         case "personalVault.legacyMigrationRequiresLocalData": error = .legacyMigrationRequiresLocalData
+        case "personalVault.legacyStorageNeedsReview": error = .legacyStorageNeedsReview
         case "personalVault.uploadConflict": error = revision.map { .uploadConflict($0) }
         default: error = nil
         }

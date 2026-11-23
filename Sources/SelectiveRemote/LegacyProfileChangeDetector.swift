@@ -2,10 +2,50 @@ import Foundation
 
 /// Detect changes in the legacy Host store without applying them to either version.
 enum LegacyProfileChangeDetector {
+    private static let hostKeys = [
+        "SelectiveRemote.connectionProfiles.v2",
+        "SelectiveRemote.connectionProfile.v1"
+    ]
+    private static let otherVaultKeys = [
+        "SelectiveRemote.terminal.commandTemplates.v1",
+        "SelectiveRemote.terminal.snippetGroups.v1",
+        "SelectiveRemote.independentPortForwards.v1",
+        "SelectiveRemote.sshKeys.v1"
+    ]
+
     static func hasChanges(_ defaults: any NativePreferencesAccess) throws -> Bool {
-        let values = try NativeStorageMigration.legacyProfileData(defaults)
-        return try profilesDiffer(values[0].0, values[0].1)
+        let values = try NativeStorageMigration.legacyData(hostKeys, defaults)
+        return try hostsDiffer(values)
+    }
+
+    static func requireUnchangedPersonalVaultSources(_ defaults: any NativePreferencesAccess) throws {
+        do {
+            let values = try NativeStorageMigration.legacyData(hostKeys + otherVaultKeys, defaults)
+            if try hostsDiffer(values) {
+                throw SelectiveRemotePersonalVaultError.legacyStorageNeedsReview
+            }
+            for (original, current) in values.dropFirst(hostKeys.count) {
+                if original == current { continue }
+                if try canonicalLegacyArray(original) != canonicalLegacyArray(current) {
+                    throw SelectiveRemotePersonalVaultError.legacyStorageNeedsReview
+                }
+            }
+        } catch {
+            throw SelectiveRemotePersonalVaultError.legacyStorageNeedsReview
+        }
+    }
+
+    private static func hostsDiffer(_ values: [(Data?, Data?)]) throws -> Bool {
+        try profilesDiffer(values[0].0, values[0].1)
             || singleProfileDiffers(values[1].0, values[1].1)
+    }
+
+    private static func canonicalLegacyArray(_ data: Data?) throws -> Data {
+        guard let data else { return Data("[]".utf8) }
+        guard let values = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw NativeStorageMigration.MigrationError.invalidSource
+        }
+        return try JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
     }
 
     private static func profilesDiffer(_ first: Data?, _ second: Data?) throws -> Bool {

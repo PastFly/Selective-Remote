@@ -133,7 +133,8 @@ struct CloudPersonalVaultSyncTests {
         }
         let client = SelectiveRemoteCloudAPIClient(
             tokenStore: tokenStore,
-            dataLoader: { request in try stub.data(for: request) }
+            dataLoader: { request in try stub.data(for: request) },
+            checkLocalPersonalVaultWrite: {}
         )
 
         let remote = try await client.personalVault(endpoint: endpoint)

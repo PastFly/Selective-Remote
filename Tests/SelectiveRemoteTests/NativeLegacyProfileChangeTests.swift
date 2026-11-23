@@ -2,12 +2,39 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
-private final class IsolatedPreferences: NativePreferencesAccess {
+final class IsolatedPreferences: NativePreferencesAccess, @unchecked Sendable {
+    private let lock = NSLock()
     private var values: [String: Any] = [:]
-    func object(forKey key: String) -> Any? { values[key] }
-    func set(_ value: Any?, forKey key: String) { values[key] = value }
+    func object(forKey key: String) -> Any? { lock.withLock { values[key] } }
+    func set(_ value: Any?, forKey key: String) { lock.withLock { values[key] = value } }
     func synchronize() -> Bool { true }
-    func dictionaryRepresentation() -> [String: Any] { values }
+    func dictionaryRepresentation() -> [String: Any] { lock.withLock { values } }
+}
+
+@Test("Personal Vault refuses late legacy changes in non-Host snapshot collections", arguments: [
+    "SelectiveRemote.terminal.commandTemplates.v1",
+    "SelectiveRemote.terminal.snippetGroups.v1",
+    "SelectiveRemote.independentPortForwards.v1",
+    "SelectiveRemote.sshKeys.v1"
+])
+func rejectsLateLegacyPersonalVaultWrite(key: String) throws {
+    let defaults = IsolatedPreferences()
+    try NativeStorageMigration.prepare(defaults)
+    defaults.set(Data(" [ ] ".utf8), forKey: key)
+    try LegacyProfileChangeDetector.requireUnchangedPersonalVaultSources(defaults)
+    let changed = Data("[{\"name\":\"late\"}]".utf8)
+    defaults.set(changed, forKey: key)
+    #expect(throws: SelectiveRemotePersonalVaultError.legacyStorageNeedsReview) {
+        try LegacyProfileChangeDetector.requireUnchangedPersonalVaultSources(defaults)
+    }
+    #expect(defaults.object(forKey: key) as? Data == changed)
+}
+
+@Test("Personal Vault refuses upload when the migration checkpoint is missing")
+func rejectsUnverifiablePersonalVaultSources() {
+    #expect(throws: SelectiveRemotePersonalVaultError.legacyStorageNeedsReview) {
+        try LegacyProfileChangeDetector.requireUnchangedPersonalVaultSources(IsolatedPreferences())
+    }
 }
 
 @Test("Late legacy profile writes are detected without modifying either collection")
