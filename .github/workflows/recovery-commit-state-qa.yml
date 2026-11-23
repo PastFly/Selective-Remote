@@ -1,50 +1,143 @@
-name: Verify PostgreSQL recovery commit guard
+name: Verify PostgreSQL logical and physical recovery
 on:
   push:
     branches: [codex/verify-recovery-commit-state]
 permissions:
   contents: read
-env:
-  CANDIDATE_SHA: f9d0bf37455a5e81b7765129293a452535bd8cd9
-  CANDIDATE_TREE: 4cc074ee7ee485f0709d6d6c21174ace96914bcf
 jobs:
-  cloud-postgres:
+  recovery:
+    name: Exact candidate and isolated PostgreSQL 16
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 9
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
         env:
-          POSTGRES_DB: selective_remote_test
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: restore_test
+          POSTGRES_USER: restore_fixture
+          POSTGRES_PASSWORD: ephemeral-integration-only
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U restore_fixture -d restore_test"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 12
+          --health-retries 10
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ env.CANDIDATE_SHA }}
+          ref: f9d0bf37455a5e81b7765129293a452535bd8cd9
           persist-credentials: false
-      - name: Verify exact recovery source
+      - name: Verify exact candidate source
         run: |
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
-      - uses: actions/setup-node@v4
+          test "$(git rev-parse HEAD)" = "f9d0bf37455a5e81b7765129293a452535bd8cd9"
+          test "$(git rev-parse HEAD^{tree})" = "4cc074ee7ee485f0709d6d6c21174ace96914bcf"
+      - uses: actions/setup-node@v6
         with:
-          node-version: '22.18.0'
-      - name: Verify recovery transactions
+          node-version: 22.18.0
+      - name: Install Cloud dependencies
+        working-directory: cloud
+        run: npm ci --ignore-scripts
+      - name: Verify supported recovery and Vault history
         working-directory: cloud
         env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/selective_remote_test
+          TEST_DATABASE_URL: postgresql://restore_fixture:ephemeral-integration-only@127.0.0.1:5432/restore_test
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          set -o pipefail
-          node --test tests/backup-restore.test.mjs tests/staging-reviewed-installer.test.mjs | tee "$RUNNER_TEMP/postgres-recovery.tap"
-          grep -Fx '# pass 14' "$RUNNER_TEMP/postgres-recovery.tap"
-          grep -Fx '# fail 0' "$RUNNER_TEMP/postgres-recovery.tap"
-          grep -Fx '# skipped 0' "$RUNNER_TEMP/postgres-recovery.tap"
-          grep -Fx '# todo 0' "$RUNNER_TEMP/postgres-recovery.tap"
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/16/bin:$PATH"
+          pg_dump --version
+          pg_restore --version
+          node --test tests/backup-restore.test.mjs tests/backup-postgres-concurrency.test.mjs tests/staging-reviewed-installer.test.mjs tests/staging-installer-archive-stream.test.mjs tests/staging-installer-writer-capability.test.mjs tests/staging-installer-live-binding.test.mjs tests/personal-vault-history.test.mjs
+      - name: Finalize a disposable physical PostgreSQL backup
+        working-directory: cloud
+        env:
+          SOURCE_DB_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          scratch=$(mktemp -d)
+          export SR_REAL_DOCKER="$(command -v docker)"
+          export SR_RESTORE_CLONE="sr-physical-restore-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          volume="$SR_RESTORE_CLONE-data"
+          cleanup() {
+            "$SR_REAL_DOCKER" rm -f "$SR_RESTORE_CLONE" >/dev/null 2>&1 || true
+            "$SR_REAL_DOCKER" volume rm "$volume" >/dev/null 2>&1 || true
+            rm -r -- "$scratch"
+          }
+          trap cleanup EXIT
+          docker exec -i "$SOURCE_DB_CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U restore_fixture -d restore_test <<'SQL'
+          CREATE TABLE public.sessions (id integer PRIMARY KEY, revoked_at timestamptz);
+          INSERT INTO public.sessions VALUES (1, NULL), (2, '2020-01-01 00:00:00+00');
+          CREATE TABLE public.restore_probe (value text NOT NULL);
+          INSERT INTO public.restore_probe VALUES ('survived physical recovery');
+          SQL
+          docker exec -u postgres "$SOURCE_DB_CONTAINER" pg_basebackup -D /tmp/physical-recovery -U restore_fixture -X stream -w
+          docker volume create "$volume" >/dev/null
+          docker cp "$SOURCE_DB_CONTAINER:/tmp/physical-recovery/." - |
+            docker run --rm -i --mount "type=volume,source=$volume,target=/copy" --entrypoint sh "$image" \
+              -ceu 'tar -xf - -C /copy; test -s /copy/PG_VERSION'
+          docker run -d --name "$SR_RESTORE_CLONE" --network none \
+            --env POSTGRES_DB=restore_test --env POSTGRES_USER=restore_fixture \
+            --mount "type=volume,source=$volume,target=/var/lib/postgresql/data" "$image" >/dev/null
+          for wait in {1..30}; do
+            if docker exec "$SR_RESTORE_CLONE" pg_isready -q -U restore_fixture -d restore_test; then break; fi
+            sleep 1
+          done
+          docker exec "$SR_RESTORE_CLONE" pg_isready -q -U restore_fixture -d restore_test
+          query() { "$SR_REAL_DOCKER" exec "$SR_RESTORE_CLONE" psql -XAt -v ON_ERROR_STOP=1 -U restore_fixture -d restore_test -c "$1"; }
+          test "$(query 'SELECT count(*) FROM public.sessions WHERE revoked_at IS NULL')" = 1
+          cat > "$scratch/docker" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "$*" in
+            *'ps --all --format {{.Service}} {{.State}}'*)
+              [[ $("$SR_REAL_DOCKER" inspect --format '{{.State.Running}}' "$SR_RESTORE_CLONE") == true ]]
+              state=exited
+              if [[ -n "${SR_STATE_SEQUENCE:-}" ]]; then
+                read -r state < "$SR_STATE_SEQUENCE"
+                tail -n +2 "$SR_STATE_SEQUENCE" > "$SR_STATE_SEQUENCE.next"
+                mv "$SR_STATE_SEQUENCE.next" "$SR_STATE_SEQUENCE"
+              fi
+              printf 'postgres running\ncloud %s\n' "$state"
+              ;;
+            *'exec -T postgres '*)
+              while [[ "$1" != postgres ]]; do shift; done
+              shift
+              exec "$SR_REAL_DOCKER" exec -i "$SR_RESTORE_CLONE" "$@"
+              ;;
+            *) exit 90 ;;
+          esac
+          SH
+          chmod 700 "$scratch/docker"
+          printf 'exited\nrunning\n' > "$scratch/cloud-states"
+          if SR_STATE_SEQUENCE="$scratch/cloud-states" PATH="$scratch:$PATH" bash scripts/restore-postgres.sh --confirm-finalize-recovery; then
+            echo 'Expected finalization to stop when Cloud starts.' >&2
+            exit 1
+          else
+            test "$?" = 75
+          fi
+          test "$(query 'SELECT count(*) FROM public.sessions WHERE revoked_at IS NULL')" = 1
+          PATH="$scratch:$PATH" bash scripts/restore-postgres.sh --confirm-finalize-recovery
+          test "$(query 'SELECT count(*) FROM public.sessions WHERE revoked_at IS NULL')" = 0
+          test "$(query "SELECT revoked_at = '2020-01-01 00:00:00+00'::timestamptz FROM public.sessions WHERE id=2")" = t
+          test "$(query 'SELECT value FROM public.restore_probe')" = 'survived physical recovery'
+          marker=$(query 'SELECT revoked_at FROM public.sessions WHERE id=1')
+          PATH="$scratch:$PATH" bash scripts/restore-postgres.sh --confirm-finalize-recovery
+          test "$(query 'SELECT revoked_at FROM public.sessions WHERE id=1')" = "$marker"
+          echo 'Physical PostgreSQL recovery and repeated session finalization passed.'
+      - name: Check public HTTPS writer admission without changing data
+        run: |
+          set -euo pipefail
+          origin=https://cloud.pastfly.ru
+          curl --fail --silent --show-error --proto '=https' --max-time 15 "$origin/healthz"
+          curl --fail --silent --show-error --proto '=https' --max-time 15 "$origin/readyz"
+          curl --fail --silent --show-error --proto '=https' --max-time 15 --dump-header "$RUNNER_TEMP/cloud-meta.headers" --output "$RUNNER_TEMP/cloud-meta.json" "$origin/v1/meta"
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const [headerPath, metadataPath] = process.argv.slice(1);
+            const headers = readFileSync(headerPath, "utf8");
+            const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+            const capability = /^x-selective-v1-write-fence:\s*1\s*$/im.test(headers);
+            const status = /^x-selective-v1-write-status:\s*vault_write_temporarily_unavailable\s*$/im.test(headers);
+            console.log(JSON.stringify({apiVersion: metadata.apiVersion, vaultSchemaVersion: metadata.vaultSchemaVersion, registrationEnabled: metadata.registrationEnabled, writeFenceAdvertised: capability, writePauseAdvertised: status, readOnlyPreflight: true}));
+          ' "$RUNNER_TEMP/cloud-meta.headers" "$RUNNER_TEMP/cloud-meta.json"
