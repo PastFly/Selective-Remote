@@ -1,0 +1,50 @@
+name: Verify PostgreSQL recovery commit guard
+on:
+  push:
+    branches: [codex/verify-recovery-commit-state]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: f9d0bf37455a5e81b7765129293a452535bd8cd9
+  CANDIDATE_TREE: 4cc074ee7ee485f0709d6d6c21174ace96914bcf
+jobs:
+  cloud-postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact recovery source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - name: Verify recovery transactions
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/selective_remote_test
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          set -o pipefail
+          node --test tests/backup-restore.test.mjs tests/staging-reviewed-installer.test.mjs | tee "$RUNNER_TEMP/postgres-recovery.tap"
+          grep -Fx '# pass 14' "$RUNNER_TEMP/postgres-recovery.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/postgres-recovery.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/postgres-recovery.tap"
+          grep -Fx '# todo 0' "$RUNNER_TEMP/postgres-recovery.tap"
