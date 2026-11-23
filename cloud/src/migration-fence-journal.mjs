@@ -44,6 +44,10 @@ export function validateFenceEvent(value){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
  }
+ if(value.type==='V1_SESSION_REVOKED'){
+  if(!keys(value,['version','type','sessionID'])||!isUUID(value.sessionID))invalid();
+  return {version:2,type:value.type,sessionID:value.sessionID};
+ }
  if(value.type==='V1_BASELINE'){
   if(!keys(value,['version','type','baselineID','vaults'])||!isUUID(value.baselineID)
    ||!Array.isArray(value.vaults)||value.vaults.length>20000)invalid();
@@ -102,10 +106,15 @@ export function reduceFenceEvents(events){
  if(!Array.isArray(events))invalid();
  const intents=new Map(),outcomes=new Map(),committed=new Map(),pending=new Map(),generations=new Map(),vaultTeams=new Map();
  const v1Intents=new Map(),v1Outcomes=new Map(),v1Committed=new Map(),v1Pending=new Map(),v1Owners=new Map(),v1Operations=new Map();
+ const revokedSessionIDs=new Set();
  let writerFloor=0,v1Baseline=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
   if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
+  if(event.type==='V1_SESSION_REVOKED'){
+   if(writerFloor!==1||!v1Baseline)conflict();
+   revokedSessionIDs.add(event.sessionID);continue;
+  }
   if(event.type==='V1_BASELINE'){
    if((writerFloor!==0&&!v1Baseline)||v1Intents.size||pending.size||v1Pending.size)conflict();
    if(v1Baseline){if(!same(v1Baseline,event))conflict();continue;}
@@ -185,6 +194,11 @@ export function reduceFenceEvents(events){
   }
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
- return {...(writerFloor?{writerFloor}:{}),...([...v1Intents.values()].some(item=>item.baseRevision===-1)?{emptyVaultCreationVersion:1}:{}),...([...v1Intents.values()].some(item=>item.type==='V1_WRAPPER_BATCH_PENDING_INTENT')?{wrapperEnvelopeVersion:1}:{}),...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
+ return {...(writerFloor?{writerFloor}:{}),
+  ...(revokedSessionIDs.size?{revokedSessionIDs:[...revokedSessionIDs].sort(compare)}:{}),
+  ...([...v1Intents.values()].some(item=>item.baseRevision===-1)?{emptyVaultCreationVersion:1}:{}),
+  ...([...v1Intents.values()].some(item=>item.type==='V1_WRAPPER_BATCH_PENDING_INTENT')?{wrapperEnvelopeVersion:1}:{}),
+  ...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),
+  schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }

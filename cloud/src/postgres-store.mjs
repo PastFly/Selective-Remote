@@ -1071,18 +1071,44 @@ export class PostgresStore {
   async session(tokenHash) {
     const result = await this.pool.query(
       `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.username, u.display_name
-       FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
+       FROM sessions s JOIN users u ON u.id = s.user_id
+       JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
          AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND d.revoked_at IS NULL`,
       [tokenHash],
     );
-    if (!result.rows[0]) return null;
-    await this.pool.query("UPDATE sessions SET last_used_at = now() WHERE id = $1", [result.rows[0].session_id]);
-    return result.rows[0];
+    const session = result.rows[0];
+    if (!session) return null;
+    const history = this.v1Fence?.anchor ? await this.v1Fence.snapshot() : null;
+    if (history?.revokedSessionIDs?.includes(session.session_id)) return null;
+    await this.pool.query("UPDATE sessions SET last_used_at = now() WHERE id = $1", [session.session_id]);
+    return session;
   }
 
   async revokeSession(sessionID) {
-    await this.pool.query("UPDATE sessions SET revoked_at = now() WHERE id = $1", [sessionID]);
+    const revoke = "UPDATE sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1";
+    if (!this.v1Fence?.anchor) {
+      await this.pool.query(revoke, [sessionID]);
+      return;
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialize logout against any Personal Vault commit holding the session.
+      await client.query("SELECT id FROM sessions WHERE id = $1 FOR UPDATE", [sessionID]);
+      const history = await this.v1Fence.snapshot();
+      if (history.writerFloor === 1) {
+        // Persist the denial before acknowledging the update in the primary DB.
+        await this.v1Fence.append({ version: 2, type: "V1_SESSION_REVOKED", sessionID });
+      }
+      await client.query(revoke, [sessionID]);
+      await client.query("COMMIT");
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listDevices(userID) {
@@ -1255,14 +1281,15 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await this.writerFence(client, this.v1Fence);
+      // Check history after acquiring the session lock. A concurrent logout
+      // can retain its denial even when the primary database update fails.
+      await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
       if(fenced){
         const snapshot=await this.v1Fence.snapshot();
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
+        if(snapshot.revokedSessionIDs?.includes(sessionID))throw new Error("unauthorized");
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
       }
-      // Recheck the session after acquiring writer protection. The row lock
-      // keeps a concurrent session revocation from committing before this write.
-      await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);
       const vault = locked.rows[0];
       if (!vault) throw new Error("vault_missing");
