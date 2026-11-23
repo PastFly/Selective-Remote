@@ -44,9 +44,22 @@ export function validateFenceEvent(value){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
  }
- if(value.type==='V1_SESSION_REVOKED'){
-  if(!keys(value,['version','type','sessionID'])||!isUUID(value.sessionID))invalid();
-  return {version:2,type:value.type,sessionID:value.sessionID};
+ const revocationField={V1_SESSION_REVOKED:'sessionID',V1_DEVICE_REVOKED:'deviceID',V1_ACCOUNT_REVOKED:'userID'}[value.type];
+ if(typeof revocationField==='string'){
+  if(!keys(value,['version','type',revocationField])||!isUUID(value[revocationField]))invalid();
+  return {version:2,type:value.type,[revocationField]:value[revocationField]};
+ }
+ if(value.type==='V1_PASSWORD_RESET_ISSUED'){
+  if(!keys(value,['version','type','userID','resetID'])||!isUUID(value.userID)||!isUUID(value.resetID))invalid();
+  return {version:2,type:value.type,userID:value.userID,resetID:value.resetID};
+ }
+ if(value.type==='V1_PASSWORD_RESET_COMPLETED'){
+  if(!keys(value,['version','type','userID','resetID','identityID','sessionIDs'])||
+   ![value.userID,value.resetID,value.identityID].every(isUUID)||
+   !Array.isArray(value.sessionIDs)||value.sessionIDs.length>20000||!value.sessionIDs.every(isUUID)||
+   new Set(value.sessionIDs).size!==value.sessionIDs.length)invalid();
+  return {version:2,type:value.type,userID:value.userID,resetID:value.resetID,
+   identityID:value.identityID,sessionIDs:[...value.sessionIDs].sort(compare)};
  }
  if(value.type==='V1_BASELINE'){
   if(!keys(value,['version','type','baselineID','vaults'])||!isUUID(value.baselineID)
@@ -106,7 +119,8 @@ export function reduceFenceEvents(events){
  if(!Array.isArray(events))invalid();
  const intents=new Map(),outcomes=new Map(),committed=new Map(),pending=new Map(),generations=new Map(),vaultTeams=new Map();
  const v1Intents=new Map(),v1Outcomes=new Map(),v1Committed=new Map(),v1Pending=new Map(),v1Owners=new Map(),v1Operations=new Map();
- const revokedSessionIDs=new Set();
+ const revokedSessionIDs=new Set(),revokedDeviceIDs=new Set(),revokedAccountIDs=new Set();
+ const passwordResetIDs=new Map(),passwordIdentityIDs=new Map();
  let writerFloor=0,v1Baseline=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
@@ -114,6 +128,22 @@ export function reduceFenceEvents(events){
   if(event.type==='V1_SESSION_REVOKED'){
    if(writerFloor!==1||!v1Baseline)conflict();
    revokedSessionIDs.add(event.sessionID);continue;
+  }
+  if(event.type==='V1_DEVICE_REVOKED'||event.type==='V1_ACCOUNT_REVOKED'){
+   if(writerFloor!==1||!v1Baseline)conflict();
+   if(event.type==='V1_DEVICE_REVOKED')revokedDeviceIDs.add(event.deviceID);
+   else { revokedAccountIDs.add(event.userID);passwordResetIDs.delete(event.userID); }
+   continue;
+  }
+  if(event.type==='V1_PASSWORD_RESET_ISSUED'||event.type==='V1_PASSWORD_RESET_COMPLETED'){
+   if(writerFloor!==1||!v1Baseline||revokedAccountIDs.has(event.userID))conflict();
+   if(event.type==='V1_PASSWORD_RESET_ISSUED')passwordResetIDs.set(event.userID,event.resetID);
+   else {
+    if(passwordResetIDs.get(event.userID)!==event.resetID)conflict();
+    passwordResetIDs.delete(event.userID);passwordIdentityIDs.set(event.userID,event.identityID);
+    for(const sessionID of event.sessionIDs)revokedSessionIDs.add(sessionID);
+   }
+   continue;
   }
   if(event.type==='V1_BASELINE'){
    if((writerFloor!==0&&!v1Baseline)||v1Intents.size||pending.size||v1Pending.size)conflict();
@@ -196,6 +226,10 @@ export function reduceFenceEvents(events){
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
  return {...(writerFloor?{writerFloor}:{}),
   ...(revokedSessionIDs.size?{revokedSessionIDs:[...revokedSessionIDs].sort(compare)}:{}),
+  ...(revokedDeviceIDs.size?{revokedDeviceIDs:[...revokedDeviceIDs].sort(compare)}:{}),
+  ...(revokedAccountIDs.size?{revokedAccountIDs:[...revokedAccountIDs].sort(compare)}:{}),
+  ...(passwordResetIDs.size?{passwordResetIDs:Object.fromEntries(passwordResetIDs)}:{}),
+  ...(passwordIdentityIDs.size?{passwordIdentityIDs:Object.fromEntries(passwordIdentityIDs)}:{}),
   ...([...v1Intents.values()].some(item=>item.baseRevision===-1)?{emptyVaultCreationVersion:1}:{}),
   ...([...v1Intents.values()].some(item=>item.type==='V1_WRAPPER_BATCH_PENDING_INTENT')?{wrapperEnvelopeVersion:1}:{}),
   ...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),

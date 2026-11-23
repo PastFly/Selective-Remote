@@ -366,6 +366,7 @@ test("password reset lookup accepts only an active token hash", async () => {
 
 test("password reset consumption changes the password and revokes every session", async () => {
   const fixture = recordingStore((sql) => {
+    if (sql.includes("SELECT id FROM users")) return { rows: [{ id: "user-1" }] };
     if (sql.includes("UPDATE password_reset_tokens")) return { rows: [{ user_id: "user-1" }] };
     if (sql.includes("UPDATE account_identities")) return { rows: [{ id: "identity-1" }] };
     return { rows: [] };
@@ -378,7 +379,7 @@ test("password reset consumption changes the password and revokes every session"
     passwordHash: "new-password-hash",
   }), true);
   assert.deepEqual(fixture.queries.find(({ sql }) => sql.includes("UPDATE account_identities")).parameters,
-    ["user-1", "new-password-hash"]);
+    ["user-1", "new-password-hash", null]);
   assert.match(fixture.queries.find(({ sql }) => sql.includes("UPDATE password_reset_tokens")).sql,
     /owner\.disabled_at IS NULL/);
   assert.match(fixture.queries.find(({ sql }) => sql.includes("UPDATE password_reset_tokens")).sql,
@@ -388,7 +389,7 @@ test("password reset consumption changes the password and revokes every session"
 });
 
 test("password reset rolls back if the password identity disappears", async () => {
-  const fixture = recordingStore((sql) => sql.includes("UPDATE password_reset_tokens")
+  const fixture = recordingStore((sql) => sql.includes("SELECT id FROM users") || sql.includes("UPDATE password_reset_tokens")
     ? { rows: [{ user_id: "user-1" }] }
     : { rows: [] });
 
@@ -411,5 +412,5 @@ test("replayed password reset tokens change neither password nor sessions", asyn
   }), false);
   assert.equal(fixture.queries.some(({ sql }) => sql.includes("UPDATE account_identities")), false);
   assert.equal(fixture.queries.some(({ sql }) => sql.includes("UPDATE sessions")), false);
-  assert.equal(fixture.queries.at(-1).sql, "COMMIT");
+  assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
 });

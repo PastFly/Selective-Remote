@@ -21,11 +21,29 @@ import {
 
 const { Pool } = pg;
 
+function passwordIdentityIsCurrent(history, userID, identityID) {
+  const retained = history?.passwordIdentityIDs?.[userID];
+  return !retained || retained === identityID;
+}
+
+function passwordResetIsCurrent(history, userID, resetID) {
+  return !history?.revokedAccountIDs?.includes(userID)
+    && (history?.writerFloor !== 1 || (isUUID(resetID) && history.passwordResetIDs?.[userID] === resetID));
+}
+
+function sessionIsCurrent(history, userID, deviceID, sessionID, identityID) {
+  return !history?.revokedSessionIDs?.includes(sessionID)
+    && !history?.revokedDeviceIDs?.includes(deviceID)
+    && !history?.revokedAccountIDs?.includes(userID)
+    && passwordIdentityIsCurrent(history, userID, identityID);
+}
+
 async function requirePersonalVaultWriteSession(client, sessionID, userID, deviceID) {
   const active = await client.query(
-    `SELECT s.id FROM sessions s
+    `SELECT s.id, i.id AS password_identity_id FROM sessions s
      JOIN users u ON u.id = s.user_id
      JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
+     LEFT JOIN account_identities i ON i.user_id = u.id AND i.provider = 'password' AND i.subject = u.email
      WHERE s.id = $1 AND s.user_id = $2 AND s.device_id = $3
        AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()
        AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL
@@ -34,6 +52,7 @@ async function requirePersonalVaultWriteSession(client, sessionID, userID, devic
     [sessionID, userID, deviceID],
   );
   if (!active.rows[0]) throw new Error("unauthorized");
+  return active.rows[0];
 }
 
 // An empty Vault is part of the retained floor too. Its creation is journaled
@@ -602,6 +621,10 @@ export class PostgresStore {
       }
       const removed = await client.query("DELETE FROM users WHERE id = $1 RETURNING id", [userID]);
       if (!removed.rows[0]) throw new Error("account_not_found");
+      const history = await this.retainedAuthorization();
+      if (history?.writerFloor === 1) {
+        await this.v1Fence.append({ version: 2, type: "V1_ACCOUNT_REVOKED", userID });
+      }
       await client.query("COMMIT");
       return { deleted: true };
     } catch (error) {
@@ -740,6 +763,9 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      if ((await this.retainedAuthorization())?.writerFloor === 1) {
+        throw new Error("personal_vault_rewrap_required");
+      }
       const password = await client.query(
         `UPDATE account_identities SET password_hash = $2, last_used_at = now()
          WHERE user_id = $1 AND provider = 'password'
@@ -888,10 +914,11 @@ export class PostgresStore {
       const owner = await client.query(
         `SELECT id FROM users
          WHERE id = $1 AND disabled_at IS NULL AND email_verified_at IS NOT NULL
-         FOR UPDATE`,
+         FOR NO KEY UPDATE`,
         [userID],
       );
-      if (!owner.rows[0]) {
+      const history = await this.retainedAuthorization();
+      if (!owner.rows[0] || history?.revokedAccountIDs?.includes(userID)) {
         await client.query("COMMIT");
         return false;
       }
@@ -900,11 +927,14 @@ export class PostgresStore {
          WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
         [userID],
       );
-      await client.query(
+      const reset = await client.query(
         `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
-         VALUES ($1, $2, $3)`,
+         VALUES ($1, $2, $3) RETURNING id`,
         [userID, tokenHash, expiresAt],
       );
+      if (history?.writerFloor === 1) {
+        await this.v1Fence.append({ version: 2, type: "V1_PASSWORD_RESET_ISSUED", userID, resetID: reset.rows[0].id });
+      }
       await client.query("COMMIT");
       return true;
     } catch (error) {
@@ -917,7 +947,7 @@ export class PostgresStore {
 
   async passwordResetIdentity(tokenHash) {
     const result = await this.pool.query(
-      `SELECT token.user_id
+      `SELECT token.user_id, token.id AS reset_id
        FROM password_reset_tokens AS token
        JOIN users AS owner ON owner.id = token.user_id
        WHERE token.token_hash = $1
@@ -928,13 +958,25 @@ export class PostgresStore {
          AND token.expires_at > now()`,
       [tokenHash],
     );
-    return result.rows[0] ?? null;
+    const token = result.rows[0];
+    if (!token || !passwordResetIsCurrent(await this.retainedAuthorization(), token.user_id, token.reset_id)) return null;
+    return { user_id: token.user_id };
   }
 
   async consumePasswordResetToken({ userID, tokenHash, passwordHash }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      // Serialize recovery-link issuance and consumption for this account.
+      const owner = await client.query(
+        `SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL
+         AND email_verified_at IS NOT NULL FOR NO KEY UPDATE`, [userID],
+      );
+      if (!owner.rows[0]) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const history = await this.retainedAuthorization();
       const consumed = await client.query(
         `UPDATE password_reset_tokens AS token SET consumed_at = now()
          FROM users AS owner
@@ -942,26 +984,36 @@ export class PostgresStore {
            AND token.user_id = owner.id
            AND owner.disabled_at IS NULL AND owner.email_verified_at IS NOT NULL
            AND token.consumed_at IS NULL AND token.invalidated_at IS NULL
-           AND token.expires_at > now()
-         RETURNING token.user_id`,
+           AND token.expires_at > clock_timestamp()
+         RETURNING token.user_id, token.id AS reset_id`,
         [tokenHash, userID],
       );
-      if (!consumed.rows[0]) {
-        await client.query("COMMIT");
+      const token = consumed.rows[0];
+      if (!token || !passwordResetIsCurrent(history, userID, token.reset_id)) {
+        await client.query("ROLLBACK");
         return false;
       }
+      const protectedReset = history?.writerFloor === 1;
       const password = await client.query(
-        `UPDATE account_identities SET password_hash = $2, last_used_at = NULL
+        `UPDATE account_identities SET password_hash = $2, last_used_at = NULL,
+           id = COALESCE($3::uuid, id)
          WHERE user_id = $1 AND provider = 'password'
          RETURNING id`,
-        [userID, passwordHash],
+        [userID, passwordHash, protectedReset ? randomUUID() : null],
       );
-      if (!password.rows[0]) throw new Error("password_identity_missing");
-      await client.query(
-        "UPDATE sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1",
+      if (password.rows.length !== 1) throw new Error("password_identity_missing");
+      const revoked = await client.query(
+        `UPDATE sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1
+         RETURNING id, expires_at > clock_timestamp() AS unexpired`,
         [userID],
       );
       await client.query("UPDATE users SET updated_at = now() WHERE id = $1", [userID]);
+      if (protectedReset) {
+        await this.v1Fence.append({
+          version: 2, type: "V1_PASSWORD_RESET_COMPLETED", userID, resetID: token.reset_id,
+          identityID: password.rows[0].id, sessionIDs: revoked.rows.filter(row => row.unexpired).map(row => row.id),
+        });
+      }
       await client.query("COMMIT");
       return true;
     } catch (error) {
@@ -1022,6 +1074,10 @@ export class PostgresStore {
         if (owner.rows[0] && owner.rows[0].user_id !== userID) throw new Error("device_conflict");
         throw new Error("invalid_device");
       }
+      const history = await this.retainedAuthorization();
+      if (history?.revokedAccountIDs?.includes(userID) ||
+        !passwordIdentityIsCurrent(history, userID, identity.rows[0].id)) throw new Error("invalid_credentials");
+      if (history?.revokedDeviceIDs?.includes(device.id)) throw new Error("invalid_device");
       await client.query(
         `WITH admitted AS (
            INSERT INTO team_membership_device_admissions
@@ -1068,21 +1124,27 @@ export class PostgresStore {
     }
   }
 
+  async retainedAuthorization() {
+    return this.v1Fence?.anchor ? this.v1Fence.snapshot() : null;
+  }
+
   async session(tokenHash) {
     const result = await this.pool.query(
-      `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.username, u.display_name
+      `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.username, u.display_name,
+              i.id AS password_identity_id
        FROM sessions s JOIN users u ON u.id = s.user_id
        JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
+       LEFT JOIN account_identities i ON i.user_id = u.id AND i.provider = 'password' AND i.subject = u.email
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
          AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND d.revoked_at IS NULL`,
       [tokenHash],
     );
     const session = result.rows[0];
     if (!session) return null;
-    const history = this.v1Fence?.anchor ? await this.v1Fence.snapshot() : null;
-    if (history?.revokedSessionIDs?.includes(session.session_id)) return null;
+    const { password_identity_id: identityID, ...authenticated } = session;
+    if (!sessionIsCurrent(await this.retainedAuthorization(), session.user_id, session.device_id, session.session_id, identityID)) return null;
     await this.pool.query("UPDATE sessions SET last_used_at = now() WHERE id = $1", [session.session_id]);
-    return session;
+    return authenticated;
   }
 
   async revokeSession(sessionID) {
@@ -1173,6 +1235,10 @@ export class PostgresStore {
              WHERE removed_device_id IS NOT NULL DO NOTHING`,
           [userID, deviceID],
         );
+      }
+      const history = await this.retainedAuthorization();
+      if (history?.writerFloor === 1) {
+        await this.v1Fence.append({ version: 2, type: "V1_DEVICE_REVOKED", deviceID });
       }
       await client.query("COMMIT");
       return true;
@@ -1283,11 +1349,11 @@ export class PostgresStore {
       await this.writerFence(client, this.v1Fence);
       // Check history after acquiring the session lock. A concurrent logout
       // can retain its denial even when the primary database update fails.
-      await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
+      const active = await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
       if(fenced){
         const snapshot=await this.v1Fence.snapshot();
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
-        if(snapshot.revokedSessionIDs?.includes(sessionID))throw new Error("unauthorized");
+        if(!sessionIsCurrent(snapshot,userID,deviceID,sessionID,active.password_identity_id))throw new Error("unauthorized");
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
       }
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);

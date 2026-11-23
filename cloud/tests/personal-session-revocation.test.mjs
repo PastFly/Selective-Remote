@@ -19,6 +19,21 @@ test("Personal session revocations require an armed journal and carry no credent
   assert.deepEqual(reduceFenceEvents([baseline, floor, revoked, revoked]).revokedSessionIDs, [revoked.sessionID]);
 });
 
+test("anchored password recovery consumes only the latest retained request", () => {
+  const userID = randomUUID(), resetID = randomUUID(), identityID = randomUUID(), sessionID = randomUUID();
+  const baseline = { version: 2, type: "V1_BASELINE", baselineID: randomUUID(), vaults: [] };
+  const floor = { version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 };
+  const issued = { version: 2, type: "V1_PASSWORD_RESET_ISSUED", userID, resetID };
+  const completed = { version: 2, type: "V1_PASSWORD_RESET_COMPLETED", userID, resetID, identityID, sessionIDs: [sessionID] };
+  assert.throws(() => reduceFenceEvents([baseline, floor, completed]), /deployment_fence_conflict/);
+  assert.throws(() => reduceFenceEvents([baseline, floor, issued, { ...completed, resetID: randomUUID() }]), /deployment_fence_conflict/);
+  assert.throws(() => validateFenceEvent({ ...completed, passwordHash: "synthetic" }), /invalid_deployment_fence/);
+  const result = reduceFenceEvents([baseline, floor, issued, completed]);
+  assert.equal(result.passwordIdentityIDs[userID], identityID);
+  assert.equal(result.passwordResetIDs?.[userID], undefined);
+  assert.deepEqual(result.revokedSessionIDs, [sessionID]);
+});
+
 test("Personal logout denial survives a failed primary update and is read from the independent anchor", {
   skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
   timeout: 60000,
@@ -99,6 +114,119 @@ test("Personal logout denial survives a failed primary update and is read from t
     assert.deepEqual(await restartedStore.putVault(current, envelope), { conflict: false, revision: 1 });
   } finally {
     await reopened?.close();
+    await independent?.cleanup();
+    await journal?.cleanup();
+    await db.cleanup();
+  }
+});
+
+test("anchored Personal recovery keeps credential, token and device decisions through failed primary commits", {
+  skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
+  timeout: 60000,
+}, async () => {
+  const primaryURL = new URL(process.env.TEST_DATABASE_URL);
+  const anchorURL = new URL(process.env.SR_TEST_ANCHOR_TLS_URL);
+  assert.notEqual(Number(primaryURL.port || 5432), Number(anchorURL.port || 5432));
+  assert.ok(anchorURL.pathname.endsWith("_test"));
+  const db = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  let journal, independent;
+  try {
+    const userID = randomUUID(), deviceID = randomUUID(), beforeIdentity = randomUUID();
+    const email = "recovery-proof@example.test";
+    const beforeHash = "synthetic-before-recovery-hash", freshHash = "synthetic-fresh-recovery-hash";
+    await db.pool.query(
+      "INSERT INTO users(id,email,username,email_verified_at) VALUES($1,$2,'recovery_proof_test',now())",
+      [userID, email],
+    );
+    await db.pool.query(
+      "INSERT INTO account_identities(id,user_id,provider,subject,password_hash) VALUES($1,$2,'password',$3,$4)",
+      [beforeIdentity, userID, email, beforeHash],
+    );
+    await db.pool.query("INSERT INTO personal_vaults(user_id) VALUES($1)", [userID]);
+
+    journal = await publicationRuntimeFixture(db.databaseURL);
+    independent = await syntheticHttpAnchor(journal.path);
+    const fence = independent.fence;
+    await installV1CommitFence(db.pool);
+    await fence.append({
+      version: 2, type: "V1_BASELINE", baselineID: randomUUID(),
+      vaults: await readV1VaultState(db.pool.query.bind(db.pool)),
+    });
+    await fence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
+    const store = new PostgresStore(null, db.pool, { v1Fence: fence });
+    const interrupted = new PostgresStore(null, {
+      async connect() {
+        const client = await db.pool.connect();
+        return {
+          query(sql, values) {
+            if (sql === "COMMIT") throw new Error("synthetic_commit_failure");
+            return client.query(sql, values);
+          },
+          release() { client.release(); },
+        };
+      },
+    }, { v1Fence: fence });
+
+    const login = (verifiedPasswordHash, id = deviceID, ownerID = userID) => ({
+      userID: ownerID, verifiedPasswordHash,
+      device: { id, name: "Test Mac", platform: "macos", appVersion: "0.32.6" },
+      sessionHash: randomUUID(), expiresAt: new Date(Date.now() + 3600000),
+    });
+    const request = digit => ({ userID, tokenHash: digit.repeat(64), expiresAt: new Date(Date.now() + 3600000) });
+    const consume = digit => ({ userID, tokenHash: digit.repeat(64), passwordHash: freshHash });
+    const initial = login(beforeHash);
+    await store.createSession(initial);
+    assert.equal((await store.session(initial.sessionHash)).device_id, deviceID);
+
+    assert.equal(await store.replacePasswordResetToken(request("1")), true);
+    assert.deepEqual(await store.passwordResetIdentity("1".repeat(64)), { user_id: userID });
+    await assert.rejects(interrupted.replacePasswordResetToken(request("2")), /synthetic_commit_failure/);
+    assert.equal(await store.passwordResetIdentity("1".repeat(64)), null);
+    assert.equal(await store.consumePasswordResetToken(consume("1")), false);
+
+    assert.equal(await store.replacePasswordResetToken(request("3")), true);
+    await assert.rejects(interrupted.consumePasswordResetToken(consume("3")), /synthetic_commit_failure/);
+    const stale = await db.pool.query("SELECT id, password_hash FROM account_identities WHERE user_id = $1", [userID]);
+    assert.deepEqual(stale.rows, [{ id: beforeIdentity, password_hash: beforeHash }]);
+    assert.equal(await store.passwordResetIdentity("3".repeat(64)), null);
+    assert.equal(await store.session(initial.sessionHash), null);
+    await assert.rejects(store.createSession(login(beforeHash)), { message: "invalid_credentials" });
+
+    assert.equal(await store.replacePasswordResetToken(request("4")), true);
+    assert.equal(await store.consumePasswordResetToken(consume("4")), true);
+    const identity = await db.pool.query("SELECT id FROM account_identities WHERE user_id = $1", [userID]);
+    assert.equal((await fence.snapshot()).passwordIdentityIDs[userID], identity.rows[0].id);
+    const active = login(freshHash);
+    await store.createSession(active);
+    const session = await store.session(active.sessionHash);
+    assert.equal(session.device_id, deviceID);
+    assert.deepEqual(await store.putVault(session, {
+      baseRevision: 0, envelopeVersion: 1, wrappedKey: {},
+      ciphertext: "bmV3", nonce: "bm9uY2U", authTag: "dGFn", contentHash: "aGFzaA",
+    }), { conflict: false, revision: 1 });
+
+    await assert.rejects(interrupted.revokeDevice(userID, deviceID), /synthetic_commit_failure/);
+    assert.equal(await store.session(active.sessionHash), null);
+    await assert.rejects(store.createSession(login(freshHash)), { message: "invalid_device" });
+    const replacement = login(freshHash, randomUUID());
+    await store.createSession(replacement);
+    assert.equal((await store.session(replacement.sessionHash)).device_id, replacement.device.id);
+
+    // Use a disposable account without Vault data to exercise the authorization
+    // record independently of the separate V1 Vault deletion policy.
+    const otherID = randomUUID();
+    await db.pool.query(
+      "INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'delete-proof@example.test','delete_proof_test',now())",
+      [otherID],
+    );
+    await db.pool.query(
+      "INSERT INTO account_identities(user_id,provider,subject,password_hash) VALUES($1,'password','delete-proof@example.test',$2)",
+      [otherID, beforeHash],
+    );
+    await assert.rejects(interrupted.deleteAccount(otherID), /synthetic_commit_failure/);
+    assert.ok((await fence.snapshot()).revokedAccountIDs.includes(otherID));
+    await assert.rejects(store.createSession(login(beforeHash, randomUUID(), otherID)), { message: "invalid_credentials" });
+  } finally {
     await independent?.cleanup();
     await journal?.cleanup();
     await db.cleanup();
