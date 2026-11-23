@@ -6,6 +6,89 @@ import { PostgresStore } from '../src/postgres-store.mjs';
 import { isolatedPublicationDatabase } from './publication-runtime-fixture.mjs';
 import { installV1CommitFence, useFramedV1Writer, assertV1CommitFence } from '../src/v1-commit-fence.mjs';
 
+async function createPersonalWriteSession(pool, userID, deviceID) {
+  const id = randomUUID();
+  await pool.query(
+    "INSERT INTO sessions(id,user_id,device_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 day')",
+    [id, userID, deviceID, randomUUID()],
+  );
+  return { session_id: id, user_id: userID, device_id: deviceID };
+}
+
+test("Personal Vault commit requires an active session bound to its account and device", {
+  skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
+}, async () => {
+  const { publicationRuntimeFixture } = await import("./publication-runtime-fixture.mjs");
+  const { readV1VaultState } = await import("../src/v1-data-fence.mjs");
+  const db = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+  let fixture;
+  try {
+    const userID = randomUUID(), deviceID = randomUUID();
+    await db.pool.query(
+      "INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'personal-write@example.test','personal_write_test',now())",
+      [userID],
+    );
+    await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','macos')", [deviceID, userID]);
+    await db.pool.query("INSERT INTO personal_vaults(user_id) VALUES($1)", [userID]);
+    const session = await createPersonalWriteSession(db.pool, userID, deviceID);
+    const revokedSession = await createPersonalWriteSession(db.pool, userID, deviceID);
+    fixture = await publicationRuntimeFixture(db.databaseURL);
+    const fence = await syntheticAnchoredFence(fixture.path);
+    await installV1CommitFence(db.pool);
+    await fence.append({
+      version: 2, type: "V1_BASELINE", baselineID: randomUUID(),
+      vaults: await readV1VaultState((sql, values) => db.pool.query(sql, values)),
+    });
+    await fence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
+    const store = new PostgresStore(null, db.pool, { v1Fence: fence });
+    await store.revokeSession(revokedSession.session_id);
+    const envelope = {
+      baseRevision: 0, envelopeVersion: 1, wrappedKey: {},
+      ciphertext: "bmV3", nonce: "bm9uY2U", authTag: "dGFn", contentHash: "aGFzaA",
+    };
+    for (const invalid of [
+      { ...session, session_id: undefined },
+      { ...session, user_id: randomUUID() },
+      { ...session, device_id: randomUUID() },
+      revokedSession,
+    ]) {
+      await assert.rejects(store.putVault(invalid, envelope), { message: "unauthorized" });
+    }
+    assert.equal(Number((await store.getVault(userID)).revision), 0);
+    assert.equal((await fence.snapshot()).v1Pending.length, 0);
+
+    // Let an otherwise valid session expire while its durable intent is being
+    // acknowledged. The previous revision and the fence must both recover.
+    let intentWasRecorded = false;
+    const delayedFence = {
+      anchor: fence.anchor,
+      snapshot: () => fence.snapshot(),
+      async append(event) {
+        await fence.append(event);
+        if (event.type !== "V1_PENDING_INTENT") return;
+        intentWasRecorded = true;
+        await db.pool.query(
+          `SELECT pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM (expires_at - clock_timestamp()))) + 0.05)
+           FROM sessions WHERE id = $1`,
+          [session.session_id],
+        );
+      },
+    };
+    const delayedStore = new PostgresStore(null, db.pool, { v1Fence: delayedFence });
+    await db.pool.query("UPDATE sessions SET expires_at = clock_timestamp() + interval '5 seconds' WHERE id = $1", [session.session_id]);
+    await assert.rejects(delayedStore.putVault(session, envelope), { message: "unauthorized" });
+    assert.equal(intentWasRecorded, true);
+    assert.equal(Number((await store.getVault(userID)).revision), 0);
+    assert.equal((await fence.snapshot()).v1Pending.length, 0);
+
+    const current = await createPersonalWriteSession(db.pool, userID, deviceID);
+    assert.deepEqual(await store.putVault(current, envelope), { conflict: false, revision: 1 });
+    assert.deepEqual(await store.putVault(current, envelope), { conflict: true, revision: 1 });
+  } finally {
+    try { await fixture?.cleanup(); } finally { await db.cleanup(); }
+  }
+});
+
 test('database writer barrier drains in-flight legacy writes and rejects later legacy commits', {
   skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
 }, async () => {
@@ -16,6 +99,7 @@ test('database writer barrier drains in-flight legacy writes and rejects later l
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-fence@example.test','p0_fence_test',now())", [user]);
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-fence2@example.test','p0_fence2_test',now())", [user2]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    const session = await createPersonalWriteSession(db.pool, user, device);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES ($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')", [user]);
     await db.pool.query("INSERT INTO teams(id,name,created_by_user_id) VALUES ($1,'TEST-ONLY-CODEX-FENCE',$2)", [team,user]);
     await db.pool.query("INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,envelope_version,ciphertext,nonce,auth_tag,content_hash) VALUES ($1,$2,'TEST-ONLY-CODEX-FENCE',$3,1,1,'c2VlZA','bm9uY2U','dGFn','aGFzaA')", [vault,team,user]);
@@ -71,7 +155,7 @@ test('database writer barrier drains in-flight legacy writes and rejects later l
     await assert.rejects(writer.query('UPDATE personal_vaults SET revision=5 WHERE user_id=$1',[user]), /v1_writer_upgrade_required/, 'writer capability must not leak after ROLLBACK');
     const store = new PostgresStore(null,db.pool);
     const beforeUnfenced=(await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
-    await assert.rejects(store.putVault(user,device,{baseRevision:4,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/deployment_fence_required/);
+    await assert.rejects(store.putVault(session,{baseRevision:4,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/deployment_fence_required/);
     assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,beforeUnfenced);
   } finally {
     if (late) { try { await late.query('ROLLBACK'); } catch {} late.release(); }
@@ -141,6 +225,7 @@ test('an unavailable or corrupted V1 journal cannot authorize a direct writer', 
     const user=randomUUID(),device=randomUUID();
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'journal-denial@example.test','journal_denial_test',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    const session = await createPersonalWriteSession(db.pool, user, device);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     await installV1CommitFence(db.pool);
     const before=(await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
@@ -148,7 +233,7 @@ test('an unavailable or corrupted V1 journal cannot authorize a direct writer', 
     const payload={baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'};
     for(const [path,expected] of [[journal,/corrupt_deployment_fence/],[join(directory,'missing'),{code:'ENOENT'}]]) {
       const store=new PostgresStore(null,db.pool,{v1Fence:new MigrationFence(path,{anchor:syntheticV1Anchor()})});
-      await assert.rejects(store.putVault(user,device,payload),expected);
+      await assert.rejects(store.putVault(session,payload),expected);
       assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,before);
     }
   } finally {await db.cleanup();await rm(directory,{recursive:true,force:true});}
@@ -275,6 +360,7 @@ test('current writer holds barrier integrity until its transaction commits', {
     const user=randomUUID(),device=randomUUID();
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-commit@example.test','p0_commit_test',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    const session = await createPersonalWriteSession(db.pool, user, device);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     await installV1CommitFence(db.pool);
     const {MigrationFence}=await import('../src/migration-fence.mjs');
@@ -291,7 +377,7 @@ test('current writer holds barrier integrity until its transaction commits', {
       release(){c.release();},
     };}};
     const store=new PostgresStore(null,pool,{v1Fence:fence});
-    const write=store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'});
+    const write=store.putVault(session,{baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'});
     await atWrite;
     let tampered=false;
     const disable=db.pool.query('ALTER TABLE public.personal_vaults DISABLE TRIGGER selective_remote_framed_v1_writer').then(()=>{tampered=true;});
@@ -366,6 +452,7 @@ test('an older post-floor backup must not serve after newer V1 data was committe
   const user=randomUUID(),device=randomUUID();
   await original.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-postfloor@example.test','p0_postfloor',now())",[user]);
   await original.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+  const session = await createPersonalWriteSession(original.pool, user, device);
   await original.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
   fixture=await publicationRuntimeFixture(original.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
   await installV1CommitFence(original.pool);
@@ -374,7 +461,7 @@ test('an older post-floor backup must not serve after newer V1 data was committe
   await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
   const exec=promisify(execFile),archive=join(dir,'post-floor.dump');await exec('pg_dump',['--format=custom','--no-owner','--no-acl','--file',archive,original.databaseURL]);
   const store=new PostgresStore(null,original.pool,{v1Fence:fence});
-  assert.equal((await store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'})).revision,2);
+  assert.equal((await store.putVault(session,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'})).revision,2);
   assert.equal((await fence.snapshot()).v1Committed[0].revision,2);
   assert.equal((await verifyDeploymentCompatibility({query:(sql,values)=>original.pool.query(sql,values),fence,candidate:currentCapabilities})).writerFloor,1);
   restored=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);await restored.pool.query('DROP SCHEMA public CASCADE');await restored.pool.query('CREATE SCHEMA public');
@@ -401,6 +488,7 @@ test('lost Personal COMMIT reply stays pending until exact durable readback afte
     const user=randomUUID(),device=randomUUID();
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-commit-loss@example.test','p0_commit_loss',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    const session = await createPersonalWriteSession(db.pool, user, device);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
     await installV1CommitFence(db.pool);
@@ -412,7 +500,7 @@ test('lost Personal COMMIT reply stays pending until exact durable readback afte
       release(){c.release();},
     };}};
     const store=new PostgresStore(null,pool,{v1Fence:fence});
-    await assert.rejects(store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/synthetic_lost_commit_reply/);
+    await assert.rejects(store.putVault(session,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/synthetic_lost_commit_reply/);
     assert.equal(Number((await db.pool.query('SELECT revision FROM personal_vaults WHERE user_id=$1',[user])).rows[0].revision),2);
     const pending=(await fence.snapshot()).v1Pending;assert.equal(pending.length,1);
     const guard=()=>verifyDeploymentCompatibility({query:(sql,values)=>db.pool.query(sql,values),fence,candidate:currentCapabilities});
@@ -437,6 +525,7 @@ test('crash after durable V1 intent but before COMMIT stays pending and preserve
     const user=randomUUID(),device=randomUUID();
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-crash@example.test','p0_crash_test',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    const session = await createPersonalWriteSession(db.pool, user, device);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     const before=(await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows;
     fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
@@ -445,7 +534,7 @@ test('crash after durable V1 intent but before COMMIT stays pending and preserve
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     const crashing={anchor:fence.anchor,snapshot:()=>fence.snapshot(),async append(event){await fence.append(event);if(event.type==='V1_PENDING_INTENT')throw Error('synthetic_crash_after_intent');}};
     const store=new PostgresStore(null,db.pool,{v1Fence:crashing});
-    await assert.rejects(store.putVault(user,device,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/synthetic_crash_after_intent/);
+    await assert.rejects(store.putVault(session,{baseRevision:1,envelopeVersion:1,wrappedKey:{algorithm:'synthetic'},ciphertext:'bmV3',nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'}),/synthetic_crash_after_intent/);
     assert.deepEqual((await db.pool.query('SELECT id,revision,ciphertext FROM personal_vaults WHERE user_id=$1',[user])).rows,before);
     const pending=(await fence.snapshot()).v1Pending;assert.equal(pending.length,1);
     const guard=()=>verifyDeploymentCompatibility({query:(sql,values)=>db.pool.query(sql,values),fence,candidate:currentCapabilities});
@@ -468,6 +557,7 @@ test('concurrent current Personal writers cannot both commit the same base revis
     const user=randomUUID(),device=randomUUID();
     await db.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0-race@example.test','p0_race_test',now())",[user]);
     await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'test','web')",[device,user]);
+    const session = await createPersonalWriteSession(db.pool, user, device);
     await db.pool.query("INSERT INTO personal_vaults(user_id,revision,envelope_version,wrapped_key,ciphertext,nonce,auth_tag,content_hash) VALUES($1,1,1,'{}','c2VlZA','bm9uY2U','dGFn','aGFzaA')",[user]);
     fixture=await publicationRuntimeFixture(db.databaseURL);const fence=(await syntheticAnchoredFence(fixture.path));
     await installV1CommitFence(db.pool);
@@ -475,7 +565,7 @@ test('concurrent current Personal writers cannot both commit the same base revis
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
     const store=new PostgresStore(null,db.pool,{v1Fence:fence});
     const envelope=ciphertext=>({baseRevision:1,envelopeVersion:1,wrappedKey:{},ciphertext,nonce:'bm9uY2U',authTag:'dGFn',contentHash:'aGFzaA'});
-    const outcomes=await Promise.allSettled([store.putVault(user,device,envelope('Zmlyc3Q')),store.putVault(user,device,envelope('c2Vjb25k'))]);
+    const outcomes=await Promise.allSettled([store.putVault(session,envelope('Zmlyc3Q')),store.putVault(session,envelope('c2Vjb25k'))]);
     const successes=outcomes.filter(item=>item.status==='fulfilled'&&item.value.conflict===false);
     assert.equal(successes.length,1);
     for(const outcome of outcomes)if(outcome.status==='rejected')assert.match(outcome.reason.message,/deployment_fence_pending|deployment_fence_locked|deployment_v1_history_changed|deployment_v1_data_mismatch/);

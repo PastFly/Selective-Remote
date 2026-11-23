@@ -71,7 +71,8 @@ class MemoryStore {
   }
   async deleteAccount(userID) { this.deletedUserID = userID; this.sessions.clear(); return { deleted: true }; }
   async getVault() { return { id: "vault-1", revision: this.revision, envelope_version: 1, wrapped_key: null, ciphertext: null, nonce: null, auth_tag: null, content_hash: null, updated_at: new Date() }; }
-  async putVault(_userID, _deviceID, envelope) {
+  async putVault(session, envelope) {
+    this.lastVaultWriteSession = session;
     if (envelope.baseRevision !== this.revision) return { conflict: true, revision: this.revision };
     this.revision += 1;
     return { conflict: false, revision: this.revision };
@@ -120,7 +121,7 @@ test("registration sends an opaque verification token and issues no session", as
 test("vault writes use optimistic revisions", async () => {
   const store = new MemoryStore();
   const service = new CloudService(store, config);
-  const session = { user_id: "user-1", device_id: device.id };
+  const session = { session_id: "session-2", user_id: "user-1", device_id: device.id };
   const body = {
     baseRevision: 0,
     envelopeVersion: 1,
@@ -131,6 +132,7 @@ test("vault writes use optimistic revisions", async () => {
     contentHash: "D".repeat(43),
   };
   assert.deepEqual(await service.putVault(session, body), { conflict: false, revision: 1 });
+  assert.deepEqual(store.lastVaultWriteSession, session);
   assert.deepEqual(await service.putVault(session, body), { conflict: true, revision: 1 });
 });
 

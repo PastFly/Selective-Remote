@@ -12,7 +12,7 @@ import {
   requireMembershipChange,
   requireTeamPermission,
 } from "./team-policy.mjs";
-import { teamVaultWrapperContextHash } from "./security.mjs";
+import { isUUID, teamVaultWrapperContextHash } from "./security.mjs";
 import { vaultFoundationCapabilities } from "./vault-format.mjs";
 import {
   validateResourceCipherEnvelope,
@@ -20,6 +20,21 @@ import {
 } from "../public/resource-crypto-v2.js";
 
 const { Pool } = pg;
+
+async function requirePersonalVaultWriteSession(client, sessionID, userID, deviceID) {
+  const active = await client.query(
+    `SELECT s.id FROM sessions s
+     JOIN users u ON u.id = s.user_id
+     JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
+     WHERE s.id = $1 AND s.user_id = $2 AND s.device_id = $3
+       AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()
+       AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL
+       AND d.revoked_at IS NULL
+     FOR SHARE OF s`,
+    [sessionID, userID, deviceID],
+  );
+  if (!active.rows[0]) throw new Error("unauthorized");
+}
 
 // An empty Vault is part of the retained floor too. Its creation is journaled
 // inside the same transaction as its owner and cannot be inferred from a
@@ -1232,7 +1247,9 @@ export class PostgresStore {
     return result.rows[0] ?? null;
   }
 
-  async putVault(userID, deviceID, envelope) {
+  async putVault(session, envelope) {
+    const { session_id: sessionID, user_id: userID, device_id: deviceID } = session ?? {};
+    if (![sessionID, userID, deviceID].every(isUUID)) throw new Error("unauthorized");
     const client = await this.pool.connect();
     const fenced=this.v1Fence?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
     try {
@@ -1243,6 +1260,9 @@ export class PostgresStore {
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
       }
+      // Recheck the session after acquiring writer protection. The row lock
+      // keeps a concurrent session revocation from committing before this write.
+      await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);
       const vault = locked.rows[0];
       if (!vault) throw new Error("vault_missing");
@@ -1269,6 +1289,10 @@ export class PostgresStore {
         if(!committed)throw Error('deployment_v1_data_mismatch');
         await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind:'PERSONAL',ownerID:userID,vaultID:vault.id,
           baseRevision:envelope.baseRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash});
+      }
+      // The session can expire while the Vault lock or durable intent is pending.
+      await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
+      if(fenced){
         await fenced.commit();
         await fenced.confirm();
       }else await client.query("COMMIT");

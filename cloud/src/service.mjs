@@ -357,7 +357,7 @@ export class CloudService {
   }
 
   async putVault(session, input) {
-    return this.store.putVault(session.user_id, session.device_id, validateVaultEnvelope(input));
+    return this.store.putVault(session, validateVaultEnvelope(input));
   }
 
   async listTeams(session) {
