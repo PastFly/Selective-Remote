@@ -21,7 +21,7 @@ try {
     const candidate = candidateIndex === -1 ? currentCapabilities : JSON.parse(await readFile(args[candidateIndex + 1], 'utf8'));
     pool = new pg.Pool({ connectionString: config.databaseURL, max: 1 });
     configuredFence=createConfiguredMigrationFence(config.deployment);
-    const result = await verifyDeploymentCompatibility({ query: (text, values) => pool.query(text, values),
+    const { personalWritePilot: _pilot, ...result } = await verifyDeploymentCompatibility({ query: (text, values) => pool.query(text, values),
       fence: configuredFence.fence, candidate, mode });
     process.stdout.write(JSON.stringify(result) + '\n');
   }

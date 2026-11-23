@@ -16,9 +16,11 @@ import {wholePublicationRoute,runWholePublicationRoute} from './whole-publicatio
 import { createConfiguredMigrationFence } from './configured-migration-fence.mjs';
 import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 import { browserSessionBinding } from './browser-session-binding.mjs';
-import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write } from './v1-write-fence.mjs';
+import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write,
+  personalVaultPilotHeader, personalVaultPilotValue, isPrivatePersonalPilotEnvironment, personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 
 const config = loadConfig();
+const privatePersonalPilotEnvironment = isPrivatePersonalPilotEnvironment(config);
 const configuredFence = createConfiguredMigrationFence(config.deployment);
 const deploymentFence = configuredFence.fence;
 const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence });
@@ -64,6 +66,8 @@ async function route(request, response) {
   let deploymentEvidence;
   try { deploymentEvidence = await checkDeployment(); }
   catch { return sendError(response, 503, "publication_guard_unavailable"); }
+  const pilot = privatePersonalPilotEnvironment && personalWritePilotIsCurrent(deploymentEvidence.personalWritePilot)
+    ? deploymentEvidence.personalWritePilot : null;
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
     return sendJSON(response, 200, { status: "ready" });
@@ -71,6 +75,7 @@ async function route(request, response) {
   if (method === "GET" && url.pathname === "/v1/meta") {
     if (deploymentEvidence?.writerFloor === 1) response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
     response.setHeader("X-Selective-V1-Write-Status", v1WriteStopReason);
+    if (pilot) response.setHeader(personalVaultPilotHeader, personalVaultPilotValue);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "GET" && url.pathname === "/v1/auth/username-availability") {
@@ -146,10 +151,9 @@ async function route(request, response) {
     if (v1WriteRequiresFence(method, url.pathname) && deploymentEvidence?.writerFloor !== 1) {
       return sendError(response, 503, "vault_write_fence_unavailable");
     }
-    // Until mixed-version storage cutover is proven safe, a newly framed
-    // writer can still publish a snapshot missing late legacy local edits.
-    // Keep both V1 whole-Vault routes read-only, including for current clients.
-    if (v1WriteRequiresFence(method, url.pathname)) {
+    // The retained pilot permits only the selected Personal owner in private staging.
+    if (v1WriteRequiresFence(method, url.pathname)
+      && (url.pathname !== "/v1/vault" || pilot?.ownerID !== session.user_id)) {
       return sendError(response, 503, v1WriteStopReason);
     }
     // Team membership, roles and device trust are not yet included in the
@@ -308,7 +312,7 @@ async function route(request, response) {
     }
     if (method === "PUT" && url.pathname === "/v1/vault") {
       try {
-        const result = await service.putVault(session, unwrapV1Write(await readJSON(request)));
+        const result = await service.putVault(session, unwrapV1Write(await readJSON(request)), { pilotID: pilot.pilotID });
         return result.conflict ? sendJSON(response, 409, result) : sendJSON(response, 200, result);
       } catch (error) {
         return handleOperationError(response, error);

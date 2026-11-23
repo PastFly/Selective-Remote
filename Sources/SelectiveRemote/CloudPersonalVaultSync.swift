@@ -677,7 +677,7 @@ extension SelectiveRemoteCloudAPIClient {
         envelope: SelectiveRemotePersonalVaultEnvelope,
         session: SelectiveRemoteCloudSessionBinding
     ) async throws -> SelectiveRemoteCloudPersonalVaultWriteResult {
-        try await requireV1WriteFence(endpoint: endpoint, session: session)
+        try await requireV1WriteFence(endpoint: endpoint, session: session, personal: true)
         let body = try JSONEncoder().encode(SelectiveRemoteV1WriteFrame(envelope: envelope))
         try checkLocalPersonalVaultWrite()
         let (data, response) = try await authorizedResponse(

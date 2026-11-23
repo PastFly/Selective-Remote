@@ -44,6 +44,18 @@ export function validateFenceEvent(value){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
  }
+ if(value.type==='V1_PERSONAL_PILOT_OPENED'){
+  if(!keys(value,['version','type','pilotID','ownerID','vaultID','issuedAt','expiresAt'])||
+   ![value.pilotID,value.ownerID,value.vaultID].every(isUUID)||
+   ![value.issuedAt,value.expiresAt].every(Number.isSafeInteger)||value.issuedAt<=0||
+   value.expiresAt<=value.issuedAt||value.expiresAt-value.issuedAt>60*60*1000)invalid();
+  return {version:2,type:value.type,pilotID:value.pilotID,ownerID:value.ownerID,vaultID:value.vaultID,
+   issuedAt:value.issuedAt,expiresAt:value.expiresAt};
+ }
+ if(value.type==='V1_PERSONAL_PILOT_CLOSED'){
+  if(!keys(value,['version','type','pilotID'])||!isUUID(value.pilotID))invalid();
+  return {version:2,type:value.type,pilotID:value.pilotID};
+ }
  const revocationField={V1_SESSION_REVOKED:'sessionID',V1_DEVICE_REVOKED:'deviceID',V1_ACCOUNT_REVOKED:'userID'}[value.type];
  if(typeof revocationField==='string'){
   if(!keys(value,['version','type',revocationField])||!isUUID(value[revocationField]))invalid();
@@ -69,13 +81,17 @@ export function validateFenceEvent(value){
   return {version:2,type:value.type,baselineID:value.baselineID,vaults};
  }
  if(value.type==='V1_PENDING_INTENT'){
-  if(!keys(value,['version','type','intentID','operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'])
+  const fields=['version','type','intentID','operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'];
+  const pilot=Object.hasOwn(value,'pilotID');
+  if(!keys(value,pilot?[...fields,'pilotID']:fields)
+   ||(pilot&&(!isUUID(value.pilotID)||value.vaultKind!=='PERSONAL'||value.baseRevision<0))
    ||!isUUID(value.intentID)||!isUUID(value.operationID)||!['PERSONAL','TEAM'].includes(value.vaultKind)
    ||!isUUID(value.ownerID)||!isUUID(value.vaultID)||!Number.isSafeInteger(value.baseRevision)||value.baseRevision< -1
    ||!Number.isSafeInteger(value.revision)||value.revision!==value.baseRevision+1||!isHash(value.ciphertextHash)||!isHash(value.envelopeHash)
    ||(value.baseRevision===-1&&value.ciphertextHash!==emptyV1CiphertextHash))invalid();
   return {version:2,type:value.type,intentID:value.intentID,operationID:value.operationID,vaultKind:value.vaultKind,
-   ownerID:value.ownerID,vaultID:value.vaultID,baseRevision:value.baseRevision,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash};
+   ownerID:value.ownerID,vaultID:value.vaultID,baseRevision:value.baseRevision,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash,
+   ...(pilot?{pilotID:value.pilotID}:{})};
  }
  if(value.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
   if(!keys(value,['version','type','intentID','operationID','changes'])||!isUUID(value.intentID)||!isUUID(value.operationID)
@@ -121,10 +137,25 @@ export function reduceFenceEvents(events){
  const v1Intents=new Map(),v1Outcomes=new Map(),v1Committed=new Map(),v1Pending=new Map(),v1Owners=new Map(),v1Operations=new Map();
  const revokedSessionIDs=new Set(),revokedDeviceIDs=new Set(),revokedAccountIDs=new Set();
  const passwordResetIDs=new Map(),passwordIdentityIDs=new Map();
- let writerFloor=0,v1Baseline=null;
+ const pilotIDs=new Set();
+ let writerFloor=0,v1Baseline=null,personalWritePilot=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
   if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
+  if(event.type==='V1_PERSONAL_PILOT_OPENED'){
+   const vault=v1Committed.get('PERSONAL:'+event.vaultID);
+   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||personalWritePilot||pilotIDs.has(event.pilotID)||
+    vault?.ownerID!==event.ownerID||revokedAccountIDs.has(event.ownerID))conflict();
+   pilotIDs.add(event.pilotID);
+   personalWritePilot=event;
+   continue;
+  }
+  if(event.type==='V1_PERSONAL_PILOT_CLOSED'){
+   if(personalWritePilot?.pilotID!==event.pilotID||
+    [...v1Pending.values()].some(intent=>intent.pilotID===event.pilotID))conflict();
+   personalWritePilot=null;
+   continue;
+  }
   if(event.type==='V1_SESSION_REVOKED'){
    if(writerFloor!==1||!v1Baseline)conflict();
    revokedSessionIDs.add(event.sessionID);continue;
@@ -157,6 +188,8 @@ export function reduceFenceEvents(events){
    const digest=fenceIntentDigest(event),old=v1Intents.get(event.intentID);
    const intent={...event,intentDigest:digest},key=event.vaultKind+':'+event.vaultID;
    if(old){if(!same(old,intent))conflict();continue;}
+   if(event.pilotID&&(personalWritePilot?.pilotID!==event.pilotID||personalWritePilot.ownerID!==event.ownerID||
+     personalWritePilot.vaultID!==event.vaultID||revokedAccountIDs.has(event.ownerID)))conflict();
    if(v1Operations.has(event.operationID))conflict();
    if(v1Owners.has(key)&&v1Owners.get(key)!==event.ownerID)conflict();
    if([...v1Pending.values()].some(p=>p.type==='V1_WRAPPER_BATCH_PENDING_INTENT'?p.changes.some(change=>change.vaultKind===event.vaultKind&&change.vaultID===event.vaultID):p.vaultKind===event.vaultKind&&p.vaultID===event.vaultID))conflict();
@@ -225,6 +258,7 @@ export function reduceFenceEvents(events){
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
  return {...(writerFloor?{writerFloor}:{}),
+  ...(personalWritePilot?{personalWritePilot}:{}),
   ...(revokedSessionIDs.size?{revokedSessionIDs:[...revokedSessionIDs].sort(compare)}:{}),
   ...(revokedDeviceIDs.size?{revokedDeviceIDs:[...revokedDeviceIDs].sort(compare)}:{}),
   ...(revokedAccountIDs.size?{revokedAccountIDs:[...revokedAccountIDs].sort(compare)}:{}),

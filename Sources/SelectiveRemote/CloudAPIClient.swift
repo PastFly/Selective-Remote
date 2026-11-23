@@ -467,7 +467,7 @@ actor SelectiveRemoteCloudAPIClient {
         return metadata
     }
 
-    func requireV1WriteFence(endpoint: URL, session: SelectiveRemoteCloudSessionBinding) async throws {
+    func requireV1WriteFence(endpoint: URL, session: SelectiveRemoteCloudSessionBinding, personal: Bool = false) async throws {
         guard session.endpoint == endpoint else { throw CancellationError() }
         try checkSession(session)
         try boundPublicationSession?.check()
@@ -480,6 +480,7 @@ actor SelectiveRemoteCloudAPIClient {
         try checkSession(session)
         try boundPublicationSession?.check()
         if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+           !(personal && http.value(forHTTPHeaderField: "X-Selective-Personal-Vault-Write-Status") == "pilot"),
            http.value(forHTTPHeaderField: "X-Selective-V1-Write-Status") == "vault_write_temporarily_unavailable" {
             throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
         }

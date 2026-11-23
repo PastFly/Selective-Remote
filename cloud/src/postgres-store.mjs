@@ -4,6 +4,7 @@ import { WholePublicationStore } from './whole-publication-store.mjs';
 import { holdV1CommitFence } from './v1-commit-fence.mjs';
 import { createPublicationFenceTransaction } from './publication-fence-coordinator.mjs';
 import { assertV1DataFloor, readV1VaultState, v1CiphertextHash } from './v1-data-fence.mjs';
+import { personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 import pg from "pg";
 import { AccessSurfaceStore } from "./access-surface-store.mjs";
 import { createHash, randomUUID } from "node:crypto";
@@ -1339,11 +1340,12 @@ export class PostgresStore {
     return result.rows[0] ?? null;
   }
 
-  async putVault(session, envelope) {
+  async putVault(session, envelope, { pilotID = null } = {}) {
     const { session_id: sessionID, user_id: userID, device_id: deviceID } = session ?? {};
     if (![sessionID, userID, deviceID].every(isUUID)) throw new Error("unauthorized");
     const client = await this.pool.connect();
     const fenced=this.v1Fence?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
+    let pilot;
     try {
       await client.query("BEGIN");
       await this.writerFence(client, this.v1Fence);
@@ -1354,11 +1356,16 @@ export class PostgresStore {
         const snapshot=await this.v1Fence.snapshot();
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
         if(!sessionIsCurrent(snapshot,userID,deviceID,sessionID,active.password_identity_id))throw new Error("unauthorized");
+        pilot = snapshot.personalWritePilot;
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
       }
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);
       const vault = locked.rows[0];
       if (!vault) throw new Error("vault_missing");
+      if (pilotID !== null && (!personalWritePilotIsCurrent(pilot) || pilot.pilotID !== pilotID
+          || pilot.ownerID !== userID || pilot.vaultID !== vault.id)) {
+        throw new Error("vault_write_temporarily_unavailable");
+      }
       if (Number(vault.revision) !== envelope.baseRevision) {
         await client.query("ROLLBACK");
         return { conflict: true, revision: Number(vault.revision) };
@@ -1381,10 +1388,14 @@ export class PostgresStore {
         const committed=(await readV1VaultState((sql,values)=>client.query(sql,values))).find(row=>row.vaultKind==='PERSONAL'&&row.vaultID===vault.id);
         if(!committed)throw Error('deployment_v1_data_mismatch');
         await fenced.beforeCommit({kind:'V1',operationID:randomUUID(),vaultKind:'PERSONAL',ownerID:userID,vaultID:vault.id,
-          baseRevision:envelope.baseRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash});
+          baseRevision:envelope.baseRevision,revision,ciphertextHash:v1CiphertextHash(envelope.ciphertext),envelopeHash:committed.envelopeHash,
+          ...(pilotID === null ? {} : { pilotID })});
       }
       // The session can expire while the Vault lock or durable intent is pending.
       await requirePersonalVaultWriteSession(client, sessionID, userID, deviceID);
+      if (pilotID !== null && !personalWritePilotIsCurrent(pilot)) {
+        throw new Error("vault_write_temporarily_unavailable");
+      }
       if(fenced){
         await fenced.commit();
         await fenced.confirm();

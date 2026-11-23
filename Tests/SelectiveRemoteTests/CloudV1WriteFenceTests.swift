@@ -101,7 +101,7 @@ struct CloudV1WriteFenceTests {
         #expect(await calls.count == 0)
     }
 
-    @Test("Personal upload uses the framed protocol advertised by Cloud")
+    @Test("Personal upload uses the framed protocol during a scoped pilot")
     func sendsFramedWrite() async throws {
         let endpoint = URL(string: "https://fence-\(UUID()).example.invalid")!
         let tokens = SelectiveRemoteCloudMemoryTokenStore()
@@ -109,7 +109,11 @@ struct CloudV1WriteFenceTests {
         let calls = CloudV1FenceCalls()
         let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
             if request.url?.path == "/v1/meta" {
-                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: [
+                    "X-Selective-V1-Write-Fence": "1",
+                    "X-Selective-V1-Write-Status": "vault_write_temporarily_unavailable",
+                    "X-Selective-Personal-Vault-Write-Status": "pilot",
+                ])!)
             }
             await calls.record(request)
             return (Data("{\"conflict\":false,\"revision\":1}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)

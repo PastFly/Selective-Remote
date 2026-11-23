@@ -192,7 +192,8 @@ export class MigrationFence{
     if(!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'
       ||record.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||record.type==='V1_SESSION_REVOKED'
       ||record.type==='V1_DEVICE_REVOKED'||record.type==='V1_ACCOUNT_REVOKED'
-      ||record.type==='V1_PASSWORD_RESET_ISSUED'||record.type==='V1_PASSWORD_RESET_COMPLETED'){
+      ||record.type==='V1_PASSWORD_RESET_ISSUED'||record.type==='V1_PASSWORD_RESET_COMPLETED'
+      ||record.type==='V1_PERSONAL_PILOT_CLOSED'){
      // Reserve the larger terminal outcome for every pending intent, including
      // legacy IDs. New work must not consume another intent's resolution space.
      const reserved=snapshot.pending.reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({

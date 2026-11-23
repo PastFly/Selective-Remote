@@ -556,7 +556,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
   const identityListeners = new Set();
   function invalidateIdentity(cause = undefined) { sessionEpoch++; for (const listener of identityListeners) listener(cause); }
 
-  async function requireV1WriteFence() {
+  async function requireV1WriteFence({ personal = false } = {}) {
     const epoch = sessionEpoch, account = user?.id, device = currentDeviceID;
     if (!account) throw new Error("authentication_required");
     const requireCurrent = () => {
@@ -565,7 +565,8 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     const response = await fetchValue("/v1/meta", { headers: { Accept: "application/json" },
       cache: "no-store", credentials: "same-origin", referrerPolicy: "no-referrer" });
     requireCurrent();
-    if (response.ok && response.headers?.get("x-selective-v1-write-status") === "vault_write_temporarily_unavailable") {
+    const personalPilot = personal && response.headers?.get("x-selective-personal-vault-write-status") === "pilot";
+    if (response.ok && !personalPilot && response.headers?.get("x-selective-v1-write-status") === "vault_write_temporarily_unavailable") {
       throw new Error("vault_write_temporarily_unavailable");
     }
     if (!response.ok || response.headers?.get("x-selective-v1-write-fence") !== "1") {
@@ -1411,7 +1412,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     async putVault(scope = personalVaultScope, envelope) {
       normalizedScope(scope);
       const normalized = normalizedEnvelope(envelope);
-      const requireCurrent = await requireV1WriteFence();
+      const requireCurrent = await requireV1WriteFence({ personal: true });
       requireCurrent();
       const response = await authorizedRequest("/v1/vault", {
         method: "PUT",
