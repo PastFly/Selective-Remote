@@ -1409,6 +1409,11 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       return normalizedRemoteVault(await responseJSON(response, "vault_download_failed"));
     },
 
+    async preflightPersonalVaultWrite() {
+      const requireCurrent = await requireV1WriteFence({ personal: true });
+      requireCurrent();
+    },
+
     async putVault(scope = personalVaultScope, envelope) {
       normalizedScope(scope);
       const normalized = normalizedEnvelope(envelope);

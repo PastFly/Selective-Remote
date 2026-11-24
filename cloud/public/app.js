@@ -4922,6 +4922,8 @@ export async function bootstrapPersonalVault({
   }
   session.requireCurrent();
   if (status === "empty" && result.status === "empty") {
+    await client.preflightPersonalVaultWrite();
+    session.requireCurrent();
     await vault.create(passphrase);
     session.requireCurrent();
     await vault.bindAccountOwnership(session.accountID);

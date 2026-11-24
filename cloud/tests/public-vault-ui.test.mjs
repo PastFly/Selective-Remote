@@ -5,7 +5,7 @@ import test from "node:test";
 import { createIndexedDBVaultRepository, createLocalVaultController } from "../public/vault-local.js";
 import { IDBFactory } from "./approved-idb-fixture.mjs";
 import { encryptVaultPayload } from "../public/vault-crypto.js";
-import { capturePersonalVaultSession, synchronizeVault } from "../public/vault-sync.js";
+import { capturePersonalVaultSession, createAuthenticatedVaultClient, synchronizeVault } from "../public/vault-sync.js";
 import * as application from "../public/app.js";
 
 test("writer compatibility errors tell Personal and Team users to update without clearing data", async () => {
@@ -1009,9 +1009,11 @@ test("interactive browser bootstrap creates exactly one encrypted r1 for an unin
   const vault = testVault(memoryVaultRepository(), ["11111111-1111-4111-8111-111111111111"]);
   let remote = { id: "99999999-9999-4999-8999-999999999999", revision: 0, envelope: null };
   let uploads = 0;
+  let preflights = 0;
   const client = {
     session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
     async getVault() { return structuredClone(remote); },
+    async preflightPersonalVaultWrite() { preflights += 1; },
     async putVault(_scope, envelope) {
       uploads += 1;
       assert.equal(envelope.baseRevision, 0);
@@ -1025,8 +1027,65 @@ test("interactive browser bootstrap creates exactly one encrypted r1 for an unin
 
   assert.equal(result.status, "uploaded");
   assert.equal(result.revision, 1);
+  assert.equal(preflights, 1);
   assert.equal(uploads, 1);
   assert.equal(await vault.status(), "unlocked");
+});
+
+test("a closed Personal pilot leaves the first browser ready to import enrollment from another device", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const browserID = "11111111-1111-4111-8111-111111111111";
+  const otherDeviceID = "22222222-2222-4222-8222-222222222222";
+  const vaultID = "99999999-9999-4999-8999-999999999999";
+  const password = "synthetic account password";
+  const passphrase = accountVaultPassphrase(password);
+  let opened = false;
+  let writes = 0;
+  let remote = {
+    id: vaultID, revision: 0, envelopeVersion: 1, updatedAt: null,
+    wrappedKey: null, ciphertext: null, nonce: null, authTag: null, contentHash: null,
+  };
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
+    if (path === "/v1/auth/login") {
+      return Response.json({
+        token: "s".repeat(43), user: { id: accountID, email: "pilot@example.invalid" }, deviceID: browserID,
+      }, { headers: { "X-Selective-Session-Binding": otherDeviceID } });
+    }
+    if (path === "/v1/meta") {
+      const headers = {
+        "X-Selective-V1-Write-Fence": "1",
+        "X-Selective-V1-Write-Status": "vault_write_temporarily_unavailable",
+      };
+      if (opened) headers["X-Selective-Personal-Vault-Write-Status"] = "pilot";
+      return Response.json({}, { headers });
+    }
+    if (path === "/v1/vault" && options.method === "PUT") {
+      writes += 1;
+      throw new Error("unexpected_browser_write");
+    }
+    if (path === "/v1/vault") return Response.json(remote);
+    throw new Error("unexpected_request");
+  } });
+  await client.login({ email: "pilot@example.invalid", password, deviceID: browserID });
+  const repository = memoryVaultRepository();
+  const browser = testVault(repository, [browserID]);
+  await assert.rejects(bootstrapPersonalVault({ vault: browser, client, passphrase }),
+    /vault_write_temporarily_unavailable/u);
+  assert.equal(client.session().id, accountID);
+  const storedWhileClosed = await repository.load() !== null;
+
+  const firstWriter = testVault(memoryVaultRepository(), [otherDeviceID]);
+  await firstWriter.create(passphrase);
+  const { baseRevision: _, ...envelope } = (await firstWriter.prepareUpload(0)).envelope;
+  opened = true;
+  remote = { ...remote, revision: 1, ...envelope };
+  browser.lock();
+  const sameBrowser = testVault(repository, [browserID]);
+  assert.deepEqual(await bootstrapPersonalVault({ vault: sameBrowser, client, passphrase }),
+    { status: "downloaded", revision: 1 });
+  assert.equal(await sameBrowser.status(), "unlocked");
+  assert.equal(storedWhileClosed, false, "the closed pilot must leave no browser-generated wrapper");
+  assert.equal(writes, 0);
 });
 
 test("a new account can retry its own initial upload after a failed connection and reload", async () => {
@@ -1037,6 +1096,7 @@ test("a new account can retry its own initial upload after a failed connection a
   const client = {
     session: () => ({ id: accountID }),
     async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 0, envelope: null }; },
+    async preflightPersonalVaultWrite() {},
     async putVault() {
       attempts += 1;
       if (attempts === 1) throw new Error("network_unavailable");
@@ -1067,6 +1127,7 @@ test("fresh-account interactive login uses one credential flow, persists trusted
   const client = {
     session: () => ({ id: accountID }),
     async getVault() { return structuredClone(remote); },
+    async preflightPersonalVaultWrite() {},
     async putVault(_scope, envelope) {
       remote = { ...remote, revision: 1, envelope };
       return { conflict: false, revision: 1 };
