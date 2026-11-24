@@ -39,7 +39,7 @@ test("mobile workspace keeps the sync status readable and its panel usable", {
         document.body.dataset.portalView = "workspace";
         document.querySelector("#cloud-workspace").hidden = false;
       });
-      for (const width of [320, 390, 560]) for (const theme of ["graphite", "light"]) {
+      for (const width of [320, 390, 560, 650, 880]) for (const theme of ["graphite", "light"]) {
         await page.setViewportSize({ width, height: 844 });
         await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
         for (const text of [
