@@ -1,0 +1,27 @@
+name: Verify native Personal Vault enrollment preflight
+on:
+  push:
+    branches: [codex/verify-pr257-native-enrollment]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: c13b548b47713ae3fb594f90ac44e093fdd010c6
+  CANDIDATE_TREE: 6248b9421a49c1630cfb83c3fa7d73188f0a71f4
+jobs:
+  native:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Verify native enrollment and Personal Vault synchronization
+        run: |
+          set -o pipefail
+          swift test --filter 'PersonalVaultEnrollmentSafetyTests|CloudV1WriteFenceTests|PersonalVaultAutoSyncCheckTests|CloudPersonalVaultSyncTests|NativeLegacyProfileChangeTests' 2>&1 | tee "$RUNNER_TEMP/native-enrollment.log"
+          grep -Eq 'Test run with 57 tests.*passed' "$RUNNER_TEMP/native-enrollment.log"
