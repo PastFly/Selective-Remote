@@ -1,0 +1,29 @@
+name: Verify macOS Cloud browser endpoint
+on:
+  push:
+    branches: [codex/verify-cloud-menu-browser-endpoint]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: effec33757a82eb3e857db8f0a4b2524d9a11e1e
+  CANDIDATE_TREE: 23882275a7db5a49f3a8cf1fa9b52e6d872c7b9b
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Test Cloud browser routes and native enrollment
+        run: |
+          set -o pipefail
+          swift test --filter 'CloudFoundationTests|SyncPresentationTests|PersonalVaultEnrollmentSafetyTests' 2>&1 | tee "$RUNNER_TEMP/cloud-browser.log"
+          grep -F 'Browser sign-in uses the configured host and port' "$RUNNER_TEMP/cloud-browser.log"
+          grep -F 'Browser sign-in rejects an invalid endpoint without falling back to production' "$RUNNER_TEMP/cloud-browser.log"
+          grep -Eq 'Test run with [1-9][0-9]* tests.*passed' "$RUNNER_TEMP/cloud-browser.log"
