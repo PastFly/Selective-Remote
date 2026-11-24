@@ -331,6 +331,17 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(await f.http.uploadedEnvelopes().isEmpty)
         #expect(f.keys.saveCount == 0)
 
+        await f.http.setPersonalPilotOpen(true, allowsSession: false)
+        do {
+            _ = try await f.enrollment.resumeInitialEnrollment(
+                pending, profiles: [], snippets: [f.local], forwarding: [],
+                collectUploadSecrets: { throw PasswordResetReproError.unexpectedSecretCollection }
+            )
+            Issue.record("An account outside the pilot unexpectedly enrolled")
+        } catch SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable") {}
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
+        #expect(f.keys.saveCount == 0)
+
         if otherDeviceWon {
             let first = try SelectiveRemotePersonalVaultCrypto.InitialWrappingKey(
                 accountID: Self.accountID, vaultID: Self.vaultID, passphrase: SelectiveRemotePersonalVaultCrypto.accountPassphrase(Self.newPassword)
@@ -396,6 +407,7 @@ private actor PasswordResetMemoryHTTP {
     private var uploads: [SelectiveRemotePersonalVaultEnvelope] = []
     private var paths: [String] = []
     private var personalPilotOpen: Bool?
+    private var personalPilotAllowsSession = true
     static let secondDeviceID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
     private var token = String(repeating: "s", count: 43)
 
@@ -409,7 +421,10 @@ private actor PasswordResetMemoryHTTP {
     }
     func uploadedEnvelopes() -> [SelectiveRemotePersonalVaultEnvelope] { uploads }
     func requestPaths() -> [String] { paths }
-    func setPersonalPilotOpen(_ open: Bool) { personalPilotOpen = open }
+    func setPersonalPilotOpen(_ open: Bool, allowsSession: Bool = true) {
+        personalPilotOpen = open
+        personalPilotAllowsSession = allowsSession
+    }
     func initializeVaultFromAnotherDevice(_ envelope: SelectiveRemotePersonalVaultEnvelope) {
         self.envelope = envelope
         revision = 1
@@ -429,6 +444,13 @@ private actor PasswordResetMemoryHTTP {
             let url = try #require(request.url)
             let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers))
             return (Data("{}".utf8), response)
+        case ("GET", "/v1/vault/write-availability"):
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+            let response = try #require(HTTPURLResponse(
+                url: try #require(request.url), statusCode: personalPilotAllowsSession ? 204 : 503,
+                httpVersion: nil, headerFields: nil
+            ))
+            return (Data(), response)
         case ("POST", "/v1/auth/login"):
             let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
             guard body?["password"] as? String == acceptedPassword else {

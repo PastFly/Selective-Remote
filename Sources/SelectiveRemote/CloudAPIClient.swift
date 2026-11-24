@@ -486,15 +486,25 @@ actor SelectiveRemoteCloudAPIClient {
         let (_, response) = try await dataLoader(request)
         try checkSession(session)
         try boundPublicationSession?.check()
-        if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-           !(personal && http.value(forHTTPHeaderField: "X-Selective-Personal-Vault-Write-Status") == "pilot"),
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required") }
+        let personalPilot = personal && http.value(forHTTPHeaderField: "X-Selective-Personal-Vault-Write-Status") == "pilot"
+        if !personalPilot,
            http.value(forHTTPHeaderField: "X-Selective-V1-Write-Status") == "vault_write_temporarily_unavailable" {
             throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
         }
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode),
-              http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"
+        guard http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"
         else { throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required") }
+        if personalPilot {
+            let (_, availability) = try await authorizedResponse(
+                endpoint: endpoint, path: "v1/vault/write-availability",
+                headers: ["Cache-Control": "no-store"], session: session
+            )
+            try boundPublicationSession?.check()
+            guard availability.statusCode == 204 else {
+                throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+            }
+        }
     }
 
     func hasStoredSession(endpoint: URL) -> Bool {

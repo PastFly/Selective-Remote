@@ -152,8 +152,9 @@ async function route(request, response) {
       return sendError(response, 503, "vault_write_fence_unavailable");
     }
     // The retained pilot permits only the selected Personal owner in private staging.
+    const personalPilotAllowed = pilot?.ownerID === session.user_id;
     if (v1WriteRequiresFence(method, url.pathname)
-      && (url.pathname !== "/v1/vault" || pilot?.ownerID !== session.user_id)) {
+      && (url.pathname !== "/v1/vault" || !personalPilotAllowed)) {
       return sendError(response, 503, v1WriteStopReason);
     }
     // Team membership, roles and device trust are not yet included in the
@@ -302,6 +303,10 @@ async function route(request, response) {
     }
     if (method === "GET" && url.pathname === "/v1/vault") {
       return sendJSON(response, 200, await service.getVault(session));
+    }
+    if (method === "GET" && url.pathname === "/v1/vault/write-availability") {
+      return personalPilotAllowed && deploymentEvidence?.writerFloor === 1
+        ? empty(response, 204) : sendError(response, 503, v1WriteStopReason);
     }
     const vaultRevision = /^\/v1\/vault\/revisions\/([1-9][0-9]*)$/u.exec(url.pathname);
     if (method === "GET" && vaultRevision) {

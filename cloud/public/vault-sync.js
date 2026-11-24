@@ -574,6 +574,11 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     if (!response.ok || response.headers?.get("x-selective-v1-write-fence") !== "1") {
       throw new Error("vault_client_upgrade_required");
     }
+    if (personalPilot) {
+      const availability = await authorizedRequest("/v1/vault/write-availability");
+      requireCurrent();
+      if (availability.status !== 204) throw new Error("vault_write_temporarily_unavailable");
+    }
     return requireCurrent;
   }
 

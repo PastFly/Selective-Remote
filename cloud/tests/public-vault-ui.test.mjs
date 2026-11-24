@@ -1043,6 +1043,7 @@ for (const concurrent of [false, true]) test(
   const password = "synthetic account password";
   const passphrase = accountVaultPassphrase(password);
   let opened = false;
+  let admitted = false;
   let writes = 0;
   let winningEnvelope;
   let remote = {
@@ -1062,6 +1063,9 @@ for (const concurrent of [false, true]) test(
       };
       if (opened) headers["X-Selective-Personal-Vault-Write-Status"] = "pilot";
       return Response.json({}, { headers });
+    }
+    if (path === "/v1/vault/write-availability") {
+      return new Response(null, { status: admitted ? 204 : 503 });
     }
     if (path === "/v1/vault" && options.method === "PUT") {
       writes += 1;
@@ -1103,6 +1107,9 @@ for (const concurrent of [false, true]) test(
   await context.backgroundPersonalVaultSync();
   assert.deepEqual(modes, []);
   opened = true;
+  assert.deepEqual(await enrollment.resume(), { status: "enrollment_pending" });
+  assert.equal(writes, 0);
+  admitted = true;
   if (!concurrent) remote = { ...remote, revision: 1, ...envelope };
   await context.backgroundPersonalVaultSync();
   assert.deepEqual(results, [{ status: "downloaded", revision: 1 }]);

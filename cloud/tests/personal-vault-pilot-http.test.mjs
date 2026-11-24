@@ -173,6 +173,11 @@ test("private HTTPS pilot syncs two authenticated writers across restart and clo
     });
     assert.equal(login.status, 200);
     const nativeHeaders = { Authorization: `Bearer ${(await login.json()).token}`, "Content-Type": "application/json" };
+    const admissionPath = "/v1/vault/write-availability";
+    assert.equal((await fetchValue(admissionPath)).status, 401);
+    assert.equal((await fetchValue(admissionPath, { headers: nativeHeaders })).status, 204);
+    await browser.preflightPersonalVaultWrite();
+    await assert.rejects(outsider.preflightPersonalVaultWrite(), /vault_write_temporarily_unavailable/);
     const nativeRead = async () => {
       const response = await fetchValue("/v1/vault", { headers: nativeHeaders });
       assert.equal(response.status, 200);
@@ -216,6 +221,7 @@ test("private HTTPS pilot syncs two authenticated writers across restart and clo
     assert.equal(setPilot("staging", "close", pilotID), "personal_pilot_closed");
     const afterClose = await fetchValue("/v1/meta");
     assert.equal(afterClose.headers.get("x-selective-personal-vault-write-status"), null);
+    assert.equal((await fetchValue(admissionPath, { headers: nativeHeaders })).status, 503);
     await assert.rejects(browser.putVault(personalVaultScope, await encrypt("Closed pilot", 2)), /vault_write_temporarily_unavailable/);
     assert.equal((await nativeRead()).revision, 2);
   } finally {

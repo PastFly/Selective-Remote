@@ -69,6 +69,10 @@ test("current browser sends a framed Personal write during a scoped pilot and ke
       "X-Selective-V1-Write-Status": "vault_write_temporarily_unavailable",
       "X-Selective-Personal-Vault-Write-Status": "pilot",
     } });
+    if (path === "/v1/vault/write-availability") {
+      assert.equal(options.headers.Authorization, `Bearer ${"a".repeat(43)}`);
+      return new Response(null, { status: 204 });
+    }
     if (path === "/v1/vault" && options.method === "PUT") {
       body = JSON.parse(options.body); marker = options.headers["X-Selective-V1-Write-Fence"];
       personalWriter = options.headers["X-Selective-Personal-Vault-Writer"];
@@ -77,6 +81,7 @@ test("current browser sends a framed Personal write during a scoped pilot and ke
     throw Error("unexpected_request");
   } });
   await client.login({ email: "test@example.invalid", password: "synthetic", deviceID: device });
+  await client.preflightPersonalVaultWrite();
   assert.deepEqual(await client.putVault(personalVaultScope, envelope), { conflict: false, revision: 1 });
   const { wrappedKey: _, ...teamEnvelope } = envelope;
   await assert.rejects(client.putTeamVault({ type: "team", teamID: user, vaultID: device },

@@ -115,6 +115,10 @@ struct CloudV1WriteFenceTests {
                     "X-Selective-Personal-Vault-Write-Status": "pilot",
                 ])!)
             }
+            if request.url?.path == "/v1/vault/write-availability" {
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer " + String(repeating: "t", count: 43))
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+            }
             await calls.record(request)
             return (Data("{\"conflict\":false,\"revision\":1}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }, checkLocalPersonalVaultWrite: {})
