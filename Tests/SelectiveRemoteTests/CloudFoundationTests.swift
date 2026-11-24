@@ -34,6 +34,28 @@ struct CloudFoundationTests {
         }
     }
 
+    @Test("Browser sign-in uses the configured host and port")
+    func browserSignInUsesConfiguredEndpoint() {
+        let production = SelectiveRemoteCloudPortalURL.login(endpoint: SelectiveRemoteCloudEndpoint.production)
+        #expect(production?.absoluteString == "https://cloud.pastfly.ru/?auth=login")
+
+        let staging = SelectiveRemoteCloudPortalURL.login(endpoint: " https://staging.example.test:8443/ ")
+        #expect(staging?.absoluteString == "https://staging.example.test:8443/?auth=login")
+
+        let development = SelectiveRemoteCloudPortalURL.login(endpoint: "http://localhost:8080")
+        #expect(development?.absoluteString == "http://localhost:8080/?auth=login")
+    }
+
+    @Test("Browser sign-in rejects an invalid endpoint without falling back to production", arguments: [
+        "",
+        "http://staging.example.test:8443",
+        "https://staging.example.test:8443/?auth=registration",
+        "https://user:password@staging.example.test:8443",
+    ])
+    func browserSignInRejectsInvalidEndpoint(_ endpoint: String) {
+        #expect(SelectiveRemoteCloudPortalURL.login(endpoint: endpoint) == nil)
+    }
+
     @Test("Cloud metadata matches API v1 contract")
     func decodesMetadata() throws {
         let data = Data(#"{"apiVersion":1,"vaultSchemaVersion":1,"registrationEnabled":false}"#.utf8)

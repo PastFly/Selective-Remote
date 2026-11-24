@@ -136,8 +136,11 @@ private struct SFTPMenuBarTransferControls: View {
 private struct SelectiveRemoteCloudCommands: Commands {
     @ObservedObject var appLock: AppLockStore
     @Environment(\.openSettings) private var openSettings
+    @AppStorage("SelectiveRemote.cloud.endpoint.v1")
+    private var endpoint = SelectiveRemoteCloudEndpoint.production
 
     var body: some Commands {
+        let loginURL = SelectiveRemoteCloudPortalURL.login(endpoint: endpoint)
         CommandMenu("Cloud") {
             Button(
                 UpdateLocalization.key("menu.cloud.settings"),
@@ -152,8 +155,11 @@ private struct SelectiveRemoteCloudCommands: Commands {
                 UpdateLocalization.key("menu.cloud.browser"),
                 systemImage: "safari"
             ) {
-                NSWorkspace.shared.open(SelectiveRemoteCloudPortalURL.login)
+                if let loginURL {
+                    NSWorkspace.shared.open(loginURL)
+                }
             }
+            .disabled(loginURL == nil)
         }
     }
 }
