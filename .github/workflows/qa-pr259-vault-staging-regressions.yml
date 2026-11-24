@@ -1,0 +1,50 @@
+name: Verify PR259 Personal Vault staging regressions
+on:
+  push:
+    branches: [codex/verify-pr259-vault-staging-regressions]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: 6e482b83a9e715264d3e8b069991d9193b84eec8
+  CANDIDATE_TREE: 7f9a5550e1628f3fb0340bfe2146c78ce6a7a7b3
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Test empty synced hosts and Personal Vault
+        run: |
+          set -o pipefail
+          swift test --filter 'CloudSyncedProfileSelectionTests|CloudPersonalVaultSyncTests|PersonalVaultEnrollmentSafetyTests' 2>&1 | tee "$RUNNER_TEMP/pr259-native.log"
+          grep -F 'An empty Cloud snapshot remains empty and clears the selected host' "$RUNNER_TEMP/pr259-native.log"
+          grep -Eq 'Test run with [1-9][0-9]* tests.*passed' "$RUNNER_TEMP/pr259-native.log"
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Test Personal Vault browser UI and synchronization
+        run: |
+          set -o pipefail
+          npm ci --prefix cloud --ignore-scripts --no-audit --no-fund
+          node --test cloud/tests/public-vault-ui.test.mjs cloud/tests/public-vault-sync.test.mjs 2>&1 | tee "$RUNNER_TEMP/pr259-browser.log"
+          grep -F 'confirmed Personal Vault retry replaces the stale error view' "$RUNNER_TEMP/pr259-browser.log"
+          grep -F 'a stopped writer does not hide a Personal Vault already decrypted' "$RUNNER_TEMP/pr259-browser.log"
