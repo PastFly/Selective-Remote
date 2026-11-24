@@ -161,6 +161,7 @@ test("Team session retirement locks Personal data and shows sign-in only for the
     client: { session: () => session, sessionGeneration: () => generation },
     sessionRetiredByError,
     retiredSessionGeneration: null,
+    cancelPendingEnrollment() { effects.push("enrollment canceled"); },
     vault: { lock() { effects.push("vault locked"); } },
     hideConflicts() { effects.push("conflicts hidden"); },
     vaultUI: { mode(value) { effects.push(`mode:${value}`); } },
@@ -170,8 +171,8 @@ test("Team session retirement locks Personal data and shows sign-in only for the
   runInNewContext(source.slice(start, end) + "\nglobalThis.retire = retireCurrentTeamSession;", context);
   const error = Object.assign(new Error("authentication_required"), { invalidatedSessionEpoch: "1" });
   context.retire(error, "1");
-  assert.deepEqual(effects.slice(0, 4), ["vault locked", "conflicts hidden", "mode:waiting", "session:null"]);
-  assert.match(effects[4], /истекла/iu);
+  assert.deepEqual(effects.slice(0, 5), ["enrollment canceled", "vault locked", "conflicts hidden", "mode:waiting", "session:null"]);
+  assert.match(effects[5], /истекла/iu);
   effects.length = 0;
   session = { id: "new-account" };
   generation = "3";
@@ -193,6 +194,7 @@ test("a first 401 from background Team refresh closes the actual browser session
   ) });
   await client.login({ email: "synthetic@example.invalid", password: "synthetic-password", deviceID });
   const effects = [], context = { client, sessionRetiredByError, retiredSessionGeneration: null,
+    cancelPendingEnrollment() { effects.push("enrollment canceled"); },
     vault: { lock() { effects.push("vault locked"); } },
     hideConflicts() { effects.push("conflicts hidden"); },
     vaultUI: { mode(value) { effects.push(`mode:${value}`); } },
@@ -206,7 +208,7 @@ test("a first 401 from background Team refresh closes the actual browser session
   runInNewContext(source.slice(functionStart, functionEnd) + source.slice(listenerStart, listenerEnd), context);
   await assert.rejects(client.listPendingTeamInvitations(), /authentication_required/u);
   assert.equal(client.session(), null);
-  assert.deepEqual(effects.slice(0, 4), ["vault locked", "conflicts hidden", "mode:waiting", "session:null"]);
+  assert.deepEqual(effects.slice(0, 5), ["enrollment canceled", "vault locked", "conflicts hidden", "mode:waiting", "session:null"]);
   assert.equal(effects.filter((value) => value === "vault locked").length, 1);
 });
 
@@ -215,6 +217,7 @@ test("an anonymous startup 401 does not announce an expired signed-in session", 
     JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } },
   ) });
   const effects = [], context = { client, sessionRetiredByError, retiredSessionGeneration: null,
+    cancelPendingEnrollment() { effects.push("enrollment canceled"); },
     vault: { lock() { effects.push("vault locked"); } }, vaultUI: { mode() { effects.push("mode"); } },
     hideConflicts() { effects.push("conflicts hidden"); },
     showSession() { effects.push("show session"); }, setAccountMessage() { effects.push("message"); } };
@@ -321,6 +324,22 @@ test("Team Lock stops an already running temporary rotation controller", async (
   await pending;
   assert.equal(wasLockedAtClick, true);
   assert.equal(writes, 0);
+});
+
+test("Personal Sync resumes pending enrollment through its own controller", async () => {
+  const start = source.indexOf('  syncButton.addEventListener("click", async () => {', source.indexOf("export async function initializeCloudAccount"));
+  const end = source.indexOf('\n  conflictForm.addEventListener("change"', start);
+  assert.ok(start >= 0 && end > start);
+  const effects = [];
+  const context = {
+    pendingEnrollment: {},
+    async backgroundPersonalVaultSync() { effects.push("resume enrollment"); },
+    capturePersonalVaultSession() { effects.push("normal sync"); throw new Error("unexpected_normal_sync"); },
+    syncButton: { addEventListener(_name, callback) { context.runManualSync = callback; } },
+  };
+  runInNewContext(source.slice(start, end), context);
+  await context.runManualSync();
+  assert.deepEqual(effects, ["resume enrollment"]);
 });
 
 test("an old manual sync cannot restart the background timer after Team Lock", async () => {

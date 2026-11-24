@@ -4544,10 +4544,6 @@ export function initializeTeamWorkspace({
   });
 
   syncButton.addEventListener("click", async () => {
-    if (pendingEnrollment) {
-      await backgroundPersonalVaultSync();
-      return;
-    }
     setRecoveryControls("none");
     const recipient = client.session()?.id;
     const target = { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id };
@@ -6008,6 +6004,10 @@ export async function initializeCloudAccount({
   });
 
   syncButton.addEventListener("click", async () => {
+    if (pendingEnrollment) {
+      await backgroundPersonalVaultSync();
+      return;
+    }
     let session;
     try { session = capturePersonalVaultSession(client); } catch { return; }
     const identity = client.publicationIdentity();
