@@ -1,0 +1,40 @@
+name: Verify isolated PR255 public DNS
+on:
+  push:
+    branches: [codex/verify-pr255-public-dns]
+permissions:
+  contents: read
+jobs:
+  public-dns:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Verify the public staging record on both authoritative servers
+        shell: bash
+        run: |
+          set -euo pipefail
+          host=pr255-staging.pastfly.ru
+          expected=185.9.25.50
+          for attempt in {1..10}; do
+            both=yes
+            for ns in ns1.reg.ru ns2.reg.ru; do
+              answer=$(dig @"$ns" "$host" A +norecurse +time=3 +tries=1 +noall +answer +comments 2>&1) || both=no
+              if grep -Eq '^;; flags:.*[[:space:]]aa[[:space:];]' <<< "$answer" &&
+                 grep -Eq 'status: NOERROR,' <<< "$answer" &&
+                 [[ $(awk '$4 == "A" {print $5}' <<< "$answer") == "$expected" ]]; then
+                printf '%s authoritative A %s for %s\n' "$ns" "$expected" "$host"
+              else
+                printf '%s did not return the expected authoritative A on attempt %s\n' "$ns" "$attempt"
+                both=no
+              fi
+            done
+            if [[ "$both" == yes ]]; then
+              for resolver in 1.1.1.1 8.8.8.8; do
+                observed=$(dig @"$resolver" "$host" A +time=2 +tries=1 +short) || observed=unavailable
+                if [[ "$observed" == "$expected" ]]; then printf '%s recursive A %s\n' "$resolver" "$observed"; else printf '%s recursive answer pending or unavailable\n' "$resolver"; fi
+              done
+              exit 0
+            fi
+            sleep 15
+          done
+          exit 1
