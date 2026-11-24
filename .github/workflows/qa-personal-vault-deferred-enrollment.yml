@@ -1,0 +1,50 @@
+name: Verify deferred Personal Vault enrollment
+on:
+  push:
+    branches: [codex/verify-personal-vault-deferred-enrollment]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: 09ef66f27c053caa82b06322e2110dc04c0dafa2
+  CANDIDATE_TREE: b508e27f1ded8f97acdb7783c77c50a7d0d3ffdf
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Test macOS enrollment and Personal Vault regressions
+        run: |
+          set -o pipefail
+          swift test --filter 'CloudSyncedProfileSelectionTests|CloudPersonalVaultSyncTests|PersonalVaultEnrollmentSafetyTests' 2>&1 | tee "$RUNNER_TEMP/deferred-vault-native.log"
+          grep -F 'A signed-in Mac resumes first enrollment without another password' "$RUNNER_TEMP/deferred-vault-native.log"
+          grep -Eq 'Test run with [1-9][0-9]* tests.*passed' "$RUNNER_TEMP/deferred-vault-native.log"
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - name: Test Personal Vault browser UI and synchronization
+        run: |
+          set -o pipefail
+          npm ci --prefix cloud --ignore-scripts --no-audit --no-fund
+          node --test cloud/tests/public-vault-ui.test.mjs cloud/tests/public-vault-sync.test.mjs cloud/tests/v1-write-fence-browser-p0.test.mjs cloud/tests/public-sync-presentation.test.mjs 2>&1 | tee "$RUNNER_TEMP/deferred-vault-browser.log"
+          grep -F 'a closed Personal pilot resumes in the background with a concurrent first revision' "$RUNNER_TEMP/deferred-vault-browser.log"
+          grep -F 'the first Vault wrapper matches the native test vector' "$RUNNER_TEMP/deferred-vault-browser.log"
