@@ -5,8 +5,8 @@ on:
 permissions:
   contents: read
 env:
-  CANDIDATE_SHA: 6e482b83a9e715264d3e8b069991d9193b84eec8
-  CANDIDATE_TREE: 7f9a5550e1628f3fb0340bfe2146c78ce6a7a7b3
+  CANDIDATE_SHA: 278828d4c0f22e378f033a43c447678d06943e2f
+  CANDIDATE_TREE: 08a927a8769d41e020dc2a5fca0aa0963a78ec65
 jobs:
   macos:
     runs-on: macos-15
