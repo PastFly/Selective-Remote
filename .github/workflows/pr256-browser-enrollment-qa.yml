@@ -1,0 +1,93 @@
+name: Verify PR256 browser Personal Vault enrollment
+on:
+  push:
+    branches: [codex/verify-pr256-browser-enrollment]
+permissions:
+  contents: read
+env:
+  CANDIDATE_SHA: 6baa9fef08241d38842971ae345af2a64589fc52
+  CANDIDATE_TREE: 5ca7d67b4464f009b79e7e8cc2ae904f3ae37684
+  NODE_OPTIONS: --dns-result-order=ipv4first
+jobs:
+  revocation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$CANDIDATE_TREE"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.18.0'
+      - name: Verify browser enrollment and synchronization
+        working-directory: cloud
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          set -o pipefail
+          node --test tests/public-vault-ui.test.mjs tests/public-vault-sync.test.mjs tests/v1-write-fence-browser-p0.test.mjs tests/public-sync-presentation.test.mjs | tee "$RUNNER_TEMP/browser-enrollment.tap"
+          grep -Fx '# pass 225' "$RUNNER_TEMP/browser-enrollment.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/browser-enrollment.tap"
+      - name: Verify revocation and the HTTPS pilot with an independent test anchor
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/selective_remote_test
+          SR_TEST_ANCHOR_TLS_URL: postgresql://sranchor:ephemeral-test-anchor@localhost:55432/anchor_test
+          SR_TEST_ANCHOR_TLS_CA: ${{ runner.temp }}/fence-anchor-test/server.crt
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/fence-anchor-test"
+          mkdir -m 755 "$certdir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout "$certdir/server.key" -out "$certdir/server.crt" >/dev/null 2>&1
+          image='postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef'
+          uid=$(docker run --rm --entrypoint id "$image" -u postgres)
+          chmod 600 "$certdir/server.key"
+          sudo chown "$uid" "$certdir/server.key"
+          trap 'docker rm -f sr-test-fence-anchor >/dev/null 2>&1 || true' EXIT
+          docker run -d --name sr-test-fence-anchor -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=sranchor -e POSTGRES_PASSWORD=ephemeral-test-anchor -e POSTGRES_DB=anchor_test \
+            -v "$certdir:/certs:ro" "$image" -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key >/dev/null
+          for attempt in {1..30}; do
+            if docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d anchor_test >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec sr-test-fence-anchor pg_isready -h 127.0.0.1 -U sranchor -d anchor_test >/dev/null
+          node --test tests/personal-session-revocation.test.mjs tests/v1-cutover-stop-http.test.mjs tests/personal-vault-pilot-http.test.mjs | tee "$RUNNER_TEMP/anchored-revocation.tap"
+          grep -Fx '# pass 7' "$RUNNER_TEMP/anchored-revocation.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/anchored-revocation.tap"
+      - name: Check existing Personal Vault write behavior
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/selective_remote_test
+        run: |
+          set -o pipefail
+          node --test --test-name-pattern='Personal Vault commit requires|concurrent current Personal writers' tests/v1-commit-fence-postgres.test.mjs | tee "$RUNNER_TEMP/personal-vault-writes.tap"
+          grep -Fx '# pass 2' "$RUNNER_TEMP/personal-vault-writes.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/personal-vault-writes.tap"
+      - name: Check password-reset and session creation ordering
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/selective_remote_test
+        run: |
+          set -o pipefail
+          node --test --test-name-pattern='a reset queued behind session creation|account deletion waits for in-flight session creation' tests/login-reset-race.test.mjs | tee "$RUNNER_TEMP/personal-auth-ordering.tap"
+          grep -Fx '# pass 2' "$RUNNER_TEMP/personal-auth-ordering.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/personal-auth-ordering.tap"
