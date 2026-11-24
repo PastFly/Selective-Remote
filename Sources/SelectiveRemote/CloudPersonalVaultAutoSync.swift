@@ -227,24 +227,29 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
-        credentials: [SelectiveRemotePersonalVaultCredentialInput] = [],
-        sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput] = []
+        collectUploadSecrets: @MainActor @Sendable () async throws -> (
+            credentials: [SelectiveRemotePersonalVaultCredentialInput],
+            sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
+        ) = { ([], []) }
     ) async throws -> Int {
         let expectedMaterial = try keyStore.material(endpoint: endpoint, deviceID: deviceID)
         let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
         guard session.endpoint == endpoint else { throw CancellationError() }
         let remote = try await client.personalVault(endpoint: endpoint, session: session)
-        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
-            profiles: profiles,
-            credentials: credentials,
-            snippets: snippets,
-            forwarding: forwarding,
-            sshKeys: sshKeys,
-            deviceID: deviceID,
-            allowEmpty: true
-        )
         let material: SelectiveRemotePersonalVaultKeyMaterial
         if remote.revision == 0 {
+            try await client.requireV1WriteFence(endpoint: endpoint, session: session, personal: true)
+            let secrets = try await collectUploadSecrets()
+            try await client.checkSession(session)
+            let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+                profiles: profiles,
+                credentials: secrets.credentials,
+                snippets: snippets,
+                forwarding: forwarding,
+                sshKeys: secrets.sshKeys,
+                deviceID: deviceID,
+                allowEmpty: true
+            )
             material = try await replaceWithLocalVault(
                 endpoint: endpoint,
                 remote: remote,

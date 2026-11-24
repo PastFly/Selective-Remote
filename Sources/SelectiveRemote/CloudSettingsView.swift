@@ -698,25 +698,25 @@ struct CloudSettingsView: View {
                     keyStore: personalVaultKeyStore
                 )
                 do {
-                    let credentials = personalVaultSyncEnabled
-                        ? try await SelectiveRemotePersonalVaultCredentialCollector.shared.collect(
-                            profiles: model.profiles,
-                            forwarding: model.independentPortForwards
-                        )
-                        : []
-                    let sshKeys = personalVaultSyncEnabled
-                        ? try await SelectiveRemotePersonalVaultCredentialCollector.shared.collectSSHKeys(model.sshKeys)
-                        : []
+                    let profiles = model.profiles
+                    let forwarding = model.independentPortForwards
+                    let sshKeyRecords = model.sshKeys
+                    let includeSecrets = personalVaultSyncEnabled
                     _ = try await enrollment.enrollOrCreate(
                         endpoint: url,
                         deviceID: deviceID,
                         session: signedIn.session,
                         password: password,
-                        profiles: model.profiles,
+                        profiles: profiles,
                         snippets: TerminalCommandHistoryStore.shared.templates(),
-                        forwarding: model.independentPortForwards,
-                        credentials: credentials,
-                        sshKeys: sshKeys
+                        forwarding: forwarding,
+                        collectUploadSecrets: {
+                            guard includeSecrets else { return ([], []) }
+                            let collector = SelectiveRemotePersonalVaultCredentialCollector.shared
+                            let credentials = try await collector.collect(profiles: profiles, forwarding: forwarding)
+                            let sshKeys = try await collector.collectSSHKeys(sshKeyRecords)
+                            return (credentials, sshKeys)
+                        }
                     )
                 } catch {
                     enrollmentError = error.localizedDescription
@@ -1312,6 +1312,7 @@ struct CloudSettingsView: View {
                 guard remote.revision == 0 else {
                     throw SelectiveRemotePersonalVaultError.remoteVaultNotEmpty(remote.revision)
                 }
+                try await client.requireV1WriteFence(endpoint: url, session: session, personal: true)
                 let credentials = try await personalVaultCredentialsIfRequested()
                 let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
                     profiles: model.profiles,

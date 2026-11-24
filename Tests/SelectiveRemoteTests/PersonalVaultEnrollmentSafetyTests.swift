@@ -113,6 +113,19 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(f.keys.savedMaterial?.requiresInitialDownload == true)
     }
 
+    @Test("An existing Personal Vault opens even when the local export contains duplicates")
+    func existingVaultDoesNotNeedLocalExport() async throws {
+        let f = try await Self.fixture(password: Self.oldPassword)
+        let revision = try await f.enrollment.enrollOrCreate(
+            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
+            profiles: [], snippets: [f.local, f.local], forwarding: [],
+            collectUploadSecrets: { throw PasswordResetReproError.unexpectedSecretCollection }
+        )
+        #expect(revision == 5)
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
+        #expect(f.keys.savedMaterial?.requiresInitialDownload == true)
+    }
+
     @Test("Signing in again preserves the applied Vault revision", arguments: [4, 5])
     func repeatedSignInPreservesPreviouslyAppliedVault(appliedRevision: Int) async throws {
         let f = try await Self.fixture(
@@ -297,10 +310,37 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(document.records.contains { $0.id == Self.localSnippetID })
         #expect(f.keys.savedMaterial?.vaultKey == key)
     }
+
+    @Test("A signed-in Mac can enroll after the pilot opens without collecting secrets while closed")
+    func enrollmentRetriesInTheSameSession() async throws {
+        let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
+        await f.http.setPersonalPilotOpen(false)
+        await #expect(throws: SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")) {
+            _ = try await f.enrollment.enrollOrCreate(
+                endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.newPassword,
+                profiles: [], snippets: [f.local], forwarding: [],
+                collectUploadSecrets: { throw PasswordResetReproError.unexpectedSecretCollection }
+            )
+        }
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
+        #expect(f.keys.saveCount == 0)
+
+        await f.http.setPersonalPilotOpen(true)
+        let revision = try await f.enrollment.enrollOrCreate(
+            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.newPassword,
+            profiles: [], snippets: [f.local], forwarding: []
+        )
+        let uploads = await f.http.uploadedEnvelopes()
+        let paths = await f.http.requestPaths()
+        #expect(revision == 1)
+        #expect(uploads.count == 1)
+        #expect(paths.filter { $0 == "POST /v1/auth/login" }.count == 1)
+        #expect(f.keys.savedMaterial?.revision == 1)
+    }
 }
 
 private enum PasswordResetReproError: Error {
-    case forbiddenPersistentStore, unexpectedRequest, invalidSyntheticLogin
+    case forbiddenPersistentStore, unexpectedRequest, invalidSyntheticLogin, unexpectedSecretCollection
 }
 
 private final class PasswordResetMemoryKeys: SelectiveRemotePersonalVaultKeyStore, @unchecked Sendable {
@@ -330,6 +370,7 @@ private actor PasswordResetMemoryHTTP {
     private let revision: Int
     private var uploads: [SelectiveRemotePersonalVaultEnvelope] = []
     private var paths: [String] = []
+    private var personalPilotOpen: Bool?
     static let secondDeviceID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
     private var token = String(repeating: "s", count: 43)
 
@@ -343,6 +384,7 @@ private actor PasswordResetMemoryHTTP {
     }
     func uploadedEnvelopes() -> [SelectiveRemotePersonalVaultEnvelope] { uploads }
     func requestPaths() -> [String] { paths }
+    func setPersonalPilotOpen(_ open: Bool) { personalPilotOpen = open }
     func data(for request: URLRequest) throws -> (Data, URLResponse) {
         guard request.url?.host == "password-reset-repro.example.invalid" else {
             throw PasswordResetReproError.unexpectedRequest
@@ -350,7 +392,14 @@ private actor PasswordResetMemoryHTTP {
         paths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
         switch (request.httpMethod, request.url?.path) {
         case ("GET", "/v1/meta"):
-            return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            var headers = ["X-Selective-V1-Write-Fence": "1"]
+            if let personalPilotOpen {
+                headers["X-Selective-V1-Write-Status"] = "vault_write_temporarily_unavailable"
+                if personalPilotOpen { headers["X-Selective-Personal-Vault-Write-Status"] = "pilot" }
+            }
+            let url = try #require(request.url)
+            let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers))
+            return (Data("{}".utf8), response)
         case ("POST", "/v1/auth/login"):
             let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
             guard body?["password"] as? String == acceptedPassword else {
