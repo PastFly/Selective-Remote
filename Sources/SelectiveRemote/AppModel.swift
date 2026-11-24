@@ -294,6 +294,16 @@ final class AppModel: NSObject, ObservableObject {
     let sftpWorkspace = SFTPWorkspaceModel()
     let connectionActivity = ConnectionActivityStore()
     let terminalSessionLogs = TerminalSessionLogStore()
+    @Published var pendingPersonalVaultEnrollmentEpoch: UUID?
+    var personalVaultEnrollmentTask: Task<Void, Never>?
+    var personalVaultEnrollmentAllowed = true
+
+    func cancelPersonalVaultEnrollment() {
+        personalVaultEnrollmentTask?.cancel()
+        personalVaultEnrollmentTask = nil
+        pendingPersonalVaultEnrollmentEpoch = nil
+    }
+
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {

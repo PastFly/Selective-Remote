@@ -71,6 +71,10 @@ struct CloudSettingsView: View {
     @State private var personalVaultSetup = PersonalVaultSetup.checking
 
     private var personalVaultAutoSyncConfigured: Bool { personalVaultSetup == .connected }
+    private var personalVaultEnrollmentPending: Bool {
+        guard let epoch = accountSession?.epoch else { return false }
+        return model.pendingPersonalVaultEnrollmentEpoch == epoch
+    }
 
     private let client = SelectiveRemoteCloudAPIClient()
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
@@ -240,7 +244,7 @@ struct CloudSettingsView: View {
                                              ? Color.green : Color.secondary)
                     }
 
-                    if personalVaultSetup != .connected, personalVaultSetup != .checking {
+                    if !personalVaultEnrollmentPending, personalVaultSetup != .connected, personalVaultSetup != .checking {
                         Button(
                             personalVaultSetupAction,
                             systemImage: "key.fill"
@@ -419,6 +423,7 @@ struct CloudSettingsView: View {
             guard let loss = notification.object as? SelectiveRemoteCloudSessionLoss,
                   let session = accountSession, loss.matches(session) else { return }
             let priorSessionLost = accountPhase == .signingIn && signInPriorSessionLoss == loss
+            if personalVaultEnrollmentPending { model.cancelPersonalVaultEnrollment() }
             resetAccountPresentation(endpoint: session.endpoint, preservingSignIn: priorSessionLost)
             if !priorSessionLost { accountErrorMessage = SelectiveRemoteCloudError.authenticationRequired.localizedDescription }
         }
@@ -426,7 +431,17 @@ struct CloudSettingsView: View {
             showsTeamManagement = false
             SelectiveRemoteCloudSessionTransition.notify()
         }
-        .onChange(of: endpoint) { _, _ in showsTeamManagement = false }
+        .onChange(of: endpoint) { _, _ in
+            showsTeamManagement = false
+            if personalVaultEnrollmentPending,
+               (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) != accountSession?.endpoint {
+                model.cancelPersonalVaultEnrollment()
+            }
+        }
+        .onChange(of: personalVaultEnrollmentPending) { wasPending, isPending in
+            guard wasPending, !isPending, let session = accountSession, !accountPhase.isBusy else { return }
+            Task { await loadInventory(endpoint: session.endpoint) }
+        }
         .onChange(of: personalVaultSyncedRevision) { _, revision in
             guard revision > 0, let session = accountSession else { return }
             if personalVaultSetup == .connected {
@@ -668,6 +683,7 @@ struct CloudSettingsView: View {
     }
 
     private func signIn(email: String, password: String, endpoint url: URL) {
+        model.cancelPersonalVaultEnrollment()
         SelectiveRemoteCloudSessionTransition.notify()
         signInPriorSessionLoss = accountSession.map { .init(endpoint: $0.endpoint, epoch: $0.epoch) }
         accountPresentationGeneration = UUID()
@@ -693,6 +709,7 @@ struct CloudSettingsView: View {
                 SyncPresentationStore.shared.invalidateSession()
                 accountEndpoint = url.absoluteString
                 var enrollmentError: String?
+                var deferredEnrollment: SelectiveRemotePersonalVaultAccountEnrollment.DeferredEnrollment?
                 let enrollment = SelectiveRemotePersonalVaultAccountEnrollment(
                     client: client,
                     keyStore: personalVaultKeyStore
@@ -705,6 +722,7 @@ struct CloudSettingsView: View {
                     _ = try await enrollment.enrollOrCreate(
                         endpoint: url,
                         deviceID: deviceID,
+                        accountID: signedIn.user.id,
                         session: signedIn.session,
                         password: password,
                         profiles: profiles,
@@ -716,8 +734,11 @@ struct CloudSettingsView: View {
                             let credentials = try await collector.collect(profiles: profiles, forwarding: forwarding)
                             let sshKeys = try await collector.collectSSHKeys(sshKeyRecords)
                             return (credentials, sshKeys)
-                        }
+                        },
+                        deferIfUnavailable: true
                     )
+                } catch let pending as SelectiveRemotePersonalVaultAccountEnrollment.DeferredEnrollment {
+                    deferredEnrollment = pending
                 } catch {
                     enrollmentError = error.localizedDescription
                 }
@@ -726,13 +747,16 @@ struct CloudSettingsView: View {
                 accountPhase = .signedIn
                 signInPriorSessionLoss = nil
                 showsAccountSheet = false
+                if let deferredEnrollment {
+                    schedulePersonalVaultEnrollment(deferredEnrollment, session: signedIn.session, deviceID: deviceID)
+                }
                 await loadInventory(endpoint: url)
                 guard isCurrentPresentation(generation, session: signedIn.session) else { return }
                 NotificationCenter.default.post(
                     name: .selectiveRemoteTeamVaultSyncNow,
                     object: nil
                 )
-                if enrollmentError == nil {
+                if enrollmentError == nil, deferredEnrollment == nil {
                     do {
                         try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID, session: signedIn.session)
                         guard isCurrentPresentation(generation, session: signedIn.session) else { return }
@@ -766,6 +790,64 @@ struct CloudSettingsView: View {
                 }
                 accountPhase = .signedOut
                 accountErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    private func schedulePersonalVaultEnrollment(
+        _ pending: SelectiveRemotePersonalVaultAccountEnrollment.DeferredEnrollment,
+        session: SelectiveRemoteCloudSessionBinding,
+        deviceID: UUID
+    ) {
+        guard model.personalVaultEnrollmentAllowed else { return }
+        model.cancelPersonalVaultEnrollment()
+        model.pendingPersonalVaultEnrollmentEpoch = session.epoch
+        model.personalVaultEnrollmentTask = Task { @MainActor in
+            defer {
+                if model.pendingPersonalVaultEnrollmentEpoch == session.epoch {
+                    model.personalVaultEnrollmentTask = nil
+                    model.pendingPersonalVaultEnrollmentEpoch = nil
+                }
+            }
+            let enrollment = SelectiveRemotePersonalVaultAccountEnrollment(client: client, keyStore: personalVaultKeyStore)
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(15))
+                    guard model.personalVaultEnrollmentAllowed,
+                          (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == session.endpoint
+                    else { return }
+                    try await client.checkSession(session)
+                    let profiles = model.profiles
+                    let forwarding = model.independentPortForwards
+                    let sshKeys = model.sshKeys
+                    let includeSecrets = personalVaultSyncEnabled
+                    _ = try await enrollment.resumeInitialEnrollment(
+                        pending, profiles: profiles, snippets: TerminalCommandHistoryStore.shared.templates(),
+                        forwarding: forwarding,
+                        collectUploadSecrets: {
+                            guard includeSecrets else { return ([], []) }
+                            let collector = SelectiveRemotePersonalVaultCredentialCollector.shared
+                            let credentials = try await collector.collect(profiles: profiles, forwarding: forwarding)
+                            return (credentials, try await collector.collectSSHKeys(sshKeys))
+                        }
+                    )
+                } catch SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable") {
+                    continue
+                } catch is URLError {
+                    continue
+                } catch {
+                    return
+                }
+                do {
+                    try await applyInitialPersonalVaultDownload(
+                        endpoint: session.endpoint, deviceID: deviceID, session: session, checkPresentation: false
+                    )
+                    NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
+                } catch {
+                    // Keep the trusted key and the ordinary pending import/conflict state.
+                }
+                return
             }
         }
     }
@@ -919,6 +1001,7 @@ struct CloudSettingsView: View {
 
     private func signOut() {
         guard let session = accountSession else { return }
+        model.cancelPersonalVaultEnrollment()
         let url = session.endpoint
         let generation = accountPresentationGeneration
         accountPhase = .signingOut
@@ -1001,7 +1084,10 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
-    private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID, session: SelectiveRemoteCloudSessionBinding) async throws {
+    private func applyInitialPersonalVaultDownload(
+        endpoint url: URL, deviceID: UUID, session: SelectiveRemoteCloudSessionBinding,
+        checkPresentation: Bool = true
+    ) async throws {
         guard let material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
               material.requiresInitialDownload == true
         else { return }
@@ -1021,7 +1107,10 @@ struct CloudSettingsView: View {
             }.value
         }
         try await client.checkSession(session)
-        guard isCurrentPresentation(generation, session: session) else { throw CancellationError() }
+        guard checkPresentation
+                ? isCurrentPresentation(generation, session: session)
+                : (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == session.endpoint
+        else { throw CancellationError() }
         let history = TerminalCommandHistoryStore.shared
         let localSnippets = history.templates()
         let plan = SelectiveRemotePersonalVaultImporter.plan(
@@ -1149,7 +1238,13 @@ struct CloudSettingsView: View {
     }
 
     private var personalVaultSetupTitle: String {
-        switch personalVaultSetup {
+        if personalVaultEnrollmentPending {
+            return UpdateLocalization.text(
+                ru: "Ожидает разрешения записи в Cloud",
+                en: "Waiting for Cloud to allow writes"
+            )
+        }
+        return switch personalVaultSetup {
         case .checking:
             UpdateLocalization.text(ru: "Ожидает проверки", en: "Awaiting check")
         case .empty:

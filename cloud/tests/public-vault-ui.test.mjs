@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createIndexedDBVaultRepository, createLocalVaultController } from "../public/vault-local.js";
 import { IDBFactory } from "./approved-idb-fixture.mjs";
-import { encryptVaultPayload } from "../public/vault-crypto.js";
+import { deriveInitialVaultWrappingKey, encryptVaultPayload } from "../public/vault-crypto.js";
 import { capturePersonalVaultSession, createAuthenticatedVaultClient, synchronizeVault } from "../public/vault-sync.js";
 import * as application from "../public/app.js";
 
@@ -322,6 +322,7 @@ async function loginLifecycleFixture({ onVaultRequest, identity = null, onAccept
     accepted: onAccepted, replaceAfterConflict: async () => null };
   const context = { form, client, accountDevices, loginWithDeviceConflictRetry, crypto: webcrypto, storageUnavailableCode: null,
     startupCompatibilityMessage: null,
+    cancelPendingEnrollment() {},
     loginAttempt: 0, loginInputRevision: 0, completeInteractivePersonalVaultLogin: application.completeInteractivePersonalVaultLogin,
     ensureTeamDeviceIdentity: async () => identity, teamDeviceRepository: {},
     activateAccountVault: async () => ({ vault: { rememberSession: async () => true } }),
@@ -485,7 +486,7 @@ test("session presentation clears the previous Team before displaying another ac
   assert.ok(start >= 0 && end > start);
   let generation = "a", teamOwner = "initial", deactivations = 0;
   const observations = [];
-  const context = { client: { sessionGeneration: () => generation },
+  const context = { client: { sessionGeneration: () => generation }, pendingEnrollment: null,
     teamWorkspace: { deactivate() { deactivations++; teamOwner = null; } },
     tabs: {}, form: {}, registrationForm: {}, recoveryFormAccount: {}, registrationSuccess: {}, signedIn: {},
     syncButton: {}, accountName: {}, usernameForm: { elements: { username: {} } },
@@ -522,6 +523,7 @@ async function startupLifecycleFixture({ requestVault, failRestore = false, onRe
     async getVault() { return requestVault({ expire() { session = null; generation = "2"; return error(); } }); } };
   const context = { client, storageUnavailableCode, setAuthMode() {}, showSession(user) { calls.sessions.push(user?.id ?? null); },
     startupCompatibilityMessage: null,
+    cancelPendingEnrollment() {},
     capturePersonalVaultSession() { const id = session.id, prior = generation;
       return { requireCurrent() { if (session?.id !== id || generation !== prior) throw new Error("authentication_required"); } }; },
     async activateAccountVault() { return { restored: false, legacyOwnershipUnverified: false }; },
@@ -1032,7 +1034,8 @@ test("interactive browser bootstrap creates exactly one encrypted r1 for an unin
   assert.equal(await vault.status(), "unlocked");
 });
 
-test("a closed Personal pilot leaves the first browser ready to import enrollment from another device", async () => {
+for (const concurrent of [false, true]) test(
+  `a closed Personal pilot resumes in the background with a ${concurrent ? "concurrent" : "committed"} first revision`, async () => {
   const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const browserID = "11111111-1111-4111-8111-111111111111";
   const otherDeviceID = "22222222-2222-4222-8222-222222222222";
@@ -1041,6 +1044,7 @@ test("a closed Personal pilot leaves the first browser ready to import enrollmen
   const passphrase = accountVaultPassphrase(password);
   let opened = false;
   let writes = 0;
+  let winningEnvelope;
   let remote = {
     id: vaultID, revision: 0, envelopeVersion: 1, updatedAt: null,
     wrappedKey: null, ciphertext: null, nonce: null, authTag: null, contentHash: null,
@@ -1061,7 +1065,8 @@ test("a closed Personal pilot leaves the first browser ready to import enrollmen
     }
     if (path === "/v1/vault" && options.method === "PUT") {
       writes += 1;
-      throw new Error("unexpected_browser_write");
+      remote = { ...remote, revision: 1, ...winningEnvelope };
+      return Response.json({ conflict: true, revision: 1 }, { status: 409 });
     }
     if (path === "/v1/vault") return Response.json(remote);
     throw new Error("unexpected_request");
@@ -1069,23 +1074,53 @@ test("a closed Personal pilot leaves the first browser ready to import enrollmen
   await client.login({ email: "pilot@example.invalid", password, deviceID: browserID });
   const repository = memoryVaultRepository();
   const browser = testVault(repository, [browserID]);
-  await assert.rejects(bootstrapPersonalVault({ vault: browser, client, passphrase }),
-    /vault_write_temporarily_unavailable/u);
+  const { status, enrollment } = await bootstrapPersonalVault({ vault: browser, client, passphrase });
+  assert.equal(status, "enrollment_pending");
+  assert.deepEqual(await enrollment.resume(), { status: "enrollment_pending" });
   assert.equal(client.session().id, accountID);
   const storedWhileClosed = await repository.load() !== null;
 
-  const firstWriter = testVault(memoryVaultRepository(), [otherDeviceID]);
-  await firstWriter.create(passphrase);
-  const { baseRevision: _, ...envelope } = (await firstWriter.prepareUpload(0)).envelope;
+  const wrappingKey = await deriveInitialVaultWrappingKey({ accountID, vaultID, passphrase }, webcrypto);
+  const vaultKey = await webcrypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const { baseRevision: _, ...envelope } = await encryptVaultPayload({ vaultKey, payload: { schemaVersion: 1, records: [], tombstones: [] },
+    baseRevision: 0, wrappedKey: await wrappingKey.wrap(vaultKey), cryptoValue: webcrypto });
+  winningEnvelope = envelope;
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  function renderSynchronizedPersonalVault(");
+  const end = source.indexOf("  async function requestUnlockedVaultFromOtherTab(", start);
+  assert.ok(start >= 0 && end > start);
+  const modes = [], results = [];
+  const context = {
+    vault: browser, client, backgroundSyncing: false, documentValue: {}, vaultMessage: {},
+    pendingEnrollment: { session: capturePersonalVaultSession(client), targetVault: browser, enrollment },
+    vaultUI: { render() {}, mode(value) { modes.push(value); } },
+    cancelPendingEnrollment() { enrollment.cancel(); context.pendingEnrollment = null; },
+    publishSyncObservation(_document, observation) { results.push(observation.result); },
+    setVaultSynchronizationMessage() {},
+  };
+  runInNewContext(source.slice(start, end), context);
+  await context.backgroundPersonalVaultSync();
+  assert.deepEqual(modes, []);
   opened = true;
-  remote = { ...remote, revision: 1, ...envelope };
-  browser.lock();
-  const sameBrowser = testVault(repository, [browserID]);
-  assert.deepEqual(await bootstrapPersonalVault({ vault: sameBrowser, client, passphrase }),
-    { status: "downloaded", revision: 1 });
-  assert.equal(await sameBrowser.status(), "unlocked");
+  if (!concurrent) remote = { ...remote, revision: 1, ...envelope };
+  await context.backgroundPersonalVaultSync();
+  assert.deepEqual(results, [{ status: "downloaded", revision: 1 }]);
+  assert.deepEqual(modes, ["unlocked"]);
+  assert.equal(context.pendingEnrollment, null);
+  assert.equal(await browser.status(), "unlocked");
   assert.equal(storedWhileClosed, false, "the closed pilot must leave no browser-generated wrapper");
-  assert.equal(writes, 0);
+  assert.equal(writes, Number(concurrent));
+});
+
+test("the first Vault wrapper matches the native test vector", async () => {
+  const wrappingKey = await deriveInitialVaultWrappingKey({
+    accountID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", vaultID: "99999999-9999-4999-8999-999999999999",
+    passphrase: accountVaultPassphrase("synthetic test fixture password"),
+  }, webcrypto);
+  const key = await webcrypto.subtle.importKey("raw", new Uint8Array(32).fill(42), "AES-GCM", true, ["encrypt", "decrypt"]);
+  assert.deepEqual(await wrappingKey.wrap(key), { algorithm: "PBKDF2-SHA256+A256KW", iterations: 600000,
+    salt: "z96KfucB07R7twc6692yRg", value: "19HcZr5m-zHtWYm9iqxulIHB65TDQyPX_v0V2I6Vn9KpznhH3ptKtA" });
 });
 
 test("a new account can retry its own initial upload after a failed connection and reload", async () => {
@@ -3068,6 +3103,7 @@ test("confirmed Personal Vault retry replaces the stale error view without askin
       vaultMessage: {},
       documentValue: {},
       backgroundSyncing: false,
+      pendingEnrollment: null,
       activeConflicts: false,
     };
     runInNewContext(source.slice(helperStart, backgroundStart)

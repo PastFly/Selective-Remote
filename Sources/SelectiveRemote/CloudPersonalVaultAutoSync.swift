@@ -208,6 +208,12 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         case accountPassword, recoveryPhrase
     }
 
+    struct DeferredEnrollment: Error {
+        fileprivate let wrappingKey: SelectiveRemotePersonalVaultCrypto.InitialWrappingKey
+        fileprivate let session: SelectiveRemoteCloudSessionBinding
+        fileprivate let deviceID: UUID
+    }
+
     let client: SelectiveRemoteCloudAPIClient
     let keyStore: any SelectiveRemotePersonalVaultKeyStore
 
@@ -222,6 +228,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
     func enrollOrCreate(
         endpoint: URL,
         deviceID: UUID,
+        accountID: UUID,
         session: SelectiveRemoteCloudSessionBinding,
         password: String,
         profiles: [ConnectionProfile],
@@ -230,45 +237,122 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         collectUploadSecrets: @MainActor @Sendable () async throws -> (
             credentials: [SelectiveRemotePersonalVaultCredentialInput],
             sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
-        ) = { ([], []) }
+        ) = { ([], []) },
+        deferIfUnavailable: Bool = false
     ) async throws -> Int {
         let expectedMaterial = try keyStore.material(endpoint: endpoint, deviceID: deviceID)
         let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
         guard session.endpoint == endpoint else { throw CancellationError() }
         let remote = try await client.personalVault(endpoint: endpoint, session: session)
-        let material: SelectiveRemotePersonalVaultKeyMaterial
         if remote.revision == 0 {
-            try await client.requireV1WriteFence(endpoint: endpoint, session: session, personal: true)
+            let wrappingKey = try await Task.detached(priority: .userInitiated) {
+                try SelectiveRemotePersonalVaultCrypto.InitialWrappingKey(accountID: accountID, vaultID: remote.id, passphrase: passphrase)
+            }.value
+            let initial = DeferredEnrollment(wrappingKey: wrappingKey, session: session, deviceID: deviceID)
+            do {
+                return try await completeInitialEnrollment(
+                    initial, remote: remote, expectedMaterial: expectedMaterial,
+                    profiles: profiles, snippets: snippets, forwarding: forwarding,
+                    collectUploadSecrets: collectUploadSecrets, interactivePassphrase: passphrase
+                )
+            } catch let error as SelectiveRemoteCloudError
+                        where deferIfUnavailable && error == .serviceError(503, "vault_write_temporarily_unavailable") {
+                try await client.checkSession(session)
+                throw initial
+            }
+        }
+        let material = try await Self.unlockedMaterial(remote) { wrapped in
+            try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(wrapped, passphrase: passphrase)
+        }
+        return try await saveEnrollment(material, session: session, deviceID: deviceID, expectedMaterial: expectedMaterial)
+    }
+
+    func resumeInitialEnrollment(
+        _ initial: DeferredEnrollment,
+        profiles: [ConnectionProfile],
+        snippets: [TerminalCommandTemplate],
+        forwarding: [IndependentPortForward],
+        collectUploadSecrets: @MainActor @Sendable () async throws -> (
+            credentials: [SelectiveRemotePersonalVaultCredentialInput],
+            sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
+        ) = { ([], []) }
+    ) async throws -> Int {
+        let remote = try await client.personalVault(endpoint: initial.session.endpoint, session: initial.session)
+        let expected = try keyStore.material(endpoint: initial.session.endpoint, deviceID: initial.deviceID)
+        return try await completeInitialEnrollment(
+            initial, remote: remote, expectedMaterial: expected, profiles: profiles,
+            snippets: snippets, forwarding: forwarding, collectUploadSecrets: collectUploadSecrets
+        )
+    }
+
+    private func completeInitialEnrollment(
+        _ initial: DeferredEnrollment,
+        remote: SelectiveRemoteCloudPersonalVault,
+        expectedMaterial: SelectiveRemotePersonalVaultKeyMaterial?,
+        profiles: [ConnectionProfile],
+        snippets: [TerminalCommandTemplate],
+        forwarding: [IndependentPortForward],
+        collectUploadSecrets: @MainActor @Sendable () async throws -> (
+            credentials: [SelectiveRemotePersonalVaultCredentialInput],
+            sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
+        ),
+        interactivePassphrase: String? = nil
+    ) async throws -> Int {
+        let session = initial.session
+        let wrappingKey = initial.wrappingKey
+        guard remote.id == wrappingKey.vaultID else { throw EnrollmentError.existingVaultUnlockFailed }
+        let material: SelectiveRemotePersonalVaultKeyMaterial
+        if remote.revision > 0 {
+            material = try await Self.unlockedMaterial(remote, unwrap: wrappingKey.unwrap)
+        } else {
+            guard expectedMaterial == nil else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+            try await client.requireV1WriteFence(endpoint: session.endpoint, session: session, personal: true)
             let secrets = try await collectUploadSecrets()
+            try Task.checkCancellation()
             try await client.checkSession(session)
             let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
-                profiles: profiles,
-                credentials: secrets.credentials,
-                snippets: snippets,
-                forwarding: forwarding,
-                sshKeys: secrets.sshKeys,
-                deviceID: deviceID,
-                allowEmpty: true
+                profiles: profiles, credentials: secrets.credentials, snippets: snippets,
+                forwarding: forwarding, sshKeys: secrets.sshKeys, deviceID: initial.deviceID, allowEmpty: true
             )
-            material = try await replaceWithLocalVault(
-                endpoint: endpoint,
-                remote: remote,
-                exported: exported,
-                session: session,
-                passphrase: passphrase
-            )
-        } else {
-            material = try await Self.unlockedMaterial(remote, passphrase: passphrase)
-            if let expectedMaterial, expectedMaterial.allowsUpload,
-               expectedMaterial.vaultID == material.vaultID,
-               expectedMaterial.vaultKey == material.vaultKey,
-               expectedMaterial.wrappedKey == material.wrappedKey,
-               expectedMaterial.revision <= material.revision,
-               expectedMaterial.revision < material.revision || expectedMaterial.documentHash == material.documentHash {
-                // Keep the last applied revision so the normal sync can fetch any newer data.
-                try await client.checkSession(session)
-                return expectedMaterial.revision
+            do {
+                material = try await replaceWithLocalVault(
+                    vaultID: remote.id, exported: exported, session: session, wrappingKey: wrappingKey
+                )
+            } catch SelectiveRemotePersonalVaultError.uploadConflict(let revision) where revision > 0 {
+                let winner = try await client.personalVault(endpoint: session.endpoint, session: session)
+                guard winner.id == wrappingKey.vaultID, winner.revision >= revision else {
+                    throw SelectiveRemotePersonalVaultError.invalidEnvelope
+                }
+                material = try await Self.unlockedMaterial(winner) { wrapped in
+                    if let interactivePassphrase,
+                       wrapped.salt != wrappingKey.encodedSalt {
+                        return try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(wrapped, passphrase: interactivePassphrase)
+                    }
+                    return try wrappingKey.unwrap(wrapped)
+                }
             }
+        }
+        return try await saveEnrollment(
+            material, session: session, deviceID: initial.deviceID, expectedMaterial: expectedMaterial
+        )
+    }
+
+    private func saveEnrollment(
+        _ material: SelectiveRemotePersonalVaultKeyMaterial,
+        session: SelectiveRemoteCloudSessionBinding,
+        deviceID: UUID,
+        expectedMaterial: SelectiveRemotePersonalVaultKeyMaterial?
+    ) async throws -> Int {
+        try Task.checkCancellation()
+        if let expectedMaterial, expectedMaterial.allowsUpload,
+           expectedMaterial.vaultID == material.vaultID,
+           expectedMaterial.vaultKey == material.vaultKey,
+           expectedMaterial.wrappedKey == material.wrappedKey,
+           expectedMaterial.revision <= material.revision,
+           expectedMaterial.revision < material.revision || expectedMaterial.documentHash == material.documentHash {
+            // Keep the last applied revision so the normal sync can fetch any newer data.
+            try await client.checkSession(session)
+            return expectedMaterial.revision
         }
         try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial)
         return material.revision
@@ -293,7 +377,9 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         let endpoint = session.endpoint
         let expectedMaterial = try keyStore.material(endpoint: endpoint, deviceID: deviceID)
         let remote = try await client.personalVault(endpoint: endpoint, session: session)
-        let material = try await Self.unlockedMaterial(remote, passphrase: passphrase)
+        let material = try await Self.unlockedMaterial(remote) { wrapped in
+            try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(wrapped, passphrase: passphrase)
+        }
         try await client.savePersonalVaultMaterial(
             material, session: session, deviceID: deviceID, keyStore: keyStore, replacing: expectedMaterial
         )
@@ -301,16 +387,13 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
 
     private static func unlockedMaterial(
         _ remote: SelectiveRemoteCloudPersonalVault,
-        passphrase: String
+        unwrap: @escaping @Sendable (SelectiveRemotePersonalVaultWrappedKey) throws -> Data
     ) async throws -> SelectiveRemotePersonalVaultKeyMaterial {
         guard remote.revision > 0 else { throw EnrollmentError.vaultNotInitialized }
         guard let envelope = remote.envelope else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
         return try await Task.detached(priority: .userInitiated) {
             do {
-                let vaultKey = try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
-                    envelope.wrappedKey,
-                    passphrase: passphrase
-                )
+                let vaultKey = try unwrap(envelope.wrappedKey)
                 let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
                 return try SelectiveRemotePersonalVaultKeyMaterial(
                     vaultID: remote.id,
@@ -330,23 +413,19 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
     }
 
     private func replaceWithLocalVault(
-        endpoint: URL,
-        remote: SelectiveRemoteCloudPersonalVault,
+        vaultID: UUID,
         exported: SelectiveRemotePersonalVaultExport,
         session: SelectiveRemoteCloudSessionBinding,
-        passphrase: String
+        wrappingKey: SelectiveRemotePersonalVaultCrypto.InitialWrappingKey
     ) async throws -> SelectiveRemotePersonalVaultKeyMaterial {
-        let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
-            exported.document,
-            recoveryPhrase: passphrase,
-            baseRevision: remote.revision
-        )
-        let result = try await client.putPersonalVault(endpoint: endpoint, envelope: setup.envelope, session: session)
-        guard !result.conflict, result.revision == remote.revision + 1 else {
+        let setup = try wrappingKey.createSetup(exported.document)
+        try Task.checkCancellation()
+        let result = try await client.putPersonalVault(endpoint: session.endpoint, envelope: setup.envelope, session: session)
+        guard !result.conflict, result.revision == 1 else {
             throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
         }
         return try .init(
-            vaultID: remote.id,
+            vaultID: vaultID,
             vaultKey: setup.vaultKey,
             wrappedKey: setup.envelope.wrappedKey,
             revision: result.revision,

@@ -195,6 +195,8 @@
     "Сессия аккаунта активна, но ключ Personal Vault недоступен. Попробуйте подтвердить пароль или открыть другую вкладку, где Vault уже открыт. После сброса пароля доступ к данным может не восстановиться.": "Your account session is active, but the Personal Vault key is unavailable. Try confirming your password or open another tab where the Vault is already unlocked. After a password reset, access to your data may not be restored.",
     "Восстановить доступ": "Restore access",
     "Восстанавливаем Personal Vault": "Restoring Personal Vault",
+    "Personal Vault ожидает настройки": "Personal Vault setup is pending",
+    "Настройка продолжится автоматически, когда Cloud разрешит запись.": "Setup will resume automatically when Cloud allows writes.",
     "Проверяем локальный ключ и зашифрованную Cloud-ревизию.": "Checking the local key and encrypted Cloud revision.",
     "Personal Vault временно недоступен": "Personal Vault is temporarily unavailable",
     "Сессия активна. Повторите подтверждение пароля или синхронизацию.": "Your session is active. Confirm your password or synchronize again.",

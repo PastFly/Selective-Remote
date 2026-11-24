@@ -15,6 +15,7 @@ import {
   capturePersonalVaultSession,
   createAuthenticatedVaultClient,
   loginWithDeviceConflictRetry,
+  prepareInitialPersonalVaultEnrollment,
   registerWithDeviceConflictRetry,
   synchronizeVault,
 } from "./vault-sync.js";
@@ -1192,7 +1193,7 @@ export async function initializeLocalVault({
 
   function mode(value, { allowReauthentication = false } = {}) {
     const state = value === "waiting" ? "locked" : value;
-    if (!["uninitialized", "locked", "unlocked", "restoring", "reauthentication_required", "error"].includes(state)) {
+    if (!["uninitialized", "locked", "unlocked", "restoring", "enrollment_pending", "reauthentication_required", "error"].includes(state)) {
       throw new Error("invalid_personal_vault_state");
     }
     section.dataset.vaultState = state;
@@ -4534,6 +4535,10 @@ export function initializeTeamWorkspace({
   });
 
   syncButton.addEventListener("click", async () => {
+    if (pendingEnrollment) {
+      await backgroundPersonalVaultSync();
+      return;
+    }
     setRecoveryControls("none");
     const recipient = client.session()?.id;
     const target = { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id };
@@ -4825,7 +4830,7 @@ export async function completeInteractivePersonalVaultLogin({
   const targetVault = prepared?.vault ?? null;
   const result = await unlockAndSyncPersonalVault(passphrase, targetVault);
   session?.requireCurrent();
-  if (result?.status === "local_only") return { result, remembered: false };
+  if (["local_only", "enrollment_pending"].includes(result?.status)) return { result, remembered: false };
   let remembered = false;
   try { remembered = await rememberSession(user.id, targetVault) === true; } catch { session?.requireCurrent(); }
   session?.requireCurrent();
@@ -4863,6 +4868,11 @@ export function personalVaultStatePresentation(state) {
     restoring: {
       title: "Восстанавливаем Personal Vault",
       description: "Проверяем локальный ключ и зашифрованную Cloud-ревизию.",
+      action: null,
+    },
+    enrollment_pending: {
+      title: "Personal Vault ожидает настройки",
+      description: "Настройка продолжится автоматически, когда Cloud разрешит запись.",
       action: null,
     },
     error: {
@@ -4922,14 +4932,10 @@ export async function bootstrapPersonalVault({
   }
   session.requireCurrent();
   if (status === "empty" && result.status === "empty") {
-    await client.preflightPersonalVaultWrite();
+    const enrollment = await prepareInitialPersonalVaultEnrollment({ client, vault, vaultID: result.vaultID, passphrase });
+    result = await enrollment.resume(passphrase);
     session.requireCurrent();
-    await vault.create(passphrase);
-    session.requireCurrent();
-    await vault.bindAccountOwnership(session.accountID);
-    session.requireCurrent();
-    result = await synchronize();
-    session.requireCurrent();
+    if (result.status === "enrollment_pending") return { ...result, enrollment };
   }
   return result;
 }
@@ -5092,6 +5098,11 @@ export async function initializeCloudAccount({
 } = {}) {
   let vault = vaultUI?.controller;
   const pendingAccountVaultActivations = createPendingAccountVaultActivations();
+  let pendingEnrollment = null;
+  function cancelPendingEnrollment() {
+    pendingEnrollment?.enrollment.cancel();
+    pendingEnrollment = null;
+  }
   const section = documentValue.querySelector("#cloud-account");
   if (!section || !vault) return null;
   const form = documentValue.querySelector("#cloud-login-form");
@@ -5132,6 +5143,7 @@ export async function initializeCloudAccount({
   function retireCurrentTeamSession(error, generation) {
     if (!sessionRetiredByError(client, error, generation) || retiredSessionGeneration === generation) return;
     retiredSessionGeneration = generation;
+    cancelPendingEnrollment();
     vault.lock();
     hideConflicts();
     vaultUI.mode("waiting");
@@ -5174,6 +5186,7 @@ export async function initializeCloudAccount({
     conflictApply.disabled = true;
   });
   vaultUI.setLockListener(async () => {
+    cancelPendingEnrollment();
     const results = await Promise.all([pendingAccountVaultActivations.cancelCurrent(), forgetTrackedRememberedSession(vault)]);
     if (results.some(result => result === false)) throw new Error("local_vault_cleanup_unconfirmed");
   });
@@ -5185,6 +5198,7 @@ export async function initializeCloudAccount({
   }
 
   async function activateAccountVault(user, passphrase = null) {
+    cancelPendingEnrollment();
     if (!user?.id || typeof vaultUI.repository?.forAccount !== "function") {
       throw new Error("account_vault_storage_unavailable");
     }
@@ -5236,6 +5250,11 @@ export async function initializeCloudAccount({
     }
     session.requireCurrent();
     if (vault !== targetVault) throw new Error("authentication_required");
+    if (result.status === "enrollment_pending") {
+      pendingEnrollment = { enrollment: result.enrollment, session, targetVault };
+      vaultUI.mode("enrollment_pending");
+      return { status: "enrollment_pending" };
+    }
     vaultUI.mode("unlocked");
     vaultUI.render();
     if (result.status === "conflict") renderConflicts(result);
@@ -5260,6 +5279,37 @@ export async function initializeCloudAccount({
 
   async function backgroundPersonalVaultSync() {
     const recipient = client.session()?.id;
+    if (pendingEnrollment && !backgroundSyncing) {
+      const pending = pendingEnrollment;
+      const identity = client.publicationIdentity();
+      backgroundSyncing = true;
+      try {
+        pending.session.requireCurrent();
+        if (vault !== pending.targetVault) throw new Error("authentication_required");
+        const result = await pending.enrollment.resume();
+        pending.session.requireCurrent();
+        if (pendingEnrollment !== pending || vault !== pending.targetVault) return;
+        if (result.status === "enrollment_pending") return;
+        renderSynchronizedPersonalVault(result);
+        cancelPendingEnrollment();
+        try { await pending.targetVault.rememberSession(recipient); } catch { /* Unlock remains available until reload. */ }
+        pending.session.requireCurrent();
+        if (vault !== pending.targetVault) return;
+        publishSyncObservation(documentValue, { scope: "personal", type: "result", result, recipient });
+        setVaultSynchronizationMessage(vaultMessage, { documentValue, revision: result.revision });
+      } catch (error) {
+        if (sessionRetiredByError(client, error, identity?.sessionEpoch)) {
+          retireCurrentTeamSession(error, identity.sessionEpoch);
+          return;
+        }
+        if (pendingEnrollment !== pending) return;
+        if (isPublicationOfflineError(error)) return;
+        cancelPendingEnrollment();
+        try { pending.session.requireCurrent(); } catch { return; }
+        vaultUI.mode("reauthentication_required", { allowReauthentication: true });
+      } finally { backgroundSyncing = false; }
+      return;
+    }
     if (backgroundSyncing || activeConflicts || !recipient || await vault.status() !== "unlocked") return;
     let session;
     try { session = capturePersonalVaultSession(client); } catch { return; }
@@ -5368,7 +5418,13 @@ export async function initializeCloudAccount({
       }
     })();
   });
-  globalThis.addEventListener?.("pagehide", () => sessionChannel?.close(), { once: true });
+  globalThis.addEventListener?.("pagehide", () => {
+    if (pendingEnrollment) {
+      cancelPendingEnrollment();
+      vaultUI.mode("reauthentication_required", { allowReauthentication: true });
+    }
+    sessionChannel?.close();
+  }, { once: true });
 
   const personalVaultTimer = globalThis.setInterval(
     () => { void backgroundPersonalVaultSync(); },
@@ -5453,6 +5509,7 @@ export async function initializeCloudAccount({
   let sessionPresentationEpoch = 0, presentedSessionGeneration = null, presentedAccountID = null;
   function showSession(user) {
     const generation = client.sessionGeneration(), accountID = user?.id ?? null;
+    if (pendingEnrollment && pendingEnrollment.session.accountID !== accountID) cancelPendingEnrollment();
     if (presentedSessionGeneration !== generation || presentedAccountID !== accountID) teamWorkspace?.deactivate();
     presentedSessionGeneration = generation;
     presentedAccountID = accountID;
@@ -5635,7 +5692,8 @@ export async function initializeCloudAccount({
       if (!isCurrent()) return;
       setText(
         vaultMessage,
-        personalVaultOutcome?.status === "local_only"
+        personalVaultOutcome?.status === "enrollment_pending" ? ""
+        : personalVaultOutcome?.status === "local_only"
           ? vaultStorageCompatibilityMessage(personalVaultOutcome.issue) ?? personalVaultRecoveryMessage(personalVaultOutcome.issue) ?? personalVaultKeyMismatchMessage()
           : personalVaultOutcome?.status === "conflict"
             ? "Обнаружены несовпадающие изменения. Выберите версию каждого конфликта; до этого данные не отправляются."
@@ -5722,7 +5780,8 @@ export async function initializeCloudAccount({
         try { await teamWorkspace?.activate(identity); } catch {}
       }
       if (client.sessionGeneration() !== operationGeneration) return;
-      setText(vaultMessage, outcome.result?.status === "local_only"
+      setText(vaultMessage, outcome.result?.status === "enrollment_pending" ? ""
+        : outcome.result?.status === "local_only"
         ? vaultStorageCompatibilityMessage(outcome.result.issue) ?? personalVaultRecoveryMessage(outcome.result.issue) ?? personalVaultKeyMismatchMessage()
         : outcome.result?.status === "conflict"
           ? "Обнаружены несовпадающие изменения. Выберите версию каждого конфликта; до этого данные не отправляются."
@@ -5760,6 +5819,7 @@ export async function initializeCloudAccount({
 
   logoutButton.addEventListener("click", async () => {
     logoutButton.disabled = true;
+    cancelPendingEnrollment();
     const logoutVault = vault;
     let presentationEpoch;
     const isCurrent = () => client.session() === null && sessionPresentationEpoch === presentationEpoch;
@@ -5858,6 +5918,10 @@ export async function initializeCloudAccount({
       await completeBrowserPasswordUpdate({ client, currentPassword: passwordForm.elements.currentPassword.value,
         newPassword: passwordForm.elements.newPassword.value, isCurrent,
         onSuccess() {
+          if (pendingEnrollment) {
+            cancelPendingEnrollment();
+            vaultUI.mode("reauthentication_required", { allowReauthentication: true });
+          }
           if (passwordInputRevision === inputRevision) passwordForm.reset();
           setSettingsMessage(passwordMessage, "Пароль изменён. Остальные сессии завершены.", "success");
         },

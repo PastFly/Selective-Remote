@@ -283,8 +283,10 @@ struct SelectiveRemoteApp: App {
                         }
                     }
             }
-            .onChange(of: appLock.isLocked) { _, _ in
-                updateTeamVaultAutoSync()
+            .onChange(of: appLock.isLocked, initial: true) { previous, locked in
+                model.personalVaultEnrollmentAllowed = !locked
+                if locked { model.cancelPersonalVaultEnrollment() }
+                if previous != locked { updateTeamVaultAutoSync() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 syncPresentation.setAccount(

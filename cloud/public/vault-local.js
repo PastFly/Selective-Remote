@@ -263,7 +263,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
       const snapshot = validatedSnapshot(value);
       await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), keys.snapshot));
     },
-    async saveInitial(value, syncValue = null) {
+    async saveInitial(value, syncValue = null, { requireCurrent = () => {} } = {}) {
       const snapshot = validatedSnapshot(value);
       const metadata = syncValue === null ? null : validatedSyncMetadata(syncValue);
       const database = await openDatabase(indexedDBValue);
@@ -273,6 +273,7 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
           let failure = null;
           const request = store.get(keys.snapshot);
           request.onsuccess = () => {
+            try { requireCurrent(); } catch (error) { failure = error; tx.abort(); return; }
             if (request.result != null) { failure = new Error("local_vault_exists"); tx.abort(); return; }
             store.add(clone(snapshot), keys.snapshot);
             if (metadata) store.put(metadata, keys.sync);
@@ -1448,24 +1449,29 @@ export function createLocalVaultController({
       };
     },
 
-    async importRemote({ revision, envelope }, passphrase) {
+    async importRemote({ revision, envelope }, passphrase, {
+      unwrapKey = (wrappedKey) => unwrapVaultKey(wrappedKey, passphrase, cryptoValue),
+      requireCurrent = () => {},
+    } = {}) {
       const generation = lockGeneration;
       if (await repository.load()) throw new Error("local_vault_exists");
       const deviceID = await stableDeviceID();
       const remoteSnapshot = validatedRemoteSnapshot({ revision, deviceID, envelope });
-      const nextVaultKey = await unwrapVaultKey(remoteSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
+      const nextVaultKey = await unwrapKey(remoteSnapshot.envelope.wrappedKey);
       const nextDocument = validateVaultDocument(
         await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
       );
       requireGeneration(generation);
+      requireCurrent();
       if (typeof repository.saveInitial === "function") {
         await repository.saveInitial(remoteSnapshot, { serverRevision: revision, localRevision: revision,
-          serverContentHash: envelope.contentHash });
+          serverContentHash: envelope.contentHash }, { requireCurrent });
       } else {
         await repository.save(remoteSnapshot);
         await saveSyncMetadata({ serverRevision: revision, localRevision: revision, serverContentHash: envelope.contentHash });
       }
       requireGeneration(generation);
+      requireCurrent();
       snapshot = remoteSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
