@@ -446,8 +446,9 @@ private actor PasswordResetMemoryHTTP {
             return (Data("{}".utf8), response)
         case ("GET", "/v1/vault/write-availability"):
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+            let url = try #require(request.url)
             let response = try #require(HTTPURLResponse(
-                url: try #require(request.url), statusCode: personalPilotAllowsSession ? 204 : 503,
+                url: url, statusCode: personalPilotAllowsSession ? 204 : 503,
                 httpVersion: nil, headerFields: nil
             ))
             return (Data(), response)
