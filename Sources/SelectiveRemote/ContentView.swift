@@ -1131,6 +1131,7 @@ struct ContentView: View {
                     ) {
                         preparePersonalFolderCreator()
                     }
+                    .disabled(model.selectedProfileOrNil == nil)
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -1171,7 +1172,7 @@ struct ContentView: View {
                     Button(UpdateLocalization.text(ru: "Выбранный профиль как .rdp…", en: "Selected Profile as .rdp…"), systemImage: "doc") {
                         model.exportSelectedRDP()
                     }
-                    .disabled(profile.connectionType != .rdp)
+                    .disabled(model.selectedProfileOrNil?.connectionType != .rdp)
                 } label: {
                     Image(systemName: "square.and.arrow.up.on.square")
                 }
@@ -2534,6 +2535,7 @@ struct ContentView: View {
                     systemImage: "folder"
                 )
             }
+            .disabled(model.selectedProfileOrNil == nil)
             .help(UpdateLocalization.text(
                 ru: "Создать папку или переместить выбранный Host",
                 en: "Create a folder or move the selected Host"
@@ -3058,7 +3060,14 @@ struct ContentView: View {
 
     private var profileDetail: some View {
         Group {
-            if profile.connectionType == .rdp {
+            if model.selectedProfileOrNil == nil {
+                ContentUnavailableView {
+                    Label(
+                        UpdateLocalization.text(ru: "Нет подключений", en: "No Connections"),
+                        systemImage: "rectangle.stack.badge.questionmark"
+                    )
+                }
+            } else if profile.connectionType == .rdp {
                 rdpProfileWorkspace
             } else if profile.connectionType == .ssh {
                 sshProfileWorkspace

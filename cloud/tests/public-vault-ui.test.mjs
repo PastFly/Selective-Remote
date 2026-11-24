@@ -3033,3 +3033,89 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(teamSynchronization, /team_vault_rotation_required/u);
   assert.match(teamSynchronization, /prepareInitialization/u);
 });
+
+test("confirmed Personal Vault retry replaces the stale error view without asking for a password", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const helperStart = source.indexOf("  function renderSynchronizedPersonalVault(");
+  const backgroundStart = source.indexOf("  async function backgroundPersonalVaultSync(");
+  const backgroundEnd = source.indexOf("  async function requestUnlockedVaultFromOtherTab(", backgroundStart);
+  const manualStart = source.indexOf('  syncButton.addEventListener("click",', backgroundEnd);
+  const manualEnd = source.indexOf('  conflictForm.addEventListener("change",', manualStart);
+  assert.ok(helperStart >= 0 && backgroundStart > helperStart && backgroundEnd > backgroundStart);
+  assert.ok(manualStart >= 0 && manualEnd > manualStart);
+
+  for (const background of [false, true]) {
+    const actions = [];
+    const local = { status: async () => "unlocked" };
+    const result = { status: "up_to_date", revision: 1 };
+    const setup = {
+      vault: local,
+      vaultUI: {
+        render: () => actions.push("render"),
+        mode: (mode) => actions.push(mode),
+      },
+      client: {
+        session: () => ({ id: "test-account" }),
+        publicationIdentity: () => ({ sessionEpoch: 1 }),
+      },
+      syncButton: { addEventListener(_event, handler) { this.retry = handler; } },
+      capturePersonalVaultSession: () => ({ requireCurrent() {} }),
+      synchronizePersonalVault: async () => result,
+      hideConflicts() {},
+      publishSyncObservation() {},
+      setVaultSynchronizationMessage() {},
+      vaultMessage: {},
+      documentValue: {},
+      backgroundSyncing: false,
+      activeConflicts: false,
+    };
+    runInNewContext(source.slice(helperStart, backgroundStart)
+      + (background ? source.slice(backgroundStart, backgroundEnd) : source.slice(manualStart, manualEnd)), setup);
+    const run = () => background ? setup.backgroundPersonalVaultSync() : setup.syncButton.retry();
+    await run();
+    assert.deepEqual(actions, ["render", "unlocked"]);
+
+    actions.length = 0;
+    setup.synchronizePersonalVault = async () => {
+      setup.vault = {};
+      return result;
+    };
+    await run();
+    assert.deepEqual(actions, [], "an older Vault completion must not change the new view");
+
+    setup.vault = local;
+    setup.synchronizePersonalVault = async () => ({ status: "remote_changed", remoteRevision: 2 });
+    setup.setText = () => {};
+    await run();
+    assert.deepEqual(actions, background ? ["render"] : [], "a counter change without a confirmed revision must not unlock the view");
+  }
+});
+
+test("a stopped writer does not hide a Personal Vault already decrypted by normal sign-in", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("  async function unlockAndSyncPersonalVault(");
+  const end = source.indexOf("  async function synchronizePersonalVault(", start);
+  assert.ok(start >= 0 && end > start);
+  const actions = [];
+  const local = { status: async () => "unlocked" };
+  const context = {
+    vault: local,
+    client: {},
+    capturePersonalVaultSession: () => ({ accountID: "test-account", requireCurrent() {} }),
+    bootstrapPersonalVault: async () => { throw new Error("vault_write_temporarily_unavailable"); },
+    vaultUI: { mode: (mode) => actions.push(mode), render: () => actions.push("render") },
+    documentValue: {},
+    publishSyncObservation: (_document, observation) => actions.push(observation.code),
+  };
+  runInNewContext(source.slice(start, end), context);
+  const result = await context.unlockAndSyncPersonalVault("synthetic passphrase");
+  assert.equal(result.status, "local_only");
+  assert.deepEqual(actions, ["unlocked", "render", "vault_write_temporarily_unavailable"]);
+
+  local.status = async () => "empty";
+  actions.length = 0;
+  await assert.rejects(context.unlockAndSyncPersonalVault("synthetic passphrase"), /vault_write_temporarily_unavailable/u);
+  assert.deepEqual(actions, []);
+});

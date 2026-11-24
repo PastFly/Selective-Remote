@@ -5228,7 +5228,7 @@ export async function initializeCloudAccount({
       session.requireCurrent();
       if (vault !== targetVault) throw new Error("authentication_required");
       if (!["local_sync_recovery_required", "remote_history_unverified", "remote_same_revision_changed", "remote_vault_recovery_required",
-        "remote_wrapped_key_changed"].includes(error?.message)) throw error;
+        "remote_wrapped_key_changed", "vault_write_temporarily_unavailable"].includes(error?.message)) throw error;
       if (await targetVault.status() !== "unlocked") throw error;
       session.requireCurrent();
       if (vault !== targetVault) throw new Error("authentication_required");
@@ -5251,6 +5251,13 @@ export async function initializeCloudAccount({
     return result;
   }
 
+  function renderSynchronizedPersonalVault(result) {
+    if (!Number.isSafeInteger(result.revision) || result.revision < 1) return;
+    // Rendering checks that the current local Vault still has its decrypted document.
+    vaultUI.render();
+    vaultUI.mode("unlocked");
+  }
+
   async function backgroundPersonalVaultSync() {
     const recipient = client.session()?.id;
     if (backgroundSyncing || activeConflicts || !recipient || await vault.status() !== "unlocked") return;
@@ -5271,8 +5278,12 @@ export async function initializeCloudAccount({
         setText(vaultMessage, "Обнаружены несовпадающие изменения. Выберите версию каждого конфликта; до этого данные не отправляются.");
         return;
       }
-      if (result.status !== "remote_changed") hideConflicts();
-      vaultUI.render();
+      if (result.status === "remote_changed") {
+        vaultUI.render();
+      } else {
+        hideConflicts();
+        renderSynchronizedPersonalVault(result);
+      }
       if (["uploaded_with_new_local_changes", "downloaded_with_new_local_changes"].includes(result.status)) {
         setText(vaultMessage, "Есть новые локальные изменения; синхронизация продолжится автоматически.");
       } else if (Number.isSafeInteger(result.revision)) {
@@ -5625,7 +5636,7 @@ export async function initializeCloudAccount({
       setText(
         vaultMessage,
         personalVaultOutcome?.status === "local_only"
-          ? personalVaultRecoveryMessage(personalVaultOutcome.issue) ?? personalVaultKeyMismatchMessage()
+          ? vaultStorageCompatibilityMessage(personalVaultOutcome.issue) ?? personalVaultRecoveryMessage(personalVaultOutcome.issue) ?? personalVaultKeyMismatchMessage()
           : personalVaultOutcome?.status === "conflict"
             ? "Обнаружены несовпадающие изменения. Выберите версию каждого конфликта; до этого данные не отправляются."
         : !personalVaultReady
@@ -5712,7 +5723,7 @@ export async function initializeCloudAccount({
       }
       if (client.sessionGeneration() !== operationGeneration) return;
       setText(vaultMessage, outcome.result?.status === "local_only"
-        ? personalVaultRecoveryMessage(outcome.result.issue) ?? personalVaultKeyMismatchMessage()
+        ? vaultStorageCompatibilityMessage(outcome.result.issue) ?? personalVaultRecoveryMessage(outcome.result.issue) ?? personalVaultKeyMismatchMessage()
         : outcome.result?.status === "conflict"
           ? "Обнаружены несовпадающие изменения. Выберите версию каждого конфликта; до этого данные не отправляются."
           : outcome.remembered
@@ -5950,6 +5961,7 @@ export async function initializeCloudAccount({
         up_to_date: `Vault уже синхронизирован на ревизии ${result.revision}.`,
         remote_changed: `Удалённый Vault изменился до ревизии ${result.remoteRevision}. Повторите синхронизацию для безопасного merge.`,
       };
+      renderSynchronizedPersonalVault(result);
       hideConflicts();
       const automaticSuffix = result.automaticallyResolved
         ? ` Автоматически разрешено конфликтов: ${result.automaticallyResolved}.`

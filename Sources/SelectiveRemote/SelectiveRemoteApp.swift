@@ -754,7 +754,7 @@ struct SelectiveRemoteApp: App {
                     try KeychainService.applySyncedPasswords(
                         snapshot.credentials, tombstones: snapshot.tombstoneIDs, sourceIDs: sources
                     )
-                    if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
+                    model.replaceSyncedProfiles(snapshot.profiles)
                     if model.independentPortForwards != snapshot.forwarding {
                         model.independentPortForwards = snapshot.forwarding
                     }
