@@ -166,6 +166,8 @@ export function reduceSyncPresentationState(state, observation) {
 
 export function summarizeSyncPresentationState(state, { online = true } = {}) {
   const statuses = [state.personal.status, state.team.status];
+  const personalConfirmed = state.personal.status === "current"
+    && (state.team.status === "current" || state.team.status === "unknown");
   const securityIssues = new Set(["team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required"]);
   const needsSecurityAttention = [state.personal, state.team].some((scope) => securityIssues.has(scope.issue));
   const status = needsSecurityAttention ? "attention"
@@ -174,7 +176,7 @@ export function summarizeSyncPresentationState(state, { online = true } = {}) {
         : !online ? "offline"
           : statuses.includes("syncing") ? "syncing"
             : statuses.includes("attention") ? "attention"
-              : statuses.every((value) => value === "current") ? "current"
+              : personalConfirmed ? "current"
               : statuses.every((value) => value === "signedOut") ? "signedOut"
                 : statuses.every((value) => value === "locked") ? "locked" : "unknown";
   return { status, personal: state.personal, team: state.team };
@@ -192,14 +194,20 @@ export function syncPresentationLabels(summary, locale = "ru") {
     offline: "Офлайн", signedOut: "Войдите в Cloud", locked: "Vault заблокирован",
   };
   const aggregateCurrent = english ? "Observed Vaults confirmed" : "Наблюдаемые Vaults подтверждены";
-  const note = summary.status === "offline"
-    ? (english ? "Connection appears offline. Changes may be waiting to sync."
-      : "Похоже, нет сети. Изменения могут ожидать синхронизации.")
-    : summary.status === "unknown"
-      ? (english ? "The current sync state is not confirmed in this tab. Open the Vault to check sign-in and access, or retry. Other Team Vaults are not checked here."
-        : "Текущее состояние синхронизации не подтверждено в этой вкладке. Откройте Vault, чтобы проверить вход и доступ, или повторите синхронизацию. Другие Team Vaults здесь не проверены.")
-      : (english ? "Other Team Vaults: not checked in this tab."
-        : "Другие Team Vaults: не проверены в этой вкладке.");
+  const personalOnlyCurrent = summary.status === "current" && summary.team.status === "unknown";
+  const personalCurrent = english ? "Personal Vault synced" : "Личный Vault синхронизирован";
+  let note = english ? "Other Team Vaults: not checked in this tab."
+    : "Другие Team Vaults: не проверены в этой вкладке.";
+  if (summary.status === "offline") {
+    note = english ? "Connection appears offline. Changes may be waiting to sync."
+      : "Похоже, нет сети. Изменения могут ожидать синхронизации.";
+  } else if (summary.status === "unknown") {
+    note = english ? "The current sync state is not confirmed in this tab. Open the Vault to check sign-in and access, or retry. Other Team Vaults are not checked here."
+      : "Текущее состояние синхронизации не подтверждено в этой вкладке. Откройте Vault, чтобы проверить вход и доступ, или повторите синхронизацию. Другие Team Vaults здесь не проверены.";
+  } else if (personalOnlyCurrent) {
+    note = english ? "Team Vault status is unconfirmed in this tab."
+      : "Статус Team Vault в этой вкладке не подтверждён.";
+  }
   const detail = (scope) => {
     const item = summary[scope];
     if (item.issue === "vault_write_temporarily_unavailable") return english
@@ -209,8 +217,9 @@ export function syncPresentationLabels(summary, locale = "ru") {
     const at = item.confirmedAt ? ` · ${formatVaultTimestamp(item.confirmedAt, { locale })}` : "";
     return `${labels.current} · r${item.revision}${at}`;
   };
-  return { summary: summary.status === "current" ? aggregateCurrent : labels[summary.status],
-    personal: detail("personal"), team: detail("team"), note };
+  const summaryLabel = personalOnlyCurrent ? personalCurrent
+    : summary.status === "current" ? aggregateCurrent : labels[summary.status];
+  return { summary: summaryLabel, personal: detail("personal"), team: detail("team"), note };
 }
 
 const verificationPrefix = "#verify-email?";
