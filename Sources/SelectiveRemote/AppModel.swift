@@ -2522,10 +2522,12 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func setSelectedSSHPasswordUserPresence(_ enabled: Bool) {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         setSSHPasswordUserPresence(enabled, profileID: selectedProfile.id)
     }
 
     func setSelectedSSHKeyUserPresence(_ enabled: Bool) {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         setSSHKeyUserPresenceForProfile(enabled, profileID: selectedProfile.id)
     }
 
@@ -2587,6 +2589,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func repairSelectedSSHCredentialAccess() {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         repairSSHCredentialAccess(profileID: selectedProfile.id)
     }
 
