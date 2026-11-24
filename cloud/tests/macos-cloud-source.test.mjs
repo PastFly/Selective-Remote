@@ -272,7 +272,8 @@ test("macOS Cloud commands use the supported settings action and backwards-compa
   assert.match(application, /@Environment\(\\\.openSettings\)/);
   assert.match(application, /openSettings\(\)/);
   assert.doesNotMatch(application, /showSettingsWindow:/);
-  assert.match(client, /cloud\.pastfly\.ru\/\?auth=login/);
+  assert.match(application, /SelectiveRemoteCloudPortalURL\.login\(endpoint: endpoint\)/);
+  assert.match(client, /URLQueryItem\(name: "auth", value: "login"\)/);
   assert.match(client, /URLQueryItem\(name: "auth", value: "registration"\)/);
   assert.match(settings, /SelectiveRemoteCloudPortalURL\.registration/);
   assert.doesNotMatch(`${application}\n${settings}`, /appending\(path: "login"\)|cloud\.pastfly\.ru\/login/);
