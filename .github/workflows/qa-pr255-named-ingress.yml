@@ -1,0 +1,18 @@
+name: Verify PR255 named TLS ingress
+
+on:
+  push:
+    branches:
+      - codex/qa-pr255-named-ingress
+
+permissions:
+  contents: read
+
+jobs:
+  ingress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify candidate and rehearse pinned Caddy
+        run: bash infra/qa-pr255-named-ingress/rehearse.sh

@@ -1,0 +1,5 @@
+617c7093fe245c3832c8e24894a43eff5d4c5e05048b0973bceacfeb64db4084  infra/qa-pr255-named-ingress/Caddyfile.named
+c02b62ffb813ad3212d777c677bb2b083dbf0aaf647bc4f7ca5034a8c076b1e8  infra/qa-pr255-named-ingress/verify-named-ingress.sh
+9c64fa4c8797d8b997aa51f5d2aa1697d1645945df2387f2c94c3c84ad8f25b9  .github/workflows/qa-pr255-named-ingress.yml
+56092d29de4c1ac502193285ba4ca95d5a1709c13b01bc01ac589885640017f2  infra/qa-pr255-named-ingress/rehearse.sh
+d631c7093dc8413eeb4eccfd0d9c258c9f433c6d1714553660e165f4ced1db57  cloud/public/index.html

@@ -1,0 +1,28 @@
+{
+    auto_https off
+    admin off
+    servers {
+        protocols h1 h2
+        strict_sni_host on
+    }
+}
+
+https://pr255-staging.pastfly.ru {
+    tls /tls/named/fullchain.pem /tls/named/privkey.pem
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Resource-Policy "same-origin"
+        -Server
+    }
+    reverse_proxy cloud:8080 {
+        header_up X-Selective-Client-IP {remote_host}
+        header_up X-Selective-Proxy-Secret {$PROXY_SHARED_SECRET}
+    }
+}
