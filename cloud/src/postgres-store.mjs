@@ -164,16 +164,23 @@ async function finishResourceMutation(client, receipt, { teamID, vaultID }, resu
 }
 
 export class PostgresStore {
-  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null } = {}) {
+  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null, retainTeamAuthorization = false } = {}) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
     if (!pool) {
       this.pool.on("error", () => {
         console.error(JSON.stringify({ level: "error", message: "Idle Cloud database connection lost" }));
       });
     }
-    this.access = new AccessSurfaceStore(this.pool, { v1Fence });
+    this.access = new AccessSurfaceStore(this.pool, { v1Fence, retainTeamAuthorization });
     this.writerFence = writerFence;
     this.v1Fence = v1Fence;
+    this.retainTeamAuthorization = retainTeamAuthorization;
+  }
+
+  teamAuthorizationTransaction(client, retainVaultOutcome = false) {
+    return createTeamAuthorizationTransaction({
+      client, fence: this.v1Fence, retainVaultOutcome, retainTeamAuthorization: this.retainTeamAuthorization,
+    });
   }
 
   migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
@@ -646,7 +653,7 @@ export class PostgresStore {
 
   async createUser({ email, username, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence, retainVaultOutcome: true });
+    const transaction = this.teamAuthorizationTransaction(client, true);
     const fenced = transaction.publication;
     try {
       await transaction.begin();
@@ -748,7 +755,7 @@ export class PostgresStore {
 
   async updateUsername(userID, username) {
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
       await transaction.begin();
       const result = await client.query(
@@ -833,7 +840,7 @@ export class PostgresStore {
 
   async consumeEmailVerificationToken(tokenHash) {
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
       await transaction.begin();
       const token = await client.query(
@@ -1035,7 +1042,7 @@ export class PostgresStore {
 
   async createSession({ userID, verifiedPasswordHash, device, sessionHash, expiresAt }) {
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
       await transaction.begin();
       // Password verification happens before this transaction. Hold the
@@ -1198,7 +1205,7 @@ export class PostgresStore {
 
   async revokeDevice(userID, deviceID, actorDeviceID = null) {
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
       await transaction.begin();
       if (actorDeviceID !== null) {
@@ -2838,7 +2845,7 @@ export class PostgresStore {
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
     const retainVaultOutcome = ['team.vault.put','team.vault.create','team.vault.wrapper.grant','team.invitation.accept'].includes(operation);
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence, retainVaultOutcome });
+    const transaction = this.teamAuthorizationTransaction(client, retainVaultOutcome);
     const fenced = transaction.publication;
     try {
       await transaction.begin();

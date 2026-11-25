@@ -148,7 +148,7 @@ test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocat
         digest: await readV1TeamAuthorizationDigest(query),
       });
     }
-    const store = new DeviceTrustStore(pool, { v1Fence: anchor?.fence });
+    const store = new DeviceTrustStore(pool, { v1Fence: anchor?.fence, retainTeamAuthorization: Boolean(anchor) });
     await store.publishRoot({ accountID, actorDeviceID: firstID, bundle: firstBundle,
       expectedPublicKey: keyJSON(first.publicKey), certificate: firstCertificate,
       checkpoint: firstDirectory, idempotencyKey: randomUUID() });

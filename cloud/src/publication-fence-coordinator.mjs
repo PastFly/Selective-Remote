@@ -157,20 +157,21 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
   };
 }
 
-export function createTeamAuthorizationTransaction({client,fence,retainVaultOutcome=false}){
+export function createTeamAuthorizationTransaction({client,fence,retainVaultOutcome=false,retainTeamAuthorization=false}){
   const query=(sql,values)=>client.query(sql,values);
   const fenced=fence?createPublicationFenceTransaction({query,fence}):null;
   let unlock,previousDigest,releaseError;
   return {
     publication:retainVaultOutcome?fenced:null,
     async begin(){
-      const armed=Boolean(fence?.anchor&&(await fence.snapshot()).v1TeamAuthorization);
-      if(armed){
+      // The caller pins Team history only after verified maintenance arming.
+      // Inactive deployments keep their existing transaction dependencies.
+      if(retainTeamAuthorization){
         try{unlock=await lockV1TeamAuthorizationWriter(client);}
         catch(error){releaseError=error;throw error;}
       }
       await query('BEGIN');
-      if(armed)previousDigest=await holdV1TeamAuthorizationFence(client,fence);
+      if(retainTeamAuthorization)previousDigest=await holdV1TeamAuthorizationFence(client,fence);
     },
     async commit(){
       if(!fenced)return query('COMMIT');

@@ -84,13 +84,19 @@ export async function requirePreparingActor(client, input, relatedVaultIDs = [])
 }
 
 export class AccessStore {
-  constructor(pool, { v1Fence = null } = {}) { this.pool = pool; this.v1Fence = v1Fence; }
+  constructor(pool, { v1Fence = null, retainTeamAuthorization = false } = {}) {
+    this.pool = pool;
+    this.v1Fence = v1Fence;
+    this.retainTeamAuthorization = retainTeamAuthorization;
+  }
 
   async withMutation({ actorUserID, idempotencyKey, operation, request }, action,
     attempt = 0) {
     validateIdempotencyKey(idempotencyKey);
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
+    const transaction = createTeamAuthorizationTransaction({
+      client, fence: this.v1Fence, retainTeamAuthorization: this.retainTeamAuthorization,
+    });
     const hash = requestHash(request);
     let retry = false;
     try {

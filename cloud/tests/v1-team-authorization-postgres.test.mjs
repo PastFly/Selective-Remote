@@ -11,7 +11,10 @@ import { PostgresStore } from "../src/postgres-store.mjs";
 import { PublicationFenceCoordinator, readCommittedV1Outcome } from "../src/publication-fence-coordinator.mjs";
 import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 import { readV1VaultState } from "../src/v1-data-fence.mjs";
-import { installV1TeamAuthorizationFence, readCommittedV1TeamAuthorizationOutcome, readV1TeamAuthorizationDigest } from "../src/v1-team-authorization.mjs";
+import {
+    holdV1TeamAuthorizationFence, installV1TeamAuthorizationFence,
+    readCommittedV1TeamAuthorizationOutcome, readV1TeamAuthorizationDigest,
+} from "../src/v1-team-authorization.mjs";
 import { isolatedPublicationDatabase, publicationRuntimeFixture } from "./publication-runtime-fixture.mjs";
 import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-http-anchor-fixture.mjs";
 
@@ -37,6 +40,12 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         await db.pool.query(`INSERT INTO team_memberships(id,team_id,user_id,role)
             VALUES($1,$2,$3,'editor')`, [membership, team, member]);
 
+        const legacyStore = new PostgresStore(db.databaseURL, db.pool, {
+            v1Fence: { anchor: {}, snapshot: async () => { throw new Error("deployment_fence_locked"); } },
+        });
+        assert.equal(await legacyStore.updateUsername(member, "team_auth_legacy_member"), "team_auth_legacy_member");
+        assert.equal(await legacyStore.consumeEmailVerificationToken(randomBytes(32).toString("hex")), null);
+
         runtime = await publicationRuntimeFixture(db.databaseURL);
         anchor = await syntheticHttpAnchor(runtime.path);
         const { fence } = anchor;
@@ -61,7 +70,7 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
             /v1_team_authorization_writer_required/u,
         );
         await assert.rejects(db.pool.query("TRUNCATE team_memberships CASCADE"), /v1_team_authorization_writer_required/u);
-        const store = new PostgresStore(db.databaseURL, db.pool, { v1Fence: fence });
+        const store = new PostgresStore(db.databaseURL, db.pool, { v1Fence: fence, retainTeamAuthorization: true });
         const change = { actorUserID: owner, teamID: team, membershipID: membership, idempotencyKey: randomUUID(), role: "viewer" };
         const result = await store.updateTeamMembershipRole(change);
         assert.equal(result.membership.role, "viewer");
@@ -84,6 +93,15 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
             /deployment_team_authorization_mismatch/u,
         );
 
+        const promoted = await store.updateTeamMembershipRole({ ...change, idempotencyKey: randomUUID(), role: "editor" });
+        assert.equal(promoted.membership.role, "editor");
+        await assert.rejects(
+            verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate }),
+            /deployment_team_authorization_mismatch/u,
+        );
+        assert.equal((await store.updateTeamMembershipRole(change)).membership.role, "viewer");
+        assert.equal((await query("SELECT role FROM team_memberships WHERE id=$1", [membership])).rows[0].role, "editor");
+
         const newDevice = { id: randomUUID(), name: "Synthetic browser", platform: "web", appVersion: "test", publicKey: null };
         const verificationHash = randomBytes(32).toString("hex");
         const sessionHash = randomBytes(32).toString("hex");
@@ -100,7 +118,7 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         const afterSignup = await fence.snapshot();
         assert.equal(afterSignup.v1Committed.find(vault => vault.ownerID === account.id)?.revision, 0);
         assert.equal(afterSignup.v1TeamAuthorization.digest, await readV1TeamAuthorizationDigest(query));
-        assert.equal(afterSignup.v1TeamAuthorizationOutcomes.length, 4);
+        assert.equal(afterSignup.v1TeamAuthorizationOutcomes.length, 5);
         assert.equal(await store.revokeDevice(account.id, newDevice.id), true);
         assert.equal(await store.session(sessionHash), null);
         assert.ok((await fence.snapshot()).revokedDeviceIDs.includes(newDevice.id));
@@ -117,7 +135,7 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
                     release: error => client.release(error),
                 };
             },
-        }, { v1Fence: fence });
+        }, { v1Fence: fence, retainTeamAuthorization: true });
         const createVault = { actorUserID: owner, teamID: team, name: "Synthetic Team Vault", idempotencyKey: randomUUID() };
         await assert.rejects(lostReplyStore.createSharedVault(createVault), /synthetic_lost_commit_response/u);
         const uncertain = await fence.snapshot();
@@ -137,6 +155,29 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         }), { status: "confirmed", intentID: authorizationIntent.intentID });
         assert.equal((await store.createSharedVault(createVault)).vault.id, vaultIntent.vaultID);
         assert.equal((await fence.snapshot()).v1TeamAuthorization.pending, null);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+
+        const vaultID = vaultIntent.vaultID, folder = randomUUID(), resource = randomUUID();
+        const client = await db.pool.connect();
+        const transactionQuery = (sql, params) => client.query(sql, params);
+        try {
+            await client.query("BEGIN");
+            await holdV1TeamAuthorizationFence(client, fence);
+            // V2 preparation is experimental. Keep the registry exercise
+            // inside this rolled-back transaction, outside the retained V1 floor.
+            await client.query("UPDATE shared_vaults SET format_state='V2_PREPARING',format_schema_version=2 WHERE id=$1", [vaultID]);
+            await client.query(`INSERT INTO vault_resource_registry(id,team_id,vault_id,policy_class)
+                VALUES($1,$2,$3,'folder'),($4,$2,$3,'general')`, [folder, team, vaultID, resource]);
+            const beforeMove = await readV1TeamAuthorizationDigest(transactionQuery);
+            await client.query(`UPDATE vault_resource_registry
+                SET parent_folder_id=$1,resource_version=resource_version+1 WHERE id=$2`, [folder, resource]);
+            const afterMove = await readV1TeamAuthorizationDigest(transactionQuery);
+            assert.notEqual(afterMove, beforeMove, "resource hierarchy changes the authorization digest independently of a mutation receipt");
+            await client.query("UPDATE shared_vaults SET access_policy_version=access_policy_version+1 WHERE id=$1", [vaultID]);
+            assert.notEqual(await readV1TeamAuthorizationDigest(transactionQuery), afterMove, "Vault policy version is retained");
+        } finally {
+            try { await client.query("ROLLBACK"); } finally { client.release(); }
+        }
         assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
     } finally {
         await restored?.cleanup();

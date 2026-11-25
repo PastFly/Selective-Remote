@@ -2,7 +2,11 @@ import { createTeamAuthorizationTransaction } from "./publication-fence-coordina
 
 // Account-scoped public device admission records. No private key is stored here.
 export class DeviceTrustStore {
-  constructor(pool, { v1Fence = null } = {}) { this.pool = pool; this.v1Fence = v1Fence; }
+  constructor(pool, { v1Fence = null, retainTeamAuthorization = false } = {}) {
+    this.pool = pool;
+    this.v1Fence = v1Fence;
+    this.retainTeamAuthorization = retainTeamAuthorization;
+  }
 
   async getSnapshot(accountID) {
     const client = await this.pool.connect();
@@ -131,7 +135,9 @@ export class DeviceTrustStore {
 
   async mutate(accountID, operation, idempotencyKey, action) {
     const client = await this.pool.connect();
-    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
+    const transaction = createTeamAuthorizationTransaction({
+      client, fence: this.v1Fence, retainTeamAuthorization: this.retainTeamAuthorization,
+    });
     try {
       await transaction.begin();
       const owner = await client.query(

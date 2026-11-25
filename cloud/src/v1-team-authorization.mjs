@@ -6,20 +6,25 @@ const digestPattern = /^[a-f0-9]{64}$/u;
 
 // All identifiers and row expressions below are fixed by the Cloud schema.
 // Signed trust records and invitation state are part of the authorization
-// decision. Login telemetry and encrypted Vault content use their own state.
+// decision. Mutation receipts prevent an older database from replaying a
+// consumed request even when permission values have since returned to their
+// previous state. Login telemetry and encrypted Vault content use their own state.
 const projections = [
     ["device_trust_certificates_v1"],
     ["device_trust_challenges_v1"],
     ["device_trust_directories_v1"],
+    ["device_trust_mutation_receipts_v1"],
     ["device_trust_requests_v1"],
     ["device_trust_revocations_v1"],
     ["device_trust_roots_v1"],
     ["devices", ["id", "user_id", "platform", "public_key", "public_key_algorithm", "key_registered_at", "key_approved_at", "key_approved_by_device_id", "revoked_at"]],
     ["shared_vault_key_wrappers"],
     ["shared_vault_rotation_tasks"],
-    ["shared_vaults", ["id", "team_id", "created_by_user_id", "format_state", "key_generation", "rotation_required", "archived_at"]],
+    ["shared_vaults", ["id", "team_id", "created_by_user_id", "format_state", "format_schema_version",
+        "key_generation", "rotation_required", "archived_at", "access_policy_version"]],
     ["team_access_group_members"],
     ["team_access_groups"],
+    ["team_access_mutation_receipts"],
     ["team_invitation_link_secrets"],
     ["team_invitation_vault_wrappers"],
     ["team_invitation_wrapper_devices"],
@@ -27,10 +32,12 @@ const projections = [
     ["team_invitations"],
     ["team_membership_device_admissions"],
     ["team_memberships"],
+    ["team_mutation_receipts"],
     ["team_policy_revisions"],
     ["teams"],
     ["users", ["id", "email", "username", "email_verified_at", "disabled_at"]],
     ["vault_access_grants"],
+    ["vault_resource_registry"],
 ];
 
 // PostgreSQL binary records preserve timestamps and bytes independently of
