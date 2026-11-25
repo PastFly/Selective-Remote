@@ -95,6 +95,23 @@ struct PersonalVaultConflictResolutionTests {
         #expect(try SelectiveRemotePersonalVaultCrypto.open(stored.cloud, vaultKey: key) == remote)
     }
 
+    @Test("The review shows the address and user from an older native Host")
+    func olderNativeProfileSummary() throws {
+        let profile = try JSONSerialization.data(withJSONObject: [
+            "friendlyName": "Test Host", "host": "native.example.invalid", "username": "synthetic",
+            "sshIdentityID": first.canonicalCloudString
+        ])
+        let host = try SelectiveRemoteVaultRecord(
+            id: first, type: .host, version: .init([browser: 1]), modifiedAt: time,
+            data: .object(["profile": .string(profile.selectiveRemoteBase64URL)])
+        )
+        let document = try SelectiveRemoteVaultDocument(records: [host])
+        let summary = SelectiveRemotePersonalVaultConflictReview.summary(first, in: document)
+        #expect(summary.contains("native.example.invalid"))
+        #expect(summary.contains("synthetic"))
+        #expect(summary.contains { $0.contains(String(first.canonicalCloudString.prefix(8))) })
+    }
+
     private func record(_ id: UUID, title: String, device: UUID) throws -> SelectiveRemoteVaultRecord {
         try .init(id: id, type: .host, version: .init([device: 1]), modifiedAt: time,
                   data: .object(["title": .string(title), "address": .string("sample.example.invalid")]))

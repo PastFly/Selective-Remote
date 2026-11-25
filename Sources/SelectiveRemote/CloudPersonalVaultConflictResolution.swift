@@ -154,20 +154,36 @@ struct SelectiveRemotePersonalVaultConflictReview {
               case let .object(fields) = record.data else {
             return [UpdateLocalization.text(ru: "Записи нет", en: "Record absent")]
         }
-        let values = ["title", "address", "username", "destination"].compactMap { field -> String? in
-            guard case let .string(value)? = fields[field], !value.isEmpty else { return nil }
+        var native: [String: Any] = [:]
+        if case let .string(profile)? = fields["profile"],
+           let bytes = Data(selectiveRemoteBase64URL: profile),
+           let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] {
+            native = object
+        }
+        let summaryFields = [
+            ("address", native["host"] as? String ?? native["serialDevicePath"] as? String),
+            ("username", native["username"] as? String),
+            ("destination", nil)
+        ]
+        let values = summaryFields.compactMap { field, fallback -> String? in
+            guard case let .string(value)? = fields[field], !value.isEmpty else { return fallback?.isEmpty == false ? fallback : nil }
             return value
+        }
+        let title: [String]
+        if values.isEmpty, case let .string(value)? = fields["title"], !value.isEmpty {
+            title = [value]
+        } else if values.isEmpty, let value = native["friendlyName"] as? String, !value.isEmpty {
+            title = [value]
+        } else {
+            title = []
         }
         // Sensitive values stay in the encrypted document. A truncated key
         // reference is sufficient to distinguish the selected SSH identities.
-        if case let .string(profile)? = fields["profile"],
-           let bytes = Data(selectiveRemoteBase64URL: profile),
-           let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-           let keyID = object["sshIdentityID"] as? String, UUID(uuidString: keyID) != nil {
+        if let keyID = native["sshIdentityID"] as? String, UUID(uuidString: keyID) != nil {
             let reference = String(keyID.prefix(8))
-            return values + [UpdateLocalization.text(ru: "SSH-ключ \(reference)", en: "SSH key \(reference)")]
+            return title + values + [UpdateLocalization.text(ru: "SSH-ключ \(reference)", en: "SSH key \(reference)")]
         }
-        return values
+        return title + values
     }
 
     @MainActor
