@@ -3,7 +3,8 @@ import Foundation
 enum SelectiveRemotePersonalVaultSSHKeyStore {
     static func install(
         _ values: [SelectiveRemotePersonalVaultSSHKeyInput],
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        usingFreshFiles: Bool = false
     ) throws -> [SSHKeyRecord] {
         guard !values.isEmpty else { return [] }
         let root = (fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -17,7 +18,10 @@ enum SelectiveRemotePersonalVaultSSHKeyStore {
         )
 
         return try values.map { value in
-            let directory = root.appendingPathComponent(value.record.id.uuidString.lowercased(), isDirectory: true)
+            let keyDirectory = root.appendingPathComponent(value.record.id.uuidString.lowercased(), isDirectory: true)
+            let directory = usingFreshFiles
+                ? keyDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                : keyDirectory
             try fileManager.createDirectory(
                 at: directory,
                 withIntermediateDirectories: true,
