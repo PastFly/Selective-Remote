@@ -137,6 +137,7 @@ struct SyncCenterView: View {
                         "Повторить: \(snapshot.scope == .personal ? "личный Vault" : "командные Vaults")") {
                     sync.retry(snapshot.scope)
                 }
+                .buttonStyle(SyncCenterRetryButtonStyle())
                 .disabled([.syncing, .signedOut, .locked, .disabled].contains(snapshot.lifecycle))
             }
         }
@@ -164,5 +165,24 @@ struct SyncCenterView: View {
         case .synced: .green
         default: .secondary
         }
+    }
+}
+
+// A background check can disable Retry while it has keyboard focus. Render the
+// control in SwiftUI to avoid reentering AppKit's native button focus layout.
+private struct SyncCenterRetryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.background, in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5)
+            }
+            .opacity(configuration.isPressed ? 0.75 : 1)
     }
 }
