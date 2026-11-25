@@ -124,9 +124,9 @@ final class SyncPresentationStore: ObservableObject {
     @Published private(set) var team = SyncScopeSnapshot.unknown(.team)
     @Published private(set) var unconfirmedSessionCleanup = false
     private(set) var generation = UUID()
-    private(set) var personalSetupCheck = UUID()
     private var accountKey: String?
     private var activeTeamCycle: (token: UUID, generation: UUID)?
+    private var activePersonalSetupCheck: (token: UUID, connectionVerified: Bool)?
 
     func reportUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = true }
     func acknowledgeUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = false }
@@ -152,8 +152,8 @@ final class SyncPresentationStore: ObservableObject {
 
     func invalidateSession() {
         generation = UUID()
-        personalSetupCheck = UUID()
         activeTeamCycle = nil
+        activePersonalSetupCheck = nil
         personal = .unknown(.personal)
         team = .unknown(.team)
     }
@@ -199,21 +199,28 @@ final class SyncPresentationStore: ObservableObject {
                pending: personal.pendingLocalChanges)
     }
 
+    func beginPersonalSetupCheck() -> UUID {
+        let token = UUID()
+        activePersonalSetupCheck = (token, false)
+        return token
+    }
+
     func recordPersonalSetupRequired(check: UUID) {
-        guard check == personalSetupCheck else { return }
+        guard let active = activePersonalSetupCheck, active.token == check else { return }
+        activePersonalSetupCheck = nil
+        if active.connectionVerified {
+            if personal.lifecycle == .syncing { recordPersonalUnknown() }
+            return
+        }
         setPrerequisite(.personal, lifecycle: .setupRequired)
     }
 
-    func recordPersonalVaultConnected(endpoint: String, deviceID: String, generation: UUID) -> Bool {
-        guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID) else {
-            return false
-        }
+    func recordPersonalVaultConnected(endpoint: String, deviceID: String, generation: UUID) {
+        guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID) else { return }
         // Inventory verified the current Vault and key while a sync check may
         // still be returning an earlier missing-key result.
-        personalSetupCheck = UUID()
-        guard personal.lifecycle == .setupRequired else { return false }
-        recordPersonalUnknown()
-        return true
+        activePersonalSetupCheck?.connectionVerified = true
+        if personal.lifecycle == .setupRequired { recordPersonalUnknown() }
     }
 
     func beginTeamCycle(token: UUID) {

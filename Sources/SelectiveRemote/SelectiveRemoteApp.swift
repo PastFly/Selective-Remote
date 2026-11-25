@@ -692,7 +692,7 @@ struct SelectiveRemoteApp: App {
         )
         let syncGeneration = syncPresentation.generation
         let uploadGeneration = personalUploadGeneration
-        let setupCheck = syncPresentation.personalSetupCheck
+        let setupCheck = syncPresentation.beginPersonalSetupCheck()
         if syncPresentation.personal.pendingLocalChanges != true,
            ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.begin(.personal)

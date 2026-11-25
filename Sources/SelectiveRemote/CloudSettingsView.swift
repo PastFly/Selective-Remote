@@ -942,10 +942,10 @@ struct CloudSettingsView: View {
                 if let material, material.vaultID == personalVault.id,
                    material.wrappedKey == personalVault.envelope?.wrappedKey {
                     personalVaultSetup = material.allowsUpload ? .connected : .initialDownload
-                    if material.allowsUpload, syncPresentation.recordPersonalVaultConnected(
-                        endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
-                    ) {
-                        NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
+                    if material.allowsUpload {
+                        syncPresentation.recordPersonalVaultConnected(
+                            endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+                        )
                     }
                 } else {
                     personalVaultSetup = .needsUnlock
