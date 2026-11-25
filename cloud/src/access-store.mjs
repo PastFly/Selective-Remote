@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createTeamAuthorizationTransaction } from "./publication-fence-coordinator.mjs";
 import { requireAccessMutation, validateIdempotencyKey } from "./team-policy.mjs";
 import { applyGrantChanges, compileEffectiveAccess } from "./effective-access.mjs";
 import { permissionBits, requiredCryptoParts, usabilityByPermission, validateGrant } from "./access-policy.mjs";
@@ -83,16 +84,17 @@ export async function requirePreparingActor(client, input, relatedVaultIDs = [])
 }
 
 export class AccessStore {
-  constructor(pool) { this.pool = pool; }
+  constructor(pool, { v1Fence = null } = {}) { this.pool = pool; this.v1Fence = v1Fence; }
 
   async withMutation({ actorUserID, idempotencyKey, operation, request }, action,
     attempt = 0) {
     validateIdempotencyKey(idempotencyKey);
     const client = await this.pool.connect();
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
     const hash = requestHash(request);
     let retry = false;
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       const reservation = await client.query(
         `INSERT INTO team_access_mutation_receipts
            (actor_user_id, operation, idempotency_key, request_sha256)
@@ -111,7 +113,7 @@ export class AccessStore {
           throw new Error("access_idempotency_conflict");
         }
         await requirePreparingActor(client, request);
-        await client.query("COMMIT");
+        await transaction.commit();
         return replay.rows[0].response;
       }
       const result = await action(client);
@@ -120,14 +122,14 @@ export class AccessStore {
          WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
         [actorUserID, operation, idempotencyKey, JSON.stringify(result)],
       );
-      await client.query("COMMIT");
+      await transaction.commit();
       return result;
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
+      await transaction.rollback().catch(() => {});
       if (["40P01", "40001"].includes(error?.code) && attempt < 2) retry = true;
       else throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
     if (retry) {
       return this.withMutation({ actorUserID, idempotencyKey, operation, request },

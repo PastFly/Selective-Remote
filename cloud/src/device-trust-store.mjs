@@ -1,6 +1,8 @@
+import { createTeamAuthorizationTransaction } from "./publication-fence-coordinator.mjs";
+
 // Account-scoped public device admission records. No private key is stored here.
 export class DeviceTrustStore {
-  constructor(pool) { this.pool = pool; }
+  constructor(pool, { v1Fence = null } = {}) { this.pool = pool; this.v1Fence = v1Fence; }
 
   async getSnapshot(accountID) {
     const client = await this.pool.connect();
@@ -129,8 +131,9 @@ export class DeviceTrustStore {
 
   async mutate(accountID, operation, idempotencyKey, action) {
     const client = await this.pool.connect();
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       const owner = await client.query(
         "SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL FOR UPDATE", [accountID]);
       if (!owner.rows[0]) throw new Error("device_trust_not_found");
@@ -145,7 +148,7 @@ export class DeviceTrustStore {
           `SELECT response FROM device_trust_mutation_receipts_v1
            WHERE account_id = $1 AND operation = $2 AND idempotency_key = $3`,
           [accountID, operation, idempotencyKey]);
-        await client.query("COMMIT");
+        await transaction.commit();
         return replay.rows[0]?.response ?? {};
       }
       const response = await action(client);
@@ -153,10 +156,10 @@ export class DeviceTrustStore {
         `UPDATE device_trust_mutation_receipts_v1 SET response = $4::jsonb
          WHERE account_id = $1 AND operation = $2 AND idempotency_key = $3`,
         [accountID, operation, idempotencyKey, JSON.stringify(response)]);
-      await client.query("COMMIT");
+      await transaction.commit();
       return response;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       if (["23505", "40001", "40P01"].includes(error?.code)
         || error?.message === "stale_device_directory") {
         throw new Error("device_trust_conflict");
@@ -165,7 +168,7 @@ export class DeviceTrustStore {
         throw new Error("device_trust_invalid");
       }
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   async publishRoot({ accountID, actorDeviceID, bundle, expectedPublicKey,
@@ -555,6 +558,9 @@ export class DeviceTrustStore {
           (account_id, actor_device_id, target_device_id, action, key_version)
          VALUES ($1, $2, $3, 'device.revoked', $4)`,
         [accountID, actorDeviceID, deviceID, removed.keyVersion]);
+      if (this.v1Fence?.anchor && (await this.v1Fence.snapshot())?.writerFloor === 1) {
+        await this.v1Fence.append({ version: 2, type: "V1_DEVICE_REVOKED", deviceID });
+      }
       return { deviceID, status: "revoked", directoryVersion: bundle.directoryVersion };
     });
   }

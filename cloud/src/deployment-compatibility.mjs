@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
 import { assertV1CommitFence, requireIndependentV1Anchor } from './v1-commit-fence.mjs';
 import { assertV1DataFloor } from './v1-data-fence.mjs';
+import { assertV1TeamAuthorization, assertV1TeamAuthorizationFence } from './v1-team-authorization.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
 function requireCandidate(candidate) {
@@ -12,7 +13,9 @@ function requireCandidate(candidate) {
   const emptyCreateAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion'].sort().join(',')
     && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1;
   const fields=Object.keys(candidate??{}).sort().join(',');
-  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion']];
+  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion'],
+    ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion'],
+    ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol']];
   const extended=variants.some(extra=>fields===[...keys,'v1WriterProtocol','emptyVaultCreationVersion',...extra].sort().join(',')
     &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&extra.every(k=>candidate[k]===1));
   if ((!legacy && !writerAware && !emptyCreateAware && !extended)
@@ -30,7 +33,18 @@ function requireWriterFloor(snapshot, candidate) {
 function requireResolved(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.pending) || !Array.isArray(snapshot.committed) || !Array.isArray(snapshot.outcomes))
     throw Error('invalid_deployment_fence');
-  if (snapshot.pending.length || snapshot.v1Pending?.length) throw Error('deployment_fence_pending');
+  if (snapshot.pending.length || snapshot.v1Pending?.length || snapshot.v1TeamAuthorization?.pending)
+    throw Error('deployment_fence_pending');
+}
+
+function requireTeamAuthorizationCapability(snapshot, candidate) {
+  if (!snapshot.v1TeamAuthorization) return;
+  if (candidate.v1TeamAuthorizationProtocol !== 1) throw Error('deployment_code_floor');
+  if (snapshot.writerFloor !== 1 || !snapshot.v1BaselineID) throw Error('invalid_deployment_fence');
+}
+
+function sameTeamAuthorization(before, after) {
+  return before?.protocol === after?.protocol && before?.digest === after?.digest;
 }
 function samePublication(record, row) {
   if (!row || row.teamID !== record.teamID || row.vaultID !== record.vaultID || row.manifestHash !== record.manifestHash) return false;
@@ -90,6 +104,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (!['traffic', 'maintenance-upgrade'].includes(mode)) throw Error('invalid_deployment_mode');
   const before = await fence.snapshot();
   requireResolved(before);
+  requireTeamAuthorizationCapability(before, candidate);
   const beforeWriterFloor = requireWriterFloor(before, candidate);
   if (beforeWriterFloor) requireIndependentV1Anchor(fence);
   const version = await readMigrationSchemaVersion(query);
@@ -100,6 +115,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
     if (beforeWriterFloor) throw Error('deployment_writer_floor');
     const after = await fence.snapshot();
     requireResolved(after);
+    requireTeamAuthorizationCapability(after, candidate);
     if (requireWriterFloor(after, candidate)) throw Error('deployment_writer_floor');
     if (after.committed.length || after.outcomes.length) throw Error('deployment_schema_floor');
     return { compatible: true, schemaVersion: version, maintenanceOnly: true };
@@ -109,6 +125,9 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const publications = await readActivePublications(query, version);
   const after = await fence.snapshot();
   requireResolved(after);
+  requireTeamAuthorizationCapability(after, candidate);
+  if (!sameTeamAuthorization(before.v1TeamAuthorization, after.v1TeamAuthorization))
+    throw Error('deployment_team_authorization_history_changed');
   const afterWriterFloor = requireWriterFloor(after, candidate);
   if (afterWriterFloor) requireIndependentV1Anchor(fence);
   if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
@@ -116,8 +135,14 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (afterWriterFloor) {
     await assertV1CommitFence(query);
     await assertV1DataFloor(query,after);
+    if (after.v1TeamAuthorization) {
+      await assertV1TeamAuthorizationFence(query);
+      await assertV1TeamAuthorization(query,after.v1TeamAuthorization);
+    }
     const final=await fence.snapshot();
     requireResolved(final);
+    if (!sameTeamAuthorization(after.v1TeamAuthorization, final.v1TeamAuthorization))
+      throw Error('deployment_team_authorization_history_changed');
     if(requireWriterFloor(final,candidate)!==afterWriterFloor
       ||JSON.stringify([final.v1BaselineID,final.v1Committed,final.v1Outcomes])
         !==JSON.stringify([after.v1BaselineID,after.v1Committed,after.v1Outcomes]))throw Error('deployment_v1_history_changed');

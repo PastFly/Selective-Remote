@@ -44,6 +44,20 @@ export function validateFenceEvent(value){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
  }
+ if(value.type==='V1_TEAM_AUTHORIZATION_BASELINE'){
+  if(!keys(value,['version','type','authorizationProtocol','digest'])||
+    value.authorizationProtocol!==1||!isHash(value.digest))invalid();
+  return {version:2,type:value.type,authorizationProtocol:1,digest:value.digest};
+ }
+ if(value.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+  if(!keys(value,['version','type','intentID','previousDigest','nextDigest'])||!isUUID(value.intentID)||
+    !isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest)invalid();
+  return {version:2,type:value.type,intentID:value.intentID,previousDigest:value.previousDigest,nextDigest:value.nextDigest};
+ }
+ if(value.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'||value.type==='V1_TEAM_AUTHORIZATION_ABORTED'){
+  if(!keys(value,['version','type','intentID','intentDigest'])||!isUUID(value.intentID)||!isHash(value.intentDigest))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,intentDigest:value.intentDigest};
+ }
  if(value.type==='V1_PERSONAL_PILOT_OPENED'){
   if(!keys(value,['version','type','pilotID','ownerID','vaultID','issuedAt','expiresAt'])||
    ![value.pilotID,value.ownerID,value.vaultID].every(isUUID)||
@@ -126,6 +140,9 @@ export function validateFenceEvent(value){
 
 export function fenceIntentDigest(value){
  const event=validateFenceEvent(value);
+ if(event.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+  return createHash('sha256').update('selective-remote/v1-team-authorization-intent/v1\0').update(canonical(event)).digest('hex');
+ }
  if(event.version===2&&!['PENDING_INTENT','V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(event.type))invalid();
  const domain=event.type==='V1_WRAPPER_BATCH_PENDING_INTENT'?'selective-remote/v1-wrapper-batch-fence-intent/v1\0':event.type==='V1_PENDING_INTENT'?'selective-remote/v1-writer-fence-intent/v1\0':event.version===2?'selective-remote/deployment-fence-intent/v2\0':'selective-remote/deployment-fence-intent/legacy-v1\0';
  return createHash('sha256').update(domain).update(canonical(event)).digest('hex');
@@ -138,13 +155,40 @@ export function reduceFenceEvents(events){
  const revokedSessionIDs=new Set(),revokedDeviceIDs=new Set(),revokedAccountIDs=new Set();
  const passwordResetIDs=new Map(),passwordIdentityIDs=new Map();
  const pilotIDs=new Set();
+ const teamAuthorizationIntents=new Map(),teamAuthorizationOutcomes=new Map();
  let writerFloor=0,v1Baseline=null,personalWritePilot=null;
+ let teamAuthorizationBaseline=null,teamAuthorizationDigest=null,teamAuthorizationPending=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
   if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
+  if(event.type==='V1_TEAM_AUTHORIZATION_BASELINE'){
+   if(teamAuthorizationBaseline){if(!same(teamAuthorizationBaseline,event))conflict();continue;}
+   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||personalWritePilot)conflict();
+   teamAuthorizationBaseline=event;
+   teamAuthorizationDigest=event.digest;
+   continue;
+  }
+  if(event.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+   const intent={...event,intentDigest:fenceIntentDigest(event)},prior=teamAuthorizationIntents.get(event.intentID);
+   if(prior){if(!same(prior,intent))conflict();continue;}
+   if(!teamAuthorizationBaseline||teamAuthorizationPending||pending.size||event.previousDigest!==teamAuthorizationDigest)conflict();
+   teamAuthorizationIntents.set(event.intentID,intent);
+   teamAuthorizationPending=intent;
+   continue;
+  }
+  if(event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'||event.type==='V1_TEAM_AUTHORIZATION_ABORTED'){
+   const prior=teamAuthorizationOutcomes.get(event.intentID);
+   if(prior){if(!same(prior,event))conflict();continue;}
+   if(teamAuthorizationPending?.intentID!==event.intentID||
+     teamAuthorizationPending.intentDigest!==event.intentDigest)conflict();
+   if(event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED')teamAuthorizationDigest=teamAuthorizationPending.nextDigest;
+   teamAuthorizationOutcomes.set(event.intentID,event);
+   teamAuthorizationPending=null;
+   continue;
+  }
   if(event.type==='V1_PERSONAL_PILOT_OPENED'){
    const vault=v1Committed.get('PERSONAL:'+event.vaultID);
-   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||personalWritePilot||pilotIDs.has(event.pilotID)||
+   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||teamAuthorizationPending||personalWritePilot||pilotIDs.has(event.pilotID)||
     vault?.ownerID!==event.ownerID||revokedAccountIDs.has(event.ownerID))conflict();
    pilotIDs.add(event.pilotID);
    personalWritePilot=event;
@@ -258,6 +302,10 @@ export function reduceFenceEvents(events){
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
  return {...(writerFloor?{writerFloor}:{}),
+  ...(teamAuthorizationBaseline?{
+    v1TeamAuthorization:{protocol:1,digest:teamAuthorizationDigest,pending:teamAuthorizationPending},
+    v1TeamAuthorizationOutcomes:[...teamAuthorizationOutcomes.values()],
+  }:{}),
   ...(personalWritePilot?{personalWritePilot}:{}),
   ...(revokedSessionIDs.size?{revokedSessionIDs:[...revokedSessionIDs].sort(compare)}:{}),
   ...(revokedDeviceIDs.size?{revokedDeviceIDs:[...revokedDeviceIDs].sort(compare)}:{}),

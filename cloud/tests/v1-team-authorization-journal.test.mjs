@@ -1,0 +1,110 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { fenceIntentDigest, reduceFenceEvents } from "../src/migration-fence-journal.mjs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MigrationFence } from "../src/migration-fence.mjs";
+import { createPublicationFenceTransaction, PublicationFenceCoordinator } from "../src/publication-fence-coordinator.mjs";
+import { syntheticAnchoredFence } from "./synthetic-v1-anchor-fixture.mjs";
+
+const original = "1".repeat(64);
+const updated = "2".repeat(64);
+const events = [
+    { version: 2, type: "V1_BASELINE", baselineID: "11111111-1111-4111-8111-111111111111", vaults: [] },
+    { version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 },
+];
+const baseline = {
+    version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: 1, digest: original,
+};
+const stage = {
+    version: 2, type: "V1_TEAM_AUTHORIZATION_PENDING",
+    intentID: "22222222-2222-4222-8222-222222222222", previousDigest: original, nextDigest: updated,
+};
+const confirmation = () => ({
+    version: 2, type: "V1_TEAM_AUTHORIZATION_CONFIRMED",
+    intentID: stage.intentID, intentDigest: fenceIntentDigest(stage),
+});
+
+test("the retained Team authorization digest advances only after a matched confirmation", () => {
+    const retained = [...events, baseline, stage];
+    const state = reduceFenceEvents(retained).v1TeamAuthorization;
+    const confirm = confirmation();
+    assert.deepEqual(state, {
+        protocol: 1, digest: original, pending: { ...stage, intentDigest: confirm.intentDigest },
+    });
+    const expected = { protocol: 1, digest: updated, pending: null };
+    assert.deepEqual(reduceFenceEvents([...retained, confirm]).v1TeamAuthorization, expected);
+    assert.deepEqual(reduceFenceEvents([...retained, confirm, stage, confirm]).v1TeamAuthorization, expected);
+});
+
+test("Team authorization history rejects a stale baseline, overlapping transition and unrelated confirmation", () => {
+    assert.throws(() => reduceFenceEvents([baseline]), /deployment_fence_conflict/u);
+    const retained = [...events, baseline];
+    assert.throws(() => reduceFenceEvents([...retained, { ...stage, previousDigest: updated, nextDigest: "3".repeat(64) }]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...retained, stage, { ...stage, intentID: "33333333-3333-4333-8333-333333333333" }]), /deployment_fence_conflict/u);
+    const confirm = confirmation();
+    assert.throws(() => reduceFenceEvents([...retained, stage, { ...confirm, intentDigest: original }]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...retained, stage, confirm, { ...baseline, digest: updated }]), /deployment_fence_conflict/u);
+});
+
+test("a proven abort retains the previous authorization digest and closes the pending transition", () => {
+    const confirm = confirmation();
+    const abort = { ...confirm, type: "V1_TEAM_AUTHORIZATION_ABORTED" };
+    assert.deepEqual(reduceFenceEvents([...events, baseline, stage, abort]).v1TeamAuthorization, {
+        protocol: 1, digest: original, pending: null,
+    });
+    assert.throws(() => reduceFenceEvents([...events, baseline, stage, abort, confirm]), /deployment_fence_conflict/u);
+});
+
+test("the journal requires an independent anchor and an unresolved Team write blocks readiness", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sr-team-authorization-"));
+    try {
+        const path = join(directory, "journal");
+        await writeFile(path, "");
+        const fence = await syntheticAnchoredFence(path);
+        for (const event of events) await fence.append(event);
+        await assert.rejects(new MigrationFence(path).append(baseline), /deployment_anchor_required/u);
+        await fence.append(baseline);
+        await fence.append(stage);
+        await assert.rejects(fence.assertWritable(), /deployment_fence_pending/u);
+        await fence.append(confirmation());
+        assert.equal(await fence.assertWritable(), true);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("a lost Team COMMIT response requires positive readback and cannot be cleared by a later rollback", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sr-team-authorization-commit-"));
+    try {
+        const path = join(directory, "journal");
+        await writeFile(path, "");
+        const fence = await syntheticAnchoredFence(path);
+        for (const event of [...events, baseline]) await fence.append(event);
+        const transaction = createPublicationFenceTransaction({
+            fence, query: async (sql) => {
+                if (sql === "COMMIT") throw new Error("synthetic_lost_commit_response");
+                assert.equal(sql, "ROLLBACK");
+            },
+        });
+        const { intentID } = await transaction.beforeCommit({
+            kind: "V1_TEAM_AUTHORIZATION", previousDigest: original, nextDigest: updated,
+        });
+        await assert.rejects(transaction.commit(), /synthetic_lost_commit_response/u);
+        await transaction.rollback();
+        const coordinator = new PublicationFenceCoordinator({ fence });
+        assert.deepEqual(await coordinator.reconcile({ intentID, readCommittedOutcome: async () => null }),
+            { status: "pending", intentID });
+        await assert.rejects(coordinator.reconcile({
+            intentID, readCommittedOutcome: async () => ({ kind: "V1_TEAM_AUTHORIZATION", digest: original }),
+        }), /deployment_fence_mismatch/u);
+        assert.deepEqual(await coordinator.reconcile({
+            intentID, readCommittedOutcome: async () => ({ kind: "V1_TEAM_AUTHORIZATION", digest: updated }),
+        }), { status: "confirmed", intentID });
+        assert.equal((await fence.snapshot()).v1TeamAuthorization.digest, updated);
+        assert.deepEqual(await new PublicationFenceCoordinator({ fence }).reconcile({ intentID }), { status: "confirmed", intentID });
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});

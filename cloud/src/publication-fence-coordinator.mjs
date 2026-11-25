@@ -3,10 +3,25 @@ import {canonicalMigrationJSON,migrationHash,verifyMigrationManifest} from './mi
 import {publicationHash,verifyReaderHeader} from '../public/vault-publication-v1.js';
 import {validateFenceEvent,fenceIntentDigest} from './migration-fence-journal.mjs';
 import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL,readV1VaultState} from './v1-data-fence.mjs';
+import {
+  holdV1TeamAuthorizationFence,lockV1TeamAuthorizationWriter,
+  readCommittedV1TeamAuthorizationOutcome,readV1TeamAuthorizationDigest,
+} from './v1-team-authorization.mjs';
 
 const same=(a,b)=>canonicalMigrationJSON(a)===canonicalMigrationJSON(b);
 const abortProofs=new WeakMap();
 function fail(code){throw Error(code);}
+
+const intentTypes={
+  V1:'V1_PENDING_INTENT',
+  V1_WRAPPER_BATCH:'V1_WRAPPER_BATCH_PENDING_INTENT',
+  V1_TEAM_AUTHORIZATION:'V1_TEAM_AUTHORIZATION_PENDING',
+};
+const confirmedTypes=['CONFIRMED_COMMIT','V1_CONFIRMED_COMMIT','V1_TEAM_AUTHORIZATION_CONFIRMED'];
+function findPendingIntent(state,intentID){
+  if(state.v1TeamAuthorization?.pending?.intentID===intentID)return state.v1TeamAuthorization.pending;
+  return [...state.pending,...(state.v1Pending??[])].find(item=>item.intentID===intentID);
+}
 
 export class PublicationFenceCoordinator{
   #intents=new Map();
@@ -15,9 +30,9 @@ export class PublicationFenceCoordinator{
     this.fence=fence;
   }
   async beforeCommit(fields){
-    const copy=structuredClone(fields),isV1=copy.kind==='V1',isWrapper=copy.kind==='V1_WRAPPER_BATCH';
-    if(isV1||isWrapper)delete copy.kind;
-    const intent=validateFenceEvent({...copy,version:2,type:isV1?'V1_PENDING_INTENT':isWrapper?'V1_WRAPPER_BATCH_PENDING_INTENT':'PENDING_INTENT',intentID:randomUUID()});
+    const copy=structuredClone(fields),type=Object.hasOwn(intentTypes,copy.kind)?intentTypes[copy.kind]:'PENDING_INTENT';
+    if(type!=='PENDING_INTENT')delete copy.kind;
+    const intent=validateFenceEvent({...copy,version:2,type,intentID:randomUUID()});
     await this.fence.append(intent);
     this.#intents.set(intent.intentID,{...structuredClone(intent),intentDigest:fenceIntentDigest(intent)});
     return structuredClone(intent);
@@ -25,7 +40,7 @@ export class PublicationFenceCoordinator{
   async #pending(intentID){
     if(this.#intents.has(intentID))return this.#intents.get(intentID);
     const state=await this.fence.snapshot();
-    const intent=[...state.pending,...(state.v1Pending??[])].find(item=>item.intentID===intentID);
+    const intent=findPendingIntent(state,intentID);
     if(!intent)fail('deployment_fence_intent_not_found');
     this.#intents.set(intentID,structuredClone(intent));return intent;
   }
@@ -33,14 +48,20 @@ export class PublicationFenceCoordinator{
     if(typeof readCommittedOutcome!=='function')fail('deployment_fence_readback_required');
     const intent=await this.#pending(intentID),outcome=await readCommittedOutcome(structuredClone(intent));
     if(!outcome)fail('deployment_fence_pending');
-    if(intent.type==='V1_PENDING_INTENT'){
+    let confirmedType='CONFIRMED_COMMIT';
+    if(intent.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+      if(outcome.kind!=='V1_TEAM_AUTHORIZATION'||outcome.digest!==intent.nextDigest)fail('deployment_fence_mismatch');
+      confirmedType='V1_TEAM_AUTHORIZATION_CONFIRMED';
+    }else if(intent.type==='V1_PENDING_INTENT'){
       if(outcome.kind!=='V1'||['operationID','vaultKind','ownerID','vaultID','baseRevision','revision','ciphertextHash','envelopeHash'].some(key=>outcome[key]!==intent[key]))fail('deployment_fence_mismatch');
+      confirmedType='V1_CONFIRMED_COMMIT';
     }else if(intent.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
       if(outcome.kind!=='V1_WRAPPER_BATCH'||outcome.operationID!==intent.operationID||!same(outcome.changes,intent.changes))fail('deployment_fence_mismatch');
+      confirmedType='V1_CONFIRMED_COMMIT';
     }else if(outcome.kind!==intent.kind||outcome.operationID!==intent.operationID||!same(outcome.vaults,intent.vaults))fail('deployment_fence_mismatch');
     // Cache retains only the exact authenticated intent, allowing the same
     // confirmation to retry its durability barriers after a failed append.
-    await this.fence.append({version:2,type:intent.type.startsWith('V1_')?'V1_CONFIRMED_COMMIT':'CONFIRMED_COMMIT',intentID,intentDigest:intent.intentDigest});
+    await this.fence.append({version:2,type:confirmedType,intentID,intentDigest:intent.intentDigest});
     this.#intents.delete(intentID);
     return {status:'confirmed',intentID};
   }
@@ -49,7 +70,9 @@ export class PublicationFenceCoordinator{
     if(!provenance||provenance.coordinator!==this||provenance.intentID!==intentID)fail('invalid_deployment_abort_proof');
     const intent=await this.#pending(intentID);
     if(intent.legacy||intent.intentDigest!==provenance.intentDigest)fail('invalid_deployment_abort_proof');
-    await this.fence.append({version:2,type:intent.type.startsWith('V1_')?'V1_PROVEN_ABORT':'PROVEN_ABORT',intentID,intentDigest:intent.intentDigest});
+    const type=intent.type==='V1_TEAM_AUTHORIZATION_PENDING'?'V1_TEAM_AUTHORIZATION_ABORTED'
+      :intent.type.startsWith('V1_')?'V1_PROVEN_ABORT':'PROVEN_ABORT';
+    await this.fence.append({version:2,type,intentID,intentDigest:intent.intentDigest});
     this.#intents.delete(intentID);
     abortProofs.delete(proof);return {status:'aborted',intentID};
   }
@@ -58,11 +81,11 @@ export class PublicationFenceCoordinator{
       try{return await this.confirmCommit({intentID,readCommittedOutcome});}
       catch(error){if(error.message==='deployment_fence_pending')return {status:'pending',intentID};throw error;}
     }
-    const state=await this.fence.snapshot(),intent=[...state.pending,...(state.v1Pending??[])].find(item=>item.intentID===intentID);
+    const state=await this.fence.snapshot(),intent=findPendingIntent(state,intentID);
     if(!intent){
-      const outcome=[...state.outcomes,...(state.v1Outcomes??[])].find(item=>item.intentID===intentID);
+      const outcome=[...state.outcomes,...(state.v1Outcomes??[]),...(state.v1TeamAuthorizationOutcomes??[])].find(item=>item.intentID===intentID);
       if(!outcome)fail('deployment_fence_intent_not_found');
-      return {status:['CONFIRMED_COMMIT','V1_CONFIRMED_COMMIT'].includes(outcome.type)?'confirmed':'aborted',intentID};
+      return {status:confirmedTypes.includes(outcome.type)?'confirmed':'aborted',intentID};
     }
     this.#intents.set(intentID,structuredClone(intent));
     try{return await this.confirmCommit({intentID,readCommittedOutcome});}
@@ -70,33 +93,103 @@ export class PublicationFenceCoordinator{
   }
 }
 
+const committedOutcomeReaders={
+  V1_PENDING_INTENT:readCommittedV1Outcome,
+  V1_WRAPPER_BATCH_PENDING_INTENT:readCommittedV1WrapperBatchOutcome,
+  V1_TEAM_AUTHORIZATION_PENDING:readCommittedV1TeamAuthorizationOutcome,
+};
+
 // The abort capability never crosses the transaction adapter. A caller's JSON,
 // a new process, or ROLLBACK after any COMMIT dispatch cannot manufacture it.
 export function createPublicationFenceTransaction({query,fence,coordinator:providedCoordinator,readCommittedOutcome}){
-  let coordinator,intent,commitDispatched=false,rolledBack=false,abortProven=false;
+  let coordinator,commitDispatched=false,commitAcknowledged=false,rolledBack=false;
+  const intents=[],aborted=new Set();
   return {
     get commitDispatched(){return commitDispatched;},
-    get intentID(){return intent?.intentID??null;},
+    get intentID(){return intents[0]?.intentID??null;},
     async beforeCommit(fields){
-      if(intent||commitDispatched||rolledBack)fail('deployment_fence_transaction_state');
-      coordinator=providedCoordinator??new PublicationFenceCoordinator({fence});
-      intent=await coordinator.beforeCommit(fields);return structuredClone(intent);
+      // A Team transaction can stage its authorization outcome after staging
+      // a Vault or wrapper outcome. Both must survive a single SQL COMMIT.
+      if(commitDispatched||rolledBack||(intents.length>0&&
+        (intents.length!==1||fields.kind!=='V1_TEAM_AUTHORIZATION'||
+          !['V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(intents[0].type))))
+        fail('deployment_fence_transaction_state');
+      coordinator??=providedCoordinator??new PublicationFenceCoordinator({fence});
+      const intent=await coordinator.beforeCommit(fields);
+      intents.push(intent);
+      return structuredClone(intent);
     },
-    async commit(){if(commitDispatched||rolledBack)fail('deployment_fence_transaction_state');commitDispatched=true;return query('COMMIT');},
+    async commit(){
+      if(commitDispatched||rolledBack)fail('deployment_fence_transaction_state');
+      commitDispatched=true;
+      const result=await query('COMMIT');
+      commitAcknowledged=true;
+      return result;
+    },
     async confirm(){
-      if(!intent)return;
-      return coordinator.confirmCommit({intentID:intent.intentID,
-        readCommittedOutcome:readCommittedOutcome??(pending=>pending.type==='V1_PENDING_INTENT'
-          ?readCommittedV1Outcome({query,intent:pending}):pending.type==='V1_WRAPPER_BATCH_PENDING_INTENT'
-          ?readCommittedV1WrapperBatchOutcome({query,intent:pending}):readCommittedPublicationOutcome({query,intent:pending}))});
+      if(!intents.length)return;
+      if(!commitAcknowledged||rolledBack)fail('deployment_fence_transaction_state');
+      let result;
+      for(const intent of intents){
+        result=await coordinator.reconcile({intentID:intent.intentID,
+          readCommittedOutcome:readCommittedOutcome??(pending=>{
+            const read=committedOutcomeReaders[pending.type]??readCommittedPublicationOutcome;
+            return read({query,intent:pending});
+          })});
+        if(result.status!=='confirmed')fail('deployment_fence_pending');
+      }
+      return result;
     },
     async rollback(){
       await query('ROLLBACK');
       rolledBack=true;
-      if(!intent||commitDispatched||abortProven)return;
-      const proof={};
-      abortProofs.set(proof,{coordinator,intentID:intent.intentID,intentDigest:fenceIntentDigest(intent)});
-      const result=await coordinator.proveAbort({intentID:intent.intentID,proof});abortProven=true;return result;
+      if(commitDispatched)return;
+      let result;
+      for(const intent of intents){
+        if(aborted.has(intent.intentID))continue;
+        const proof={};
+        abortProofs.set(proof,{coordinator,intentID:intent.intentID,intentDigest:fenceIntentDigest(intent)});
+        result=await coordinator.proveAbort({intentID:intent.intentID,proof});
+        aborted.add(intent.intentID);
+      }
+      return result;
+    },
+  };
+}
+
+export function createTeamAuthorizationTransaction({client,fence,retainVaultOutcome=false}){
+  const query=(sql,values)=>client.query(sql,values);
+  const fenced=fence?createPublicationFenceTransaction({query,fence}):null;
+  let unlock,previousDigest,releaseError;
+  return {
+    publication:retainVaultOutcome?fenced:null,
+    async begin(){
+      const armed=Boolean(fence?.anchor&&(await fence.snapshot()).v1TeamAuthorization);
+      if(armed){
+        try{unlock=await lockV1TeamAuthorizationWriter(client);}
+        catch(error){releaseError=error;throw error;}
+      }
+      await query('BEGIN');
+      if(armed)previousDigest=await holdV1TeamAuthorizationFence(client,fence);
+    },
+    async commit(){
+      if(!fenced)return query('COMMIT');
+      if(previousDigest){
+        const nextDigest=await readV1TeamAuthorizationDigest(query);
+        if(nextDigest!==previousDigest)
+          await fenced.beforeCommit({kind:'V1_TEAM_AUTHORIZATION',previousDigest,nextDigest});
+      }
+      await fenced.commit();
+      await fenced.confirm();
+    },
+    async rollback(){
+      try{if(fenced)await fenced.rollback();else await query('ROLLBACK');}
+      catch(error){releaseError=error;throw error;}
+    },
+    async release(){
+      try{await unlock?.();}
+      catch(error){releaseError=error;}
+      client.release(releaseError);
     },
   };
 }

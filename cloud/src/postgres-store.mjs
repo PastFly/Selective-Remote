@@ -2,7 +2,7 @@ import { VaultMigrationStore } from './vault-migration-store.mjs';
 import { VaultPublicationStore } from './vault-publication-store.mjs';
 import { WholePublicationStore } from './whole-publication-store.mjs';
 import { holdV1CommitFence } from './v1-commit-fence.mjs';
-import { createPublicationFenceTransaction } from './publication-fence-coordinator.mjs';
+import { createPublicationFenceTransaction, createTeamAuthorizationTransaction } from './publication-fence-coordinator.mjs';
 import { assertV1DataFloor, readV1VaultState, v1CiphertextHash } from './v1-data-fence.mjs';
 import { personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 import pg from "pg";
@@ -171,7 +171,7 @@ export class PostgresStore {
         console.error(JSON.stringify({ level: "error", message: "Idle Cloud database connection lost" }));
       });
     }
-    this.access = new AccessSurfaceStore(this.pool);
+    this.access = new AccessSurfaceStore(this.pool, { v1Fence });
     this.writerFence = writerFence;
     this.v1Fence = v1Fence;
   }
@@ -646,9 +646,10 @@ export class PostgresStore {
 
   async createUser({ email, username, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
-    const fenced = this.v1Fence ? createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}) : null;
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence, retainVaultOutcome: true });
+    const fenced = transaction.publication;
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       if (fenced) {
         await this.writerFence(client,this.v1Fence);
         const snapshot = await this.v1Fence.snapshot();
@@ -690,11 +691,10 @@ export class PostgresStore {
         [user.id, verificationHash, verificationExpiresAt],
       );
       if (fenced) await retainEmptyVaultCreation(fenced,client,'PERSONAL',user.id,vault.rows[0].id);
-      if (fenced) { await fenced.commit(); await fenced.confirm(); }
-      else await client.query("COMMIT");
+      await transaction.commit();
       return user;
     } catch (error) {
-      try { if (fenced) await fenced.rollback(); else await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       if (error?.code === "23505" && error?.constraint === "users_username_unique") {
         throw new Error("username_exists");
       }
@@ -706,7 +706,7 @@ export class PostgresStore {
       }
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -747,16 +747,23 @@ export class PostgresStore {
   }
 
   async updateUsername(userID, username) {
+    const client = await this.pool.connect();
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
     try {
-      const result = await this.pool.query(
+      await transaction.begin();
+      const result = await client.query(
         "UPDATE users SET username = $2, updated_at = now() WHERE id = $1 AND disabled_at IS NULL RETURNING username",
         [userID, username],
       );
       if (!result.rows[0]) throw new Error("account_not_found");
+      await transaction.commit();
       return result.rows[0].username;
     } catch (error) {
+      try { await transaction.rollback(); } catch {}
       if (error?.code === "23505" && error?.constraint === "users_username_unique") throw new Error("username_exists");
       throw error;
+    } finally {
+      await transaction.release();
     }
   }
 
@@ -826,8 +833,9 @@ export class PostgresStore {
 
   async consumeEmailVerificationToken(tokenHash) {
     const client = await this.pool.connect();
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       const token = await client.query(
         `UPDATE email_verification_tokens AS token SET consumed_at = now()
          FROM users AS owner
@@ -841,7 +849,7 @@ export class PostgresStore {
         [tokenHash],
       );
       if (!token.rows[0]) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return null;
       }
       const user = await client.query(
@@ -850,13 +858,13 @@ export class PostgresStore {
          RETURNING id, email, display_name, email_verified_at, created_at`,
         [token.rows[0].user_id],
       );
-      await client.query("COMMIT");
+      await transaction.commit();
       return user.rows[0] ?? null;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -1027,8 +1035,9 @@ export class PostgresStore {
 
   async createSession({ userID, verifiedPasswordHash, device, sessionHash, expiresAt }) {
     const client = await this.pool.connect();
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       // Password verification happens before this transaction. Hold the
       // identity lock through session insertion so a concurrent reset either
       // invalidates this login or subsequently revokes the new session.
@@ -1116,12 +1125,12 @@ export class PostgresStore {
         [userID, device.id, sessionHash, expiresAt],
       );
       await client.query("UPDATE account_identities SET last_used_at = now() WHERE user_id = $1 AND provider = 'password'", [userID]);
-      await client.query("COMMIT");
+      await transaction.commit();
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -1189,8 +1198,9 @@ export class PostgresStore {
 
   async revokeDevice(userID, deviceID, actorDeviceID = null) {
     const client = await this.pool.connect();
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence });
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       if (actorDeviceID !== null) {
         const actor = await client.query(
           `SELECT id FROM devices
@@ -1209,7 +1219,7 @@ export class PostgresStore {
         [userID, deviceID],
       );
       if (!result.rows[0]) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return false;
       }
       await client.query(
@@ -1241,13 +1251,13 @@ export class PostgresStore {
       if (history?.writerFloor === 1) {
         await this.v1Fence.append({ version: 2, type: "V1_DEVICE_REVOKED", deviceID });
       }
-      await client.query("COMMIT");
+      await transaction.commit();
       return true;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -2826,11 +2836,12 @@ export class PostgresStore {
   }
 
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
+    const retainVaultOutcome = ['team.vault.put','team.vault.create','team.vault.wrapper.grant','team.invitation.accept'].includes(operation);
     const client = await this.pool.connect();
-    const fenced=['team.vault.put','team.vault.create','team.vault.wrapper.grant','team.invitation.accept'].includes(operation)&&this.v1Fence
-      ?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
+    const transaction = createTeamAuthorizationTransaction({ client, fence: this.v1Fence, retainVaultOutcome });
+    const fenced = transaction.publication;
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       let snapshot=null;
       if(fenced){
         await this.writerFence(client, this.v1Fence);
@@ -2851,7 +2862,7 @@ export class PostgresStore {
            WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
           [actorUserID, operation, idempotencyKey],
         );
-        await client.query("COMMIT");
+        await transaction.commit();
         return replay.rows[0]?.response ?? {};
       }
       const response = await mutation(client,fenced,snapshot);
@@ -2860,13 +2871,13 @@ export class PostgresStore {
          WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
         [actorUserID, operation, idempotencyKey, JSON.stringify(response)],
       );
-      if(fenced){await fenced.commit();await fenced.confirm();}else await client.query("COMMIT");
+      await transaction.commit();
       return response;
     } catch (error) {
-      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 }

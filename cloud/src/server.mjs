@@ -34,7 +34,7 @@ const checkDeployment = deploymentFence
   ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
     fence: deploymentFence, candidate: currentCapabilities }))
   : async () => { throw Error('deployment_fence_required'); };
-const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
+const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool, { v1Fence: deploymentFence }),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
@@ -157,10 +157,8 @@ async function route(request, response) {
       && (url.pathname !== "/v1/vault" || !personalPilotAllowed)) {
       return sendError(response, 503, v1WriteStopReason);
     }
-    // Team membership, roles and device trust are not yet included in the
-    // anchored history. A restored database can otherwise resurrect access.
-    // Keep Team traffic and trust mutations closed until a durable security
-    // baseline and every transition are protected by the independent fence.
+    // Keep Team traffic and trust mutations closed until every authorization
+    // transition and the rollback image pass the retained-history acceptance.
     if (/^\/v1\/(?:teams|team-invitations)(?:\/|$)/i.test(url.pathname)
       || (!['GET','HEAD'].includes(method) && /^\/v1\/(?:devices|device-trust)(?:\/|$)/i.test(url.pathname))) {
       return sendError(response, 503, "team_security_temporarily_unavailable");

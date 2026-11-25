@@ -6,6 +6,11 @@ import pg from "pg";
 import { applyMigrations } from "../src/migrations.mjs";
 import { DeviceTrustStore } from "../src/device-trust-store.mjs";
 import { validateSignedDeviceBundle, validateSignedDeviceDirectory } from "../src/device-trust-policy.mjs";
+import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
+import { readV1VaultState } from "../src/v1-data-fence.mjs";
+import { installV1TeamAuthorizationFence, readV1TeamAuthorizationDigest } from "../src/v1-team-authorization.mjs";
+import { isolatedPublicationDatabase, publicationRuntimeFixture } from "./publication-runtime-fixture.mjs";
+import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-http-anchor-fixture.mjs";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
 import { answerPossessionChallenge, createPossessionChallenge,
   devicePossessionChallengeBytes, issueDeviceCertificate, signDeviceDirectory,
@@ -101,7 +106,9 @@ test("concurrent direct SQL cannot create two open approvals or reuse a director
 test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocation", {
   skip: databaseURL ? false : "TEST_DATABASE_URL is not configured",
 }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseURL, max: 4 });
+  const database = syntheticHttpAnchorAvailable ? await isolatedPublicationDatabase(databaseURL) : null;
+  const pool = database?.pool ?? new pg.Pool({ connectionString: databaseURL, max: 4 });
+  let runtime, anchor;
   try {
     await applyMigrations(pool, migrationsDirectory, { info() {} });
     const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
@@ -128,7 +135,20 @@ test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocat
     const firstBundle = await validateSignedDeviceBundle({ rootPublicKey: root.publicKey,
       certificate: firstCertificate, checkpoint: firstDirectory,
       accountID, deviceID: firstID, publicKey: first.publicKey });
-    const store = new DeviceTrustStore(pool);
+    if (database) {
+      runtime = await publicationRuntimeFixture(database.databaseURL);
+      anchor = await syntheticHttpAnchor(runtime.path);
+      await installV1CommitFence(pool);
+      await installV1TeamAuthorizationFence(pool);
+      const query = (text, values) => pool.query(text, values);
+      await anchor.fence.append({ version: 2, type: "V1_BASELINE", baselineID: randomUUID(), vaults: await readV1VaultState(query) });
+      await anchor.fence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
+      await anchor.fence.append({
+        version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: 1,
+        digest: await readV1TeamAuthorizationDigest(query),
+      });
+    }
+    const store = new DeviceTrustStore(pool, { v1Fence: anchor?.fence });
     await store.publishRoot({ accountID, actorDeviceID: firstID, bundle: firstBundle,
       expectedPublicKey: keyJSON(first.publicKey), certificate: firstCertificate,
       checkpoint: firstDirectory, idempotencyKey: randomUUID() });
@@ -219,5 +239,17 @@ test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocat
     assert.deepEqual(audit.rows.map((row) => row.action),
       ["device.approved", "device.pending", "device.approved",
         "device.rekey_requested", "device.rekey_approved", "device.revoked"]);
-  } finally { await pool.end(); }
+    if (anchor) {
+      const state = await anchor.fence.snapshot();
+      assert.ok(state.revokedDeviceIDs.includes(secondID));
+      assert.equal(state.v1TeamAuthorization.pending, null);
+      assert.equal(state.v1TeamAuthorizationOutcomes.length, 10);
+      assert.equal(state.v1TeamAuthorization.digest, await readV1TeamAuthorizationDigest((text, values) => pool.query(text, values)));
+    }
+  } finally {
+    await anchor?.cleanup();
+    await runtime?.cleanup();
+    if (database) await database.cleanup();
+    else await pool.end();
+  }
 });

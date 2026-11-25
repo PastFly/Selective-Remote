@@ -110,11 +110,19 @@ export async function armV1CommitFence({ pool, fence }) {
 // This only verifies the database component. An independently retained floor,
 // protected controller and restricted DDL privileges are still mandatory.
 export async function assertV1CommitFence(query) {
-  const expected = new Map(tables.map(([name, event]) => [name, {
+  const trigger = 'selective_remote_framed_v1_writer';
+  const expected = new Map(tables.map(([name, event]) => [trigger + ':' + name, {
     type: 31,
     columns: event.includes('UPDATE OF ') ? event.split('UPDATE OF ')[1].split(', ') : [],
   }]));
-  const result = await query(`SELECT c.relname, t.tgtype, t.tgenabled, t.tgnargs,
+  return assertWriterTriggers(query, {
+    expected, triggers: [trigger], functionBody, functionName: 'selective_remote_require_framed_v1_writer',
+    errorCode: 'v1_writer_fence_missing',
+  });
+}
+
+export async function assertWriterTriggers(query, { expected, triggers, functionBody, functionName, errorCode }) {
+  const result = await query(`SELECT c.relname, t.tgname, t.tgtype, t.tgenabled, t.tgnargs,
       t.tgdeferrable, t.tginitdeferred, t.tgconstraint,
       pg_catalog.pg_get_expr(t.tgqual,t.tgrelid) AS condition,
       ARRAY(SELECT a.attname::text FROM pg_catalog.unnest(t.tgattr::int2[]) WITH ORDINALITY AS x(num,ord)
@@ -126,18 +134,18 @@ export async function assertV1CommitFence(query) {
     JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
     JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace
     JOIN pg_catalog.pg_language l ON l.oid=p.prolang
-    WHERE n.nspname='public' AND t.tgname='selective_remote_framed_v1_writer' AND NOT t.tgisinternal`);
-  if (!result || !Array.isArray(result.rows) || result.rows.length !== expected.size) throw Error('v1_writer_fence_missing');
+    WHERE n.nspname='public' AND t.tgname=ANY($1) AND NOT t.tgisinternal`, [triggers]);
+  if (!result || !Array.isArray(result.rows) || result.rows.length !== expected.size) throw Error(errorCode);
   for (const row of result.rows) {
-    const rule = expected.get(row.relname);
+    const key = row.tgname + ':' + row.relname;
+    const rule = expected.get(key);
     if (!rule || Number(row.tgtype) !== rule.type || row.tgenabled !== 'O' || Number(row.tgnargs) !== 0
       || row.tgdeferrable !== false || row.tginitdeferred !== false || Number(row.tgconstraint) !== 0
       || row.condition !== null || !Array.isArray(row.columns) || row.columns.join(',') !== rule.columns.join(',')
       || row.prosrc !== functionBody || row.prosecdef !== false || row.proconfig !== null
-      || row.proc_schema !== 'public' || row.proname !== 'selective_remote_require_framed_v1_writer'
-      || row.lanname !== 'plpgsql' || row.returns_trigger !== true) throw Error('v1_writer_fence_missing');
-    expected.delete(row.relname);
+      || row.proc_schema !== 'public' || row.proname !== functionName
+      || row.lanname !== 'plpgsql' || row.returns_trigger !== true) throw Error(errorCode);
+    expected.delete(key);
   }
-  if (expected.size) throw Error('v1_writer_fence_missing');
   return true;
 }
