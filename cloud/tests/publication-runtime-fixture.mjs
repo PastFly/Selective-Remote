@@ -55,7 +55,7 @@ export async function dropDisposablePublicationDatabase(admin, name, {delay=ms=>
   }
 }
 
-export async function isolatedPublicationDatabase(databaseURL) {
+export async function isolatedPublicationDatabase(databaseURL, { migrationsDirectory } = {}) {
   const base=new URL(databaseURL);
   if(!['127.0.0.1','localhost','[::1]'].includes(base.hostname)||!base.pathname.endsWith('_test'))throw Error('disposable_test_database_required');
   const name=`prc_http_${process.pid}_${randomUUID().replaceAll('-','')}_test`;
@@ -66,7 +66,7 @@ export async function isolatedPublicationDatabase(databaseURL) {
     pool=new pg.Pool({connectionString:base.href});
     const {applyMigrations}=await import('../src/migrations.mjs');
     const {fileURLToPath}=await import('node:url');
-    await applyMigrations(pool,fileURLToPath(new URL('../migrations/',import.meta.url)),{info(){}});
+    await applyMigrations(pool,migrationsDirectory??fileURLToPath(new URL('../migrations/',import.meta.url)),{info(){}});
     return {pool,databaseURL:base.href,cleanup};
   }catch(error){await cleanup();throw error;}
 }

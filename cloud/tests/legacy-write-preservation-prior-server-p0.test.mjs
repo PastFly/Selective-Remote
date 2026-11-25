@@ -21,17 +21,19 @@ const priorServerSHA = "79b80696d46f10d53fc2304c36e35c8b15cc1b41f3561fb1968c33f3
 test("exact prior server rejects an accepted in-flight V1 write when its barrier disappears", {
   skip: !process.env.TEST_DATABASE_URL, timeout: 60000,
 }, async () => {
-  const isolated = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
-  let runtime, archiveDirectory;
+  let isolated, runtime, archiveDirectory;
   try {
     const repository = fileURLToPath(new URL("../../", import.meta.url));
     archiveDirectory = await mkdtemp(join(tmpdir(), "sr-prior-server-5fdf-"));
-    const archive = execFileSync("git", ["archive", "--format=tar", prior, "cloud/src", "cloud/public", "cloud/package.json", "cloud/deployment-compatibility.json"], { cwd: repository, maxBuffer: 64 * 1024 * 1024 });
+    const archive = execFileSync("git", ["archive", "--format=tar", prior, "cloud/src", "cloud/public", "cloud/migrations", "cloud/package.json", "cloud/deployment-compatibility.json"], { cwd: repository, maxBuffer: 64 * 1024 * 1024 });
     execFileSync("tar", ["-xf", "-", "-C", archiveDirectory], { input: archive });
     const priorCloud = join(archiveDirectory, "cloud");
     const serverSource = await readFile(join(priorCloud, "src", "server.mjs"));
     assert.equal(createHash("sha256").update(serverSource).digest("hex"), priorServerSHA, "prior server source identity must match the approved commit");
     await symlink(fileURLToPath(new URL("../node_modules", import.meta.url)), join(priorCloud, "node_modules"));
+    isolated = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL, {
+      migrationsDirectory: join(priorCloud, "migrations"),
+    });
     const { createAuthenticatedVaultClient, personalVaultScope } = await import(pathToFileURL(join(priorCloud, "public", "vault-sync.js")));
     const user = randomUUID(), device = randomUUID(), session = randomUUID(), token = "a".repeat(43), pepper = "s".repeat(32);
     await isolated.pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,'p0@example.test','p0_test',now())", [user]);
@@ -159,7 +161,7 @@ test("exact prior server rejects an accepted in-flight V1 write when its barrier
     assert.deepEqual((await isolated.pool.query("SELECT id,revision,ciphertext FROM shared_vaults WHERE id=$1", [teamVault])).rows, beforeTeam.rows);
   } finally {
     await stopPublicationRuntime(runtime);
-    await isolated.cleanup();
+    await isolated?.cleanup();
     if (archiveDirectory) await rm(archiveDirectory, { recursive:true, force:true });
   }
 });
