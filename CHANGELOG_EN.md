@@ -1,3 +1,9 @@
+## 0.32.7
+
+- Improved two-way Personal Vault sync between macOS and the browser. Initial setup resumes automatically when writes are allowed, and Sync Center explains temporary write pauses.
+- Fixed a sync crash with an empty host list. Improved conflict details and recovery of Personal Vault views.
+- Browser sign-in uses the configured Cloud endpoint. The updater shows download progress and retains the official feed result when GitHub is unavailable.
+
 ## 0.32.6
 
 - When you sign back in to Cloud, an already connected Personal Vault keeps its last applied revision and resumes syncing from it.

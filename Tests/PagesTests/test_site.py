@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2] / 'docs'
 PAGES = [ROOT / 'index.html', ROOT / 'ru' / 'index.html']
 SECTIONS = ['product', 'workspace', 'tools', 'cloud', 'teams', 'security', 'guides', 'about']
-RELEASE = 'https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0'
+RELEASE = 'https://github.com/PastFly/Selective-Remote/releases/latest'
 
 class Tags(HTMLParser):
     def __init__(self):
@@ -33,15 +33,17 @@ class SiteTests(unittest.TestCase):
                 self.assertTrue(any(t=='a' and a.get('href')=='#main' for t,a in tags))
                 self.assertFalse(any(t=='a' and 'README' in a.get('href','') for t,a in tags))
 
-    def test_release_target_and_future_label_are_separate(self):
+    def test_downloads_point_to_latest_published_release(self):
         for page in PAGES:
             with self.subTest(page=page):
                 tags=self.parsed(page).tags
                 downloads=[a for t,a in tags if t=='a' and 'download' in a.get('class','').split()]
                 self.assertGreaterEqual(len(downloads),2)
                 self.assertTrue(all(a.get('href')==RELEASE for a in downloads))
-                self.assertIn('0.32',page.read_text())
-                self.assertNotIn('releases/download/v0.32',page.read_text())
+                content = page.read_text()
+                for stale in ('v0.31.0', 'coming in 0.32', 'скоро в 0.32'):
+                    self.assertNotIn(stale, content.lower())
+                self.assertNotIn('releases/download/v0.32', content)
                 self.assertFalse(any(a.get('http-equiv','').lower()=='refresh' for t,a in tags))
 
     def test_local_links_images_and_alt_text(self):
