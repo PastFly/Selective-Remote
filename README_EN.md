@@ -6,11 +6,11 @@
 
 A native Mac app that keeps connections, files, and commands together. Work across SSH, RDP, SFTP, and tunnels without losing context between tools.
 
-**Current release: v0.31.0 (162)** · macOS 14+ · Apple Silicon · free and open source
+**Community** · macOS 15+ · Apple Silicon · free and open source
 
-**[Download v0.31.0](https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0)** · [Website](https://pastfly.github.io/Selective-Remote/) · [Cloud](https://cloud.pastfly.ru/) · [Guides](https://pastfly.github.io/Selective-Remote/#guides)
+**[Download for Mac](https://github.com/PastFly/Selective-Remote/releases/latest)** · [Website](https://pastfly.github.io/Selective-Remote/) · [Cloud](https://cloud.pastfly.ru/) · [Guides](https://pastfly.github.io/Selective-Remote/#guides)
 
-> Every image below is a real capture of the **0.32.0 (163) candidate** with synthetic demo data. This interface has not been released; the available download is **v0.31.0 (162)**.
+> Every image below is a real capture of the **0.32.0 (163) candidate** with synthetic demo data. Use the link above for the latest build.
 
 ![Hosts workspace in the Selective Remote 0.32 candidate with synthetic demo hosts](docs/images/demo-032-en-hosts-hero.webp)
 
@@ -20,7 +20,7 @@ A native Mac app that keeps connections, files, and commands together. Work acro
 - **Organize:** profiles, groups, favorites, and tags keep infrastructure easy to find.
 - **Work:** Terminal, dual-pane SFTP, SSH tunnels, and Snippets stay in one app.
 
-Available now in **v0.31.0**: SSH Workspace, local Terminal, SFTP, Forwarding Manager, Connection Center, diagnostics, macOS Keychain, and encrypted local backups. [Explore the features and quick start](docs/FEATURES-EN.md).
+The app includes SSH Workspace, local Terminal, SFTP, Forwarding Manager, Connection Center, diagnostics, macOS Keychain, and encrypted local backups. [Explore the features and quick start](docs/FEATURES-EN.md).
 
 ### RDP across two or more displays
 
@@ -46,17 +46,17 @@ The command library is shared by SSH and the local terminal. The capture contain
 
 ![Selective Remote 0.32 candidate Snippets library with synthetic demo commands](docs/images/demo-032-en-snippets.webp)
 
-## Coming in 0.32
+## Selective Remote Cloud
 
-Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are part of the 0.32 candidate. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. These capabilities are not yet part of the current v0.31.0 download. Local work remains available without an account.
+Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are supported in the 0.32 app for eligible Cloud accounts. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. Local work remains available without an account.
 
 **Sync Center** separates Personal and Team Vault state. Notifications lead to device, invitation, or error review; reading a notification does not resolve its source. Copying a Personal Host to a Team Vault preserves the original.
 
-The first public Cloud release is being prepared with V1 Vaults: approved members share access to a Team Vault. Individual-record permissions and V2 migration are excluded from this release. Public registration is planned to open only after post-deployment V1 end-to-end acceptance succeeds.
+The first public Cloud release is being prepared with V1 Vaults: approved members share access to a Team Vault. Individual-record permissions and V2 migration are excluded from this release. Access to a specific Team Vault depends on the account’s invitation and permissions.
 
 Account password changes are temporarily unavailable to preserve access to encrypted Personal Vault data. Trust-root recovery is planned **after 0.32**.
 
-[0.32 candidate notes in Russian and English](releases/0.32.0-notes.md). 0.32 is being prepared for manual installation without Developer ID signing or Apple notarization. The app uses an ad-hoc signature; this build is not eligible for the in-app update installer. Installation, upgrade acceptance, and production Cloud deployment are still pending. **v0.31.0** remains the available download.
+[0.32 candidate notes in Russian and English](releases/0.32.0-notes.md). Community builds use ad-hoc signing. The app can download an update and verify its SHA-256 digest. Install the app manually from the DMG.
 
 [Cloud architecture and trust model](docs/cloud-v0.32-architecture.md) · [Open Cloud](https://cloud.pastfly.ru/)
 
@@ -66,11 +66,11 @@ SSH secrets are stored in macOS Keychain; new SSH host keys are not accepted aut
 
 ## Installation
 
-1. Download the DMG from [release v0.31.0](https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0).
+1. Download the DMG from the [latest release](https://github.com/PastFly/Selective-Remote/releases/latest).
 2. Open the image and drag **Selective Remote** into Applications.
 3. Launch the app. If macOS blocks it as an unidentified developer app and you trust the download, use **System Settings → Privacy & Security → Open Anyway**. Follow [Apple’s instructions](https://support.apple.com/en-gb/102445); a managed Mac may restrict this action.
 
-The ready-made DMG targets **Apple Silicon** and **macOS 14 or newer**. Server access and permissions for redirected devices depend on your workflow.
+The ready-made DMG targets **Apple Silicon** and **macOS 15 or later**. Server access and permissions for redirected devices depend on your workflow.
 
 For development: `swift test`, `swift build -c release`, then optionally `bash scripts/build_and_install.sh`. [Build instructions](BUILD-RU.md) · [Publishing](docs/PUBLISHING-RU.md) · [Release preparation](docs/RELEASING-RU.md).
 
