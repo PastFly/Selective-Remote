@@ -37,8 +37,8 @@ func releaseMetadataStaysSynchronized() throws {
     let downloadURL = try #require(manifest?["downloadURL"] as? String)
     let releaseNotesURL = try #require(manifest?["releaseNotesURL"] as? String)
 
-    #expect(version == "0.32.9")
-    #expect(build == "172")
+    #expect(version == "0.32.10")
+    #expect(build == "173")
     #expect(manifestVersion == version)
     #expect(manifestBuild == Int(build))
     #expect(

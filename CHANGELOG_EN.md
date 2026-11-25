@@ -1,3 +1,8 @@
+## 0.32.10
+
+- In Cloud Settings, choose the Mac or Cloud version of each conflicting Personal Vault record. The comparison shows differences in addresses and SSH key references.
+- The app saves both originals in an encrypted copy on the Mac. It clears the conflict after synchronization is confirmed.
+
 ## 0.32.9
 
 - On macOS, Sync Center reports Personal Vault differences when the saved key is available and the import needs review.
