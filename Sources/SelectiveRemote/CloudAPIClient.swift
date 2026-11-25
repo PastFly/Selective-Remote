@@ -374,6 +374,22 @@ struct SelectiveRemoteCloudSessionBinding: Sendable {
     fileprivate let token: String
 
     @MainActor
+    func withCurrentPersonalVault<T>(
+        tokenStore: any SelectiveRemoteCloudTokenStore,
+        keyStore: any SelectiveRemotePersonalVaultKeyStore,
+        deviceID: UUID,
+        expected: SelectiveRemotePersonalVaultKeyMaterial?,
+        perform: @MainActor () throws -> T
+    ) throws -> T {
+        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: endpoint, expectedEpoch: epoch) {
+            guard !Task.isCancelled, try tokenStore.token(for: endpoint) == token,
+                  try keyStore.material(endpoint: endpoint, deviceID: deviceID) == expected
+            else { throw CancellationError() }
+            return try perform()
+        }
+    }
+
+    @MainActor
     func commitPersonalVault(
         tokenStore: any SelectiveRemoteCloudTokenStore,
         keyStore: any SelectiveRemotePersonalVaultKeyStore,
@@ -382,10 +398,9 @@ struct SelectiveRemoteCloudSessionBinding: Sendable {
         material: SelectiveRemotePersonalVaultKeyMaterial,
         apply: @MainActor () throws -> Bool
     ) throws -> Bool {
-        try SelectiveRemotePublicationLifecycle.withCurrent(endpoint: endpoint, expectedEpoch: epoch) {
-            guard !Task.isCancelled, try tokenStore.token(for: endpoint) == token,
-                  try keyStore.material(endpoint: endpoint, deviceID: deviceID) == expected
-            else { throw CancellationError() }
+        try withCurrentPersonalVault(
+            tokenStore: tokenStore, keyStore: keyStore, deviceID: deviceID, expected: expected
+        ) {
             guard try apply() else { return false }
             try keyStore.saveIfCurrent(material, endpoint: endpoint, deviceID: deviceID, token: token, replacing: expected)
             return true

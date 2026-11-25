@@ -618,7 +618,8 @@ struct SelectiveRemoteApp: App {
         let syncDeviceID = deviceID.uuidString
         let uploadGeneration = UUID()
         personalUploadGeneration = uploadGeneration
-        if !editDates.isEmpty, ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
+        if !editDates.isEmpty,
+           ![.setupRequired, .initialDownloadRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.recordPersonalPending()
         }
         let legacyAppliedRevision = UserDefaults.standard.integer(
@@ -692,8 +693,9 @@ struct SelectiveRemoteApp: App {
         )
         let syncGeneration = syncPresentation.generation
         let uploadGeneration = personalUploadGeneration
+        let setupCheck = syncPresentation.beginPersonalSetupCheck()
         if syncPresentation.personal.pendingLocalChanges != true,
-           ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
+           ![.setupRequired, .initialDownloadRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.begin(.personal)
         }
         defer {
@@ -705,7 +707,8 @@ struct SelectiveRemoteApp: App {
         do {
             let result = try await personalVaultAutoSync.checkForChanges(
                 endpoint: endpoint,
-                deviceID: deviceID
+                deviceID: deviceID,
+                compareInitialImport: syncPresentation.personalImportDifferences.isEmpty
             )
             guard syncPresentation.matchesAccount(
                 endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
@@ -720,7 +723,25 @@ struct SelectiveRemoteApp: App {
                 syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
                 return
             case .setupRequired:
-                syncPresentation.setPrerequisite(.personal, lifecycle: .setupRequired)
+                syncPresentation.recordPersonalSetupRequired(check: setupCheck)
+                return
+            case let .initialDownloadRequired(initialDownload):
+                if let initialDownload {
+                    let snapshot = try SelectiveRemotePersonalVaultImporter.decode(initialDownload.document)
+                    let (_, differences) = await SelectiveRemotePersonalVaultImporter.compare(snapshot, with: model)
+                    guard !appLock.isLocked,
+                          UserDefaults.standard.object(
+                              forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
+                          ) as? Bool ?? true,
+                          personalUploadGeneration == uploadGeneration else { return }
+                    try personalVaultAutoSync.reportInitialImport(initialDownload, deviceID: deviceID) {
+                        syncPresentation.recordPersonalImportConflict(
+                            differences, endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString,
+                            generation: syncGeneration, check: setupCheck
+                        )
+                    }
+                }
+                syncPresentation.recordPersonalSetupRequired(check: setupCheck, initialDownload: true)
                 return
             case let .unconfirmedUpload(issue):
                 if let issue {
@@ -774,6 +795,8 @@ struct SelectiveRemoteApp: App {
             syncPresentation.recordPersonalSuccess(
                 revision: download.revision, generation: syncGeneration
             )
+        } catch is CancellationError {
+            return
         } catch {
             guard personalUploadGeneration == uploadGeneration,
                   syncPresentation.matchesAccount(

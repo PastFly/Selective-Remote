@@ -173,6 +173,122 @@ struct SyncPresentationTests {
         #expect(store.personal.lifecycle == .setupRequired)
     }
 
+    @Test("Settings clears obsolete Personal Vault setup without confirming a sync")
+    func connectedVaultSupersedesAnOlderSetupCheck() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        store.recordTeamReport(.init(scannedVaults: 3, synchronizedVaults: 3))
+        let check = store.beginPersonalSetupCheck()
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.aggregate == .setupRequired)
+
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.aggregate == .unknown)
+        #expect(store.personal.lastConfirmedAt == nil)
+        #expect(store.team.lifecycle == .synced)
+
+        store.recordPersonalSetupRequired(check: store.beginPersonalSetupCheck())
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
+    @Test("Connection evidence from a different session or device keeps setup visible")
+    func staleConnectionDoesNotResolvePersonalSetup() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        let oldGeneration = store.generation
+        store.invalidateSession()
+        store.recordPersonalSetupRequired(check: store.beginPersonalSetupCheck())
+
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: oldGeneration)
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: UUID().uuidString, generation: store.generation)
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
+    @Test("Two initial import conflicts survive background checks beside confirmed Team Vaults")
+    func initialImportConflictsSurviveBackgroundChecks() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        store.recordTeamReport(.init(scannedVaults: 3, synchronizedVaults: 3))
+        let earlierCheck = store.beginPersonalSetupCheck()
+        let differences = ["Example SSH host", "Example forwarding rule"].map {
+            PersonalVaultImportDifference(id: UUID(), title: $0, profileFields: [],
+                                          credentials: [:], deletedInCloud: false)
+        }
+
+        store.recordPersonalImportConflict(differences, endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+        store.recordPersonalSetupRequired(check: earlierCheck)
+        store.begin(.personal)
+        store.recordPersonalPending()
+        store.recordPersonalUnknown()
+        store.recordPersonalSetupRequired(check: store.beginPersonalSetupCheck(), initialDownload: true)
+
+        #expect(store.personal.lifecycle == .conflict)
+        #expect(store.aggregate == .conflict)
+        #expect(store.personalImportDifferences.map(\.id) == differences.map(\.id))
+        #expect(store.personal.lastConfirmedAt == nil)
+        #expect(store.team.lifecycle == .synced)
+
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+        #expect(store.personal.lifecycle == .conflict)
+        #expect(store.personalImportDifferences.count == 2)
+        store.recordPersonalImportApplied(endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.personalImportDifferences.isEmpty)
+        #expect(store.personal.lastConfirmedAt == nil)
+    }
+
+    @Test("Import conflict details cannot cross a device or session change")
+    func staleInitialImportConflictIsRejected() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        let difference = PersonalVaultImportDifference(id: UUID(), title: "Example",
+                                                       profileFields: [], credentials: [:], deletedInCloud: false)
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        let oldGeneration = store.generation
+        store.recordPersonalImportConflict([difference], endpoint: endpoint, deviceID: deviceID, generation: oldGeneration)
+        #expect(store.personalImportDifferences.count == 1)
+
+        store.invalidateSession()
+        store.recordPersonalSetupRequired(check: store.beginPersonalSetupCheck(), initialDownload: true)
+        store.recordPersonalImportConflict([difference], endpoint: endpoint, deviceID: deviceID, generation: oldGeneration)
+        store.recordPersonalImportConflict([difference], endpoint: endpoint, deviceID: UUID().uuidString, generation: store.generation)
+        #expect(store.personal.lifecycle == .initialDownloadRequired)
+        #expect(store.personalImportDifferences.isEmpty)
+    }
+
+    @Test("An obsolete setup result ends its in-flight check")
+    func obsoleteSetupFinishesChecking() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        let check = store.beginPersonalSetupCheck()
+        store.begin(.personal)
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+
+        #expect(store.personal.lifecycle == .syncing)
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.personal.lastConfirmedAt == nil)
+
+        let superseded = store.beginPersonalSetupCheck()
+        let current = store.beginPersonalSetupCheck()
+        store.begin(.personal)
+        store.recordPersonalSetupRequired(check: superseded)
+        #expect(store.personal.lifecycle == .syncing)
+        store.recordPersonalSetupRequired(check: current)
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
     @Test("Lifecycle has distinct Russian and English labels")
     func localizedLabels() {
         #expect(SyncLifecycle.security.title(english: true) == "Action required")

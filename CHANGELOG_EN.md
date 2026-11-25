@@ -1,3 +1,19 @@
+## 0.32.10
+
+- In Cloud Settings, choose the Mac or Cloud version of each conflicting Personal Vault record. The comparison shows differences in addresses and SSH key references.
+- The app saves both originals in an encrypted copy on the Mac. It clears the conflict after synchronization is confirmed.
+
+## 0.32.9
+
+- On macOS, Sync Center reports Personal Vault differences when the saved key is available and the import needs review.
+- After an app restart, the existing session automatically checks for differences. Cloud Settings shows the details, and both copies are preserved while the differences need review.
+
+## 0.32.8
+
+- On macOS, Cloud Settings shows account sign-in and Personal Vault connection separately. Sync Center clears an outdated setup prompt after checking the Vault state.
+- Cloud Settings picks up the session after sign-in through the connection window. The first Personal Vault check runs automatically after enrollment.
+- Fixed a Sync Center freeze when a background Vault check ran with the Retry button focused. Cloud Settings opens after Sync Center closes.
+
 ## 0.32.7
 
 - Improved two-way Personal Vault sync between macOS and the browser. Initial setup resumes automatically when writes are allowed, and Sync Center explains temporary write pauses.

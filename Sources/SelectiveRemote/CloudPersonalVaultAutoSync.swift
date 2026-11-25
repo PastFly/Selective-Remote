@@ -468,6 +468,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         case unavailable
         case signedOut
         case setupRequired
+        case initialDownloadRequired(Download?)
         case unconfirmedUpload(issue: SyncIssue?)
         case current(revision: Int)
         case download(Download)
@@ -551,7 +552,9 @@ actor SelectiveRemotePersonalVaultAutoSync {
         return pending!
     }
 
-    func checkForChanges(endpoint: URL, deviceID: UUID) async throws -> CheckResult {
+    func checkForChanges(
+        endpoint: URL, deviceID: UUID, compareInitialImport: Bool = true
+    ) async throws -> CheckResult {
         let sessionEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         let session: SelectiveRemoteCloudSessionBinding
         do {
@@ -560,8 +563,9 @@ actor SelectiveRemotePersonalVaultAutoSync {
             return sessionEpoch == SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
                 ? .signedOut : .unavailable
         }
-        guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
-              material.allowsUpload else { return .setupRequired }
+        guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID)
+        else { return .setupRequired }
+        if !material.allowsUpload, !compareInitialImport { return .initialDownloadRequired(nil) }
         let remote = try await client.personalVault(endpoint: endpoint, session: session)
         guard await client.hasStoredSession(endpoint: endpoint),
               SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == sessionEpoch,
@@ -572,6 +576,9 @@ actor SelectiveRemotePersonalVaultAutoSync {
         }
         guard remote.revision >= material.revision else {
             throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
+        }
+        if !material.allowsUpload {
+            return .initialDownloadRequired(try makeDownload(remote, material: material, session: session))
         }
         // An unchanged server revision says nothing about a queued or failed local PUT.
         // Keep local changes protected until their outgoing snapshot is acknowledged.
@@ -584,20 +591,32 @@ actor SelectiveRemotePersonalVaultAutoSync {
         if remote.revision == material.revision {
             return .current(revision: remote.revision)
         }
-        guard let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey else {
-            throw SelectiveRemotePersonalVaultError.invalidEnvelope
-        }
-        let document = try SelectiveRemotePersonalVaultCrypto.open(
-            envelope,
-            vaultKey: material.vaultKey
-        )
-        return .download(Download(
+        return .download(try makeDownload(remote, material: material, session: session))
+    }
+
+    private func makeDownload(
+        _ remote: SelectiveRemoteCloudPersonalVault,
+        material: SelectiveRemotePersonalVaultKeyMaterial,
+        session: SelectiveRemoteCloudSessionBinding
+    ) throws -> Download {
+        let document = try openCurrent(remote, material: material)
+        return Download(
             document: document,
             revision: remote.revision,
             documentHash: Data(SHA256.hash(data: try document.encoded())),
             sourceMaterial: material,
             session: session
-        ))
+        )
+    }
+
+    @MainActor
+    func reportInitialImport(
+        _ download: Download, deviceID: UUID, report: @MainActor () -> Void
+    ) throws {
+        try download.session.withCurrentPersonalVault(
+            tokenStore: client.tokenStore, keyStore: keyStore, deviceID: deviceID,
+            expected: download.sourceMaterial, perform: report
+        )
     }
 
     @MainActor
@@ -606,6 +625,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         apply: @MainActor () throws -> Bool
     ) throws -> Bool {
         guard download.session.endpoint == endpoint,
+              download.sourceMaterial.allowsUpload,
               download.revision > download.sourceMaterial.revision
         else { return false }
         var material = download.sourceMaterial

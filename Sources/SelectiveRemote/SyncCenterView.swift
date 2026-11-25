@@ -54,7 +54,10 @@ struct SyncCenterView: View {
     }
 
     private func scopeCard(_ snapshot: SyncScopeSnapshot, title: String) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
+        let setupRequired = [.setupRequired, .initialDownloadRequired].contains(snapshot.lifecycle)
+        let differenceCount = snapshot.scope == .personal && snapshot.lifecycle == .conflict
+            ? sync.personalImportDifferences.count : 0
+        return VStack(alignment: .leading, spacing: 11) {
             HStack {
                 Image(systemName: symbol(for: snapshot.lifecycle))
                     .foregroundStyle(color(for: snapshot.lifecycle))
@@ -79,10 +82,18 @@ struct SyncCenterView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if snapshot.lifecycle == .setupRequired {
-                Text(english
-                     ? "Open Cloud Settings to finish connecting Personal Vault on this Mac."
-                     : "Завершите подключение личного Vault на этом Mac в настройках Cloud.")
+            if setupRequired {
+                Text(snapshot.lifecycle == .initialDownloadRequired
+                     ? (english ? "This Mac has the Vault key. Open Cloud Settings to finish importing."
+                                : "Ключ Vault есть на этом Mac. Откройте настройки Cloud, чтобы завершить импорт.")
+                     : (english ? "Open Cloud Settings to finish connecting Personal Vault on this Mac."
+                                : "Завершите подключение личного Vault на этом Mac в настройках Cloud."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if differenceCount > 0 {
+                Text(SelectiveRemotePersonalVaultImportError.reviewMessage(count: differenceCount))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -123,6 +134,9 @@ struct SyncCenterView: View {
             if snapshot.lifecycle == .setupRequired {
                 Button(english ? "Set up Personal Vault" : "Настроить личный Vault",
                        action: onOpenCloudSettings)
+            } else if snapshot.lifecycle == .initialDownloadRequired {
+                Button(english ? "Finish connecting" : "Завершить подключение",
+                       action: onOpenCloudSettings)
             } else if snapshot.scope == .team,
                snapshot.issue == .conflict || snapshot.issue == .keyOrWrapperMissing
                 || snapshot.issue == .rotationRequired {
@@ -132,11 +146,12 @@ struct SyncCenterView: View {
                 Button(english ? "Open Cloud Settings" : "Открыть настройки Cloud",
                        action: onOpenCloudSettings)
             }
-            if snapshot.lifecycle != .setupRequired {
+            if !setupRequired && differenceCount == 0 {
                 Button(english ? "Retry \(snapshot.scope == .personal ? "Personal" : "Team")" :
                         "Повторить: \(snapshot.scope == .personal ? "личный Vault" : "командные Vaults")") {
                     sync.retry(snapshot.scope)
                 }
+                .buttonStyle(SyncCenterRetryButtonStyle())
                 .disabled([.syncing, .signedOut, .locked, .disabled].contains(snapshot.lifecycle))
             }
         }
@@ -153,6 +168,7 @@ struct SyncCenterView: View {
         case .offline: "wifi.slash"
         case .locked: "lock.fill"
         case .setupRequired: "key.fill"
+        case .initialDownloadRequired: "arrow.down.circle"
         case .unknown: "clock"
         default: "questionmark.circle"
         }
@@ -164,5 +180,24 @@ struct SyncCenterView: View {
         case .synced: .green
         default: .secondary
         }
+    }
+}
+
+// A background check can disable Retry while it has keyboard focus. Render the
+// control in SwiftUI to avoid reentering AppKit's native button focus layout.
+private struct SyncCenterRetryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.background, in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5)
+            }
+            .opacity(configuration.isPressed ? 0.75 : 1)
     }
 }

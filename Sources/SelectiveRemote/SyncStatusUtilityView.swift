@@ -68,6 +68,11 @@ struct SyncStatusUtilityDescriptor {
             compactTitle = english ? "Set up Vault" : "Подключить Vault"
             symbolName = "key.fill"
             tint = .secondary
+        case .initialDownloadRequired:
+            title = lifecycle.title(english: english)
+            compactTitle = english ? "Finish import" : "Завершить импорт"
+            symbolName = "arrow.down.circle"
+            tint = .secondary
         }
     }
 }

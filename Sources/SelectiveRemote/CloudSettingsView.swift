@@ -10,6 +10,7 @@ enum SelectiveRemoteCloudSessionTransition {
 
 struct CloudSettingsView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var syncPresentation = SyncPresentationStore.shared
 
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var endpoint = SelectiveRemoteCloudEndpoint.production
@@ -46,15 +47,11 @@ struct CloudSettingsView: View {
     @State private var accountSheetMode = AccountSheetMode.signIn
     @State private var showsConflictReview = false
     @State private var showsInitialVaultDifferences = false
-    @State private var initialVaultDifferences: [InitialVaultDifference] = []
-
-    private struct InitialVaultDifference: Identifiable {
-        let id: UUID
-        let title: String
-        let profileFields: [String]
-        let credentials: [KeychainCredentialKind: SelectiveRemotePersonalVaultImportPlan.CredentialDifference]
-        let deletedInCloud: Bool
-    }
+    @State private var initialVaultReview: SelectiveRemotePersonalVaultConflictReview?
+    @State private var initialVaultChoices: [UUID: SelectiveRemoteVaultConflictChoice] = [:]
+    @State private var initialVaultReviewError: String?
+    @State private var loadingInitialVaultReview = false
+    @State private var resolvingInitialVaultReview = false
     @State private var conflictReviewMessage: String?
     @State private var personalVaultRevision: Int?
     @State private var personalVaultMessage: String?
@@ -71,6 +68,17 @@ struct CloudSettingsView: View {
     @State private var personalVaultSetup = PersonalVaultSetup.checking
 
     private var personalVaultAutoSyncConfigured: Bool { personalVaultSetup == .connected }
+    private var initialVaultDifferences: [PersonalVaultImportDifference] {
+        guard personalVaultSetup == .initialDownload, syncPresentation.personal.lifecycle == .conflict,
+              let session = accountSession,
+              syncPresentation.matchesAccount(endpoint: session.endpoint.absoluteString, deviceID: storedDeviceID)
+        else { return [] }
+        return syncPresentation.personalImportDifferences
+    }
+    private var initialVaultReviewMessage: String? {
+        let count = initialVaultDifferences.count
+        return count == 0 ? nil : SelectiveRemotePersonalVaultImportError.reviewMessage(count: count)
+    }
     private var personalVaultEnrollmentPending: Bool {
         guard let epoch = accountSession?.epoch else { return false }
         return model.pendingPersonalVaultEnrollmentEpoch == epoch
@@ -124,8 +132,8 @@ struct CloudSettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
-            Section(UpdateLocalization.text(ru: "Аккаунт и Vault", en: "Account & Vault")) {
-                LabeledContent(UpdateLocalization.text(ru: "Состояние", en: "Status")) {
+            Section(UpdateLocalization.text(ru: "Аккаунт Cloud", en: "Cloud Account")) {
+                LabeledContent(UpdateLocalization.text(ru: "Сеанс Cloud", en: "Cloud session")) {
                     accountStatus
                 }
                 LabeledContent("API") {
@@ -229,7 +237,7 @@ struct CloudSettingsView: View {
             }
 
             if accountUser != nil {
-                Section("Personal Vault") {
+                Section(UpdateLocalization.text(ru: "Личный Vault", en: "Personal Vault")) {
                     LabeledContent(UpdateLocalization.text(ru: "Ревизия в Cloud", en: "Cloud revision")) {
                         Text(personalVaultRevision.map { "r\($0)" } ?? "—")
                             .monospacedDigit()
@@ -238,13 +246,23 @@ struct CloudSettingsView: View {
                         Text(localPersonalVaultSummary)
                             .foregroundStyle(.secondary)
                     }
-                    LabeledContent(UpdateLocalization.text(ru: "Автосинхронизация", en: "Automatic sync")) {
+                    LabeledContent(UpdateLocalization.text(ru: "Состояние Vault", en: "Vault status")) {
                         Text(personalVaultSetupTitle)
-                            .foregroundStyle(personalVaultAutoSyncConfigured && personalVaultSyncEnabled
-                                             ? Color.green : Color.secondary)
+                            .foregroundStyle(initialVaultReviewMessage != nil ? Color.orange :
+                                (personalVaultAutoSyncConfigured ? Color.green : Color.secondary))
                     }
 
-                    if !personalVaultEnrollmentPending, personalVaultSetup != .connected, personalVaultSetup != .checking {
+                    if initialVaultReviewMessage != nil {
+                        Button(UpdateLocalization.text(ru: "Посмотреть расхождения…", en: "View differences…"),
+                               systemImage: "list.bullet") {
+                            showsInitialVaultDifferences = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button(UpdateLocalization.text(ru: "Проверить снова", en: "Check again")) {
+                            connectPersonalVault()
+                        }
+                        .disabled(accountPhase.isBusy)
+                    } else if !personalVaultEnrollmentPending, personalVaultSetup != .connected, personalVaultSetup != .checking {
                         Button(
                             personalVaultSetupAction,
                             systemImage: "key.fill"
@@ -264,6 +282,14 @@ struct CloudSettingsView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(accountPhase.isBusy)
+                    }
+
+                    if let folder = try? SelectiveRemotePersonalVaultConflictCopies.folder(),
+                       FileManager.default.fileExists(atPath: folder.path) {
+                        Button(UpdateLocalization.text(ru: "Показать сохранённые копии…", en: "Show saved copies…"),
+                               systemImage: "folder") {
+                            NSWorkspace.shared.open(folder)
+                        }
                     }
 
                     Toggle(
@@ -338,18 +364,18 @@ struct CloudSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    if let personalVaultLoadErrorMessage {
+                    if let personalVaultLoadErrorMessage, personalVaultLoadErrorMessage != initialVaultReviewMessage {
                         Label(personalVaultLoadErrorMessage, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.caption)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    if !initialVaultDifferences.isEmpty {
-                        Button(UpdateLocalization.text(ru: "Посмотреть расхождения…", en: "View differences…"),
-                               systemImage: "list.bullet") {
-                            showsInitialVaultDifferences = true
-                        }
+                    if let initialVaultReviewMessage {
+                        Label(initialVaultReviewMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Text(UpdateLocalization.text(
@@ -419,6 +445,10 @@ struct CloudSettingsView: View {
         .task {
             await loadCloudStateIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+            guard phase == .available, accountPhase == .signedOut else { return }
+            Task { await loadCloudStateIfNeeded() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionLost)) { notification in
             guard let loss = notification.object as? SelectiveRemoteCloudSessionLoss,
                   let session = accountSession, loss.matches(session) else { return }
@@ -468,8 +498,10 @@ struct CloudSettingsView: View {
             personalVaultUploadSheet
                 .interactiveDismissDisabled(personalVaultUploading)
         }
-        .sheet(isPresented: $showsInitialVaultDifferences) {
+        .sheet(isPresented: $showsInitialVaultDifferences, onDismiss: resetInitialVaultReview) {
             initialVaultDifferencesSheet
+                .task { await loadInitialVaultReview() }
+                .interactiveDismissDisabled(resolvingInitialVaultReview)
         }
         .sheet(isPresented: $showsConflictReview) {
             conflictReviewSheet
@@ -515,7 +547,7 @@ struct CloudSettingsView: View {
             }
             .foregroundStyle(.secondary)
         case .signedIn, .connectingPersonalVault:
-            Label(UpdateLocalization.text(ru: "Подключён", en: "Connected"), systemImage: "checkmark.circle.fill")
+            Label(UpdateLocalization.text(ru: "Вход выполнен", en: "Signed in"), systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case .refreshing:
             Label(UpdateLocalization.text(ru: "Обновление…", en: "Refreshing…"), systemImage: "arrow.clockwise")
@@ -556,10 +588,18 @@ struct CloudSettingsView: View {
 
     @MainActor
     private func loadCloudStateIfNeeded() async {
-        guard phase == .idle else { return }
+        guard accountPhase == .signedOut else { return }
         let generation = accountPresentationGeneration
-        guard let url = await refreshCloudMetadata() else { return }
-        guard accountPresentationGeneration == generation, !accountPhase.isBusy else { return }
+        let url: URL?
+        switch phase {
+        case .idle:
+            url = await refreshCloudMetadata()
+        case .available:
+            url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
+        default:
+            return
+        }
+        guard let url, accountPresentationGeneration == generation, accountPhase == .signedOut else { return }
         await restoreStoredSession(at: url)
     }
 
@@ -655,7 +695,7 @@ struct CloudSettingsView: View {
     @MainActor
     private func restoreStoredSession(at url: URL) async {
         if accountEndpoint == url.absoluteString, accountUser != nil { return }
-        resetAccountPresentation(endpoint: url)
+        resetAccountPresentation(endpoint: url, invalidateSyncPresentation: false)
         let generation = accountPresentationGeneration
         accountPhase = .restoring
         do {
@@ -666,7 +706,6 @@ struct CloudSettingsView: View {
             guard accountPresentationGeneration == generation else { return }
             accountSession = session
             accountUser = user
-            SyncPresentationStore.shared.invalidateSession()
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
             guard isCurrentPresentation(generation, session: session) else { return }
@@ -676,7 +715,7 @@ struct CloudSettingsView: View {
             )
         } catch {
             guard accountPresentationGeneration == generation else { return }
-            resetAccountPresentation(endpoint: url)
+            resetAccountPresentation(endpoint: url, invalidateSyncPresentation: false)
             if error is CancellationError || error as? SelectiveRemoteCloudError == .authenticationRequired { return }
             accountErrorMessage = error.localizedDescription
         }
@@ -760,6 +799,7 @@ struct CloudSettingsView: View {
                     do {
                         try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID, session: signedIn.session)
                         guard isCurrentPresentation(generation, session: signedIn.session) else { return }
+                        NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
                         await loadInventory(endpoint: url)
                     } catch {
                         enrollmentError = error.localizedDescription
@@ -920,6 +960,7 @@ struct CloudSettingsView: View {
     private func loadInventory(endpoint url: URL) async {
         guard let session = accountSession else { return }
         let generation = accountPresentationGeneration
+        let syncGeneration = syncPresentation.generation
         accountPhase = .refreshing
         inventoryErrorMessage = nil
         personalVaultLoadErrorMessage = nil
@@ -938,12 +979,13 @@ struct CloudSettingsView: View {
                 }.value
                 try await client.checkSession(session)
                 guard isCurrentPresentation(generation, session: session) else { return }
-                if let material, material.vaultID == personalVault.id {
+                if let material, material.vaultID == personalVault.id,
+                   material.wrappedKey == personalVault.envelope?.wrappedKey {
+                    personalVaultSetup = material.allowsUpload ? .connected : .initialDownload
                     if material.allowsUpload {
-                        personalVaultSetup = .connected
-                    } else {
-                        personalVaultSetup = material.wrappedKey == personalVault.envelope?.wrappedKey
-                            ? .initialDownload : .needsUnlock
+                        syncPresentation.recordPersonalVaultConnected(
+                            endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+                        )
                     }
                 } else {
                     personalVaultSetup = .needsUnlock
@@ -1091,6 +1133,7 @@ struct CloudSettingsView: View {
         guard let material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
               material.requiresInitialDownload == true
         else { return }
+        let syncGeneration = syncPresentation.generation
         let remote = try await client.personalVault(endpoint: url, session: session)
         guard remote.id == material.vaultID, remote.revision >= material.revision,
               let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey
@@ -1098,56 +1141,17 @@ struct CloudSettingsView: View {
         let generation = accountPresentationGeneration
         let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
         let snapshot = try SelectiveRemotePersonalVaultImporter.decode(document)
-        let credentialSources = Set(model.profiles.map(\.id) + model.independentPortForwards.map(\.id))
-        var existingSecrets: [String: String]? = [:]
-        if snapshot.credentials.contains(where: { credentialSources.contains($0.sourceID) }) {
-            // Read the unified Vault once. An unavailable password remains a conflict.
-            existingSecrets = await Task.detached {
-                try? UnifiedCredentialVault.shared.exportedSecrets()
-            }.value
-        }
-        try await client.checkSession(session)
+        let (plan, differences) = await SelectiveRemotePersonalVaultImporter.compare(snapshot, with: model)
         guard checkPresentation
                 ? isCurrentPresentation(generation, session: session)
                 : (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == session.endpoint
         else { throw CancellationError() }
-        let history = TerminalCommandHistoryStore.shared
-        let localSnippets = history.templates()
-        let plan = SelectiveRemotePersonalVaultImporter.plan(
-            snapshot: snapshot,
-            localProfiles: model.profiles,
-            localSnippets: localSnippets,
-            localForwarding: model.independentPortForwards,
-            localSSHKeys: model.sshKeys,
-            existingPasswordsReadable: existingSecrets != nil,
-            existingPassword: { id, kind in
-                let reference = KeychainService.credentialReference(profileID: id, kind: kind)
-                return existingSecrets?[UnifiedCredentialVault.entryKey(for: reference)]
-            }
-        )
-        initialVaultDifferences = []
         guard plan.canApply else {
-            let labels = Dictionary(
-                model.profiles.map { ($0.id, $0.friendlyName) }
-                    + localSnippets.map { ($0.id, $0.title) }
-                    + model.independentPortForwards.map { ($0.id, $0.rule.displayName) }
-                    + model.sshKeys.map { ($0.id, $0.name) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            initialVaultDifferences = plan.conflictIDs.compactMap { id in
-                guard let title = labels[id] else { return nil }
-                let profileFields: [String]
-                if let local = model.profiles.first(where: { $0.id == id }),
-                   let cloud = snapshot.profiles.first(where: { $0.id == id }) {
-                    profileFields = SelectiveRemotePersonalVaultImporter.differingProfileFields(local: local, cloud: cloud)
-                } else {
-                    profileFields = []
-                }
-                return InitialVaultDifference(
-                    id: id, title: title,
-                    profileFields: profileFields,
-                    credentials: plan.credentialDifferences[id] ?? [:],
-                    deletedInCloud: snapshot.tombstoneIDs.contains(id)
+            try session.withCurrentPersonalVault(
+                tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID, expected: material
+            ) {
+                syncPresentation.recordPersonalImportConflict(
+                    differences, endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
                 )
             }
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
@@ -1165,16 +1169,20 @@ struct CloudSettingsView: View {
             model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
             model.profiles.append(contentsOf: plan.profiles)
             model.independentPortForwards.append(contentsOf: plan.forwarding)
-            history.importTemplates(plan.snippets)
+            TerminalCommandHistoryStore.shared.importTemplates(plan.snippets)
             return true
         }
         guard committed else { throw CancellationError() }
+        syncPresentation.recordPersonalImportApplied(
+            endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+        )
     }
 
     @MainActor
-    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false) {
+    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false,
+                                          invalidateSyncPresentation: Bool = true) {
         if !preservingSignIn { accountPresentationGeneration = UUID() }
-        SyncPresentationStore.shared.invalidateSession()
+        if invalidateSyncPresentation { SyncPresentationStore.shared.invalidateSession() }
         if !preservingSignIn {
             accountEndpoint = url.absoluteString
             accountPhase = .signedOut
@@ -1188,8 +1196,8 @@ struct CloudSettingsView: View {
         personalVaultMessage = nil
         personalVaultMessageIsError = false
         personalVaultSetup = .checking
-        initialVaultDifferences = []
         showsInitialVaultDifferences = false
+        resetInitialVaultReview()
         showsPersonalVaultUnlock = false
         showsPersonalVaultUpload = false
         personalVaultUnlockError = nil
@@ -1238,6 +1246,9 @@ struct CloudSettingsView: View {
     }
 
     private var personalVaultSetupTitle: String {
+        if initialVaultReviewMessage != nil {
+            return SyncLifecycle.conflict.title(english: AppLanguageStore.shared.selection.usesEnglish)
+        }
         if personalVaultEnrollmentPending {
             return UpdateLocalization.text(
                 ru: "Ожидает разрешения записи в Cloud",
@@ -1254,9 +1265,7 @@ struct CloudSettingsView: View {
         case .initialDownload:
             UpdateLocalization.text(ru: "Нужно завершить подключение", en: "Finish connecting")
         case .connected:
-            personalVaultSyncEnabled
-                ? UpdateLocalization.text(ru: "Включена", en: "Enabled")
-                : UpdateLocalization.text(ru: "Выключена", en: "Disabled")
+            UpdateLocalization.text(ru: "Подключён на этом Mac", en: "Connected on this Mac")
         }
     }
 
@@ -1542,51 +1551,335 @@ struct CloudSettingsView: View {
         ))
     }
 
+    @MainActor
+    private func resetInitialVaultReview() {
+        initialVaultReview = nil
+        initialVaultChoices = [:]
+        initialVaultReviewError = nil
+    }
+
+    @MainActor
+    private func loadInitialVaultReview() async {
+        guard let session = accountSession, !loadingInitialVaultReview else { return }
+        let generation = accountPresentationGeneration
+        let deviceID = resolvedDeviceID()
+        resetInitialVaultReview()
+        loadingInitialVaultReview = true
+        defer { loadingInitialVaultReview = false }
+        do {
+            let review = try await captureInitialVaultReview(session: session, deviceID: deviceID)
+            guard !Task.isCancelled, showsInitialVaultDifferences,
+                  isCurrentPresentation(generation, session: session) else { return }
+            initialVaultReview = review
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isCurrentPresentation(generation, session: session) else { return }
+            initialVaultReviewError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func captureInitialVaultReview(
+        session: SelectiveRemoteCloudSessionBinding, deviceID: UUID
+    ) async throws -> SelectiveRemotePersonalVaultConflictReview {
+        let url = session.endpoint
+        let generation = accountPresentationGeneration
+        let syncGeneration = syncPresentation.generation
+        guard model.personalVaultEnrollmentAllowed, personalVaultSyncEnabled,
+              (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == url,
+              let material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
+              material.requiresInitialDownload == true else { throw CancellationError() }
+        let remote = try await client.personalVault(endpoint: url, session: session)
+        guard remote.id == material.vaultID, remote.revision >= material.revision,
+              let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey
+        else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+        let cloud = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
+        let snapshot = try SelectiveRemotePersonalVaultImporter.decode(cloud)
+        let (_, differences) = await SelectiveRemotePersonalVaultImporter.compare(snapshot, with: model)
+        let local = try await SelectiveRemotePersonalVaultConflictReview.captureLocal(
+            ids: Set(differences.map(\.id)), model: model, deviceID: deviceID
+        )
+        guard isCurrentPresentation(generation, session: session), syncPresentation.generation == syncGeneration,
+              model.personalVaultEnrollmentAllowed, personalVaultSyncEnabled,
+              (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == url, resolvedDeviceID() == deviceID
+        else { throw CancellationError() }
+        try session.withCurrentPersonalVault(
+            tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID, expected: material
+        ) {
+            syncPresentation.recordPersonalImportConflict(
+                differences, endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+            )
+        }
+        guard !differences.isEmpty else { throw SelectiveRemotePersonalVaultConflictResolution.Failure.staleReview }
+        return .init(remote: remote, local: local, cloud: cloud, material: material, differences: differences)
+    }
+
+    @MainActor
+    private func resolveInitialVaultReview() {
+        guard let review = initialVaultReview, let session = accountSession,
+              Set(initialVaultChoices.keys) == review.ids, !resolvingInitialVaultReview, !accountPhase.isBusy
+        else { return }
+        let choices = initialVaultChoices
+        let deviceID = resolvedDeviceID()
+        let generation = accountPresentationGeneration
+        let syncGeneration = syncPresentation.generation
+        resolvingInitialVaultReview = true
+        initialVaultReviewError = nil
+        Task { @MainActor in
+            defer { resolvingInitialVaultReview = false }
+            do {
+                let current = try await captureInitialVaultReview(session: session, deviceID: deviceID)
+                guard review.matches(current) else {
+                    initialVaultReview = current
+                    initialVaultChoices = [:]
+                    throw SelectiveRemotePersonalVaultConflictResolution.Failure.staleReview
+                }
+                try await confirmInitialVaultChoices(
+                    choices, review: current, session: session, deviceID: deviceID,
+                    generation: generation, syncGeneration: syncGeneration
+                )
+                showsInitialVaultDifferences = false
+                await loadInventory(endpoint: session.endpoint)
+                NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
+            } catch is CancellationError {
+                if isCurrentPresentation(generation, session: session), showsInitialVaultDifferences {
+                    initialVaultReviewError = SelectiveRemotePersonalVaultConflictResolution.Failure.staleReview.localizedDescription
+                }
+            } catch {
+                guard isCurrentPresentation(generation, session: session) else { return }
+                initialVaultReviewError = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    private func confirmInitialVaultChoices(
+        _ choices: [UUID: SelectiveRemoteVaultConflictChoice],
+        review: SelectiveRemotePersonalVaultConflictReview,
+        session: SelectiveRemoteCloudSessionBinding, deviceID: UUID, generation: UUID, syncGeneration: UUID
+    ) async throws {
+        let url = session.endpoint
+        let plan = try SelectiveRemotePersonalVaultConflictResolution.plan(
+            local: review.local, remote: review.cloud, conflictIDs: review.ids, choices: choices,
+            deviceID: deviceID, resolvedAt: SelectiveRemotePersonalVaultExporter.timestamp(Date())
+        )
+        let snapshot = try SelectiveRemotePersonalVaultImporter.decode(plan.document)
+        try session.withCurrentPersonalVault(
+            tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID, expected: review.material
+        ) {
+            _ = try SelectiveRemotePersonalVaultConflictCopies.save(
+                plan, material: review.material, revision: review.remote.revision
+            )
+        }
+        let expectedRevision: Int
+        let expectedHash: String?
+        var uncertainWriteError: Error?
+        if plan.document == review.cloud {
+            expectedRevision = review.remote.revision
+            expectedHash = review.remote.envelope?.contentHash
+        } else {
+            let sealed = try SelectiveRemotePersonalVaultCrypto.reseal(
+                plan.document, vaultKey: review.material.vaultKey, wrappedKey: review.material.wrappedKey,
+                baseRevision: review.remote.revision
+            )
+            expectedRevision = review.remote.revision + 1
+            expectedHash = sealed.contentHash
+            do {
+                let receipt = try await client.putPersonalVault(endpoint: url, envelope: sealed, session: session)
+                guard !receipt.conflict, receipt.revision == expectedRevision else {
+                    throw SelectiveRemotePersonalVaultConflictResolution.Failure.staleReview
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                uncertainWriteError = error
+            }
+        }
+        let confirmed = try await client.personalVault(endpoint: url, session: session)
+        guard confirmed.id == review.remote.id, confirmed.revision == expectedRevision,
+              expectedHash != nil, confirmed.envelope?.contentHash == expectedHash,
+              confirmed.envelope?.wrappedKey == review.material.wrappedKey else {
+            throw uncertainWriteError ?? SelectiveRemotePersonalVaultConflictResolution.Failure.confirmationFailed
+        }
+        let (additions, _) = await SelectiveRemotePersonalVaultImporter.compare(snapshot, with: model)
+        let profiles = model.profiles
+        let forwards = model.independentPortForwards
+        let sshKeys = model.sshKeys
+        let templates = TerminalCommandHistoryStore.shared.templates()
+        let unchanged = try await SelectiveRemotePersonalVaultConflictReview.captureLocal(
+            ids: review.ids, model: model, deviceID: deviceID
+        )
+        guard unchanged == review.local, Set(additions.conflictIDs).isSubset(of: review.ids),
+              profiles == model.profiles, forwards == model.independentPortForwards, sshKeys == model.sshKeys,
+              templates == TerminalCommandHistoryStore.shared.templates() else {
+            throw SelectiveRemotePersonalVaultConflictResolution.Failure.staleReview
+        }
+        guard isCurrentPresentation(generation, session: session), syncPresentation.generation == syncGeneration,
+              model.personalVaultEnrollmentAllowed, personalVaultSyncEnabled,
+              (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == url, resolvedDeviceID() == deviceID
+        else { throw CancellationError() }
+        let applied = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: confirmed.id, vaultKey: review.material.vaultKey, wrappedKey: review.material.wrappedKey,
+            revision: confirmed.revision, documentHash: Data(SHA256.hash(data: plan.document.encoded())),
+            includesCredentials: plan.document.records.contains { $0.type == .credential }
+        )
+        let cloudChoices = Set(choices.filter { $0.value == .remote }.keys)
+        let committed = try session.commitPersonalVault(
+            tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID,
+            expected: review.material, material: applied
+        ) {
+            try applyConfirmedVaultChoices(cloudChoices, snapshot: snapshot, additions: additions)
+            return true
+        }
+        guard committed else { throw CancellationError() }
+        SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: confirmed.revision)
+        syncPresentation.recordPersonalSuccess(revision: confirmed.revision, generation: syncGeneration)
+    }
+
+    @MainActor
+    private func applyConfirmedVaultChoices(
+        _ cloudChoices: Set<UUID>, snapshot: SelectiveRemotePersonalVaultImportSnapshot,
+        additions: SelectiveRemotePersonalVaultImportPlan
+    ) throws {
+        let explicitCloudRecords = Set(snapshot.profiles.map(\.id) + snapshot.forwarding.map(\.id)
+            + snapshot.sshKeys.map(\.record.id) + snapshot.snippets.map(\.id))
+        let replaceIDs = cloudChoices.intersection(explicitCloudRecords.union(snapshot.tombstoneIDs))
+        let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(
+            additions.sshKeys.filter { !replaceIDs.contains($0.record.id) }
+                + snapshot.sshKeys.filter { replaceIDs.contains($0.record.id) },
+            usingFreshFiles: true
+        )
+        let cloudCredentials = snapshot.credentials.filter {
+            cloudChoices.contains($0.sourceID) && !snapshot.tombstoneIDs.contains($0.sourceID)
+        }
+        let sourceIDs = (model.profiles.map(\.id) + model.independentPortForwards.map(\.id))
+            .filter(cloudChoices.contains)
+        let removals = Set(sourceIDs.flatMap { id in
+            KeychainCredentialKind.allCases.filter { kind in
+                kind != .sshKeyAuthorization && !cloudCredentials.contains { $0.sourceID == id && $0.kind == kind }
+            }.map { SelectiveRemotePersonalVaultExporter.derivedID(sourceID: id, discriminator: "credential:\($0.rawValue)") }
+        })
+        try KeychainService.applySyncedPasswords(
+            additions.credentials.filter { !cloudChoices.contains($0.sourceID) } + cloudCredentials,
+            tombstones: removals, sourceIDs: sourceIDs
+        )
+        model.replaceSyncedProfiles(
+            model.profiles.filter { !replaceIDs.contains($0.id) }
+                + additions.profiles.filter { !replaceIDs.contains($0.id) }
+                + snapshot.profiles.filter { replaceIDs.contains($0.id) }
+        )
+        model.independentPortForwards = model.independentPortForwards.filter { !replaceIDs.contains($0.id) }
+            + additions.forwarding.filter { !replaceIDs.contains($0.id) }
+            + snapshot.forwarding.filter { replaceIDs.contains($0.id) }
+        model.sshKeys = model.sshKeys.filter { !replaceIDs.contains($0.id) } + restoredKeys
+        let history = TerminalCommandHistoryStore.shared
+        history.replaceSyncedTemplates(
+            history.templates().filter { !replaceIDs.contains($0.id) }
+                + additions.snippets.filter { !replaceIDs.contains($0.id) }
+                + snapshot.snippets.filter { replaceIDs.contains($0.id) }
+        )
+    }
+
     private var initialVaultDifferencesSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(UpdateLocalization.text(ru: "Расхождения в Personal Vault", en: "Personal Vault differences"))
                 .font(.title2.weight(.semibold))
             Text(UpdateLocalization.text(
-                ru: "Сверьте отмеченные записи на Mac и в Cloud. После этого снова нажмите «Завершить подключение».",
-                en: "Review the listed records on this Mac and in Cloud, then choose Finish Connecting again."
+                ru: "Выберите версию каждой записи. Обе исходные копии сохранятся на этом Mac в зашифрованном виде.",
+                en: "Choose a version for each record. Both originals will be saved on this Mac in encrypted form."
             ))
             .foregroundStyle(.secondary)
-            List(initialVaultDifferences) { difference in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(difference.title).font(.headline)
-                    if difference.deletedInCloud {
-                        Text(UpdateLocalization.text(ru: "Запись удалена в Cloud", en: "Deleted in Cloud"))
-                    }
-                    if !difference.profileFields.isEmpty {
-                        let fields = difference.profileFields.map(vaultProfileFieldLabel).joined(separator: ", ")
-                        Text(UpdateLocalization.text(
-                            ru: "Различаются поля — \(fields)",
-                            en: "Fields that differ — \(fields)"
-                        ))
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    ForEach(difference.credentials.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
-                        if let status = difference.credentials[kind] {
-                            Text(vaultCredentialDifferenceLabel(kind: kind, status: status))
-                                .fixedSize(horizontal: false, vertical: true)
+            if let review = initialVaultReview {
+                List(review.differences) { difference in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(difference.title).font(.headline)
+                        HStack(alignment: .top, spacing: 20) {
+                            conflictVersionSummary("Mac", values: SelectiveRemotePersonalVaultConflictReview.summary(
+                                difference.id, in: review.local
+                            ))
+                            conflictVersionSummary("Cloud", values: SelectiveRemotePersonalVaultConflictReview.summary(
+                                difference.id, in: review.cloud
+                            ))
                         }
+                        if !difference.profileFields.isEmpty {
+                            let fields = difference.profileFields.map(vaultProfileFieldLabel).joined(separator: ", ")
+                            Text(UpdateLocalization.text(
+                                ru: "Различаются поля — \(fields)", en: "Fields that differ — \(fields)"
+                            ))
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(difference.credentials.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
+                            if let status = difference.credentials[kind] {
+                                Text(vaultCredentialDifferenceLabel(kind: kind, status: status))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Picker(
+                            UpdateLocalization.text(ru: "Версия для \(difference.title)", en: "Version for \(difference.title)"),
+                            selection: Binding(
+                                get: { initialVaultChoices[difference.id] },
+                                set: { initialVaultChoices[difference.id] = $0 }
+                            )
+                        ) {
+                            Text(UpdateLocalization.text(ru: "Выберите", en: "Choose"))
+                                .tag(Optional<SelectiveRemoteVaultConflictChoice>.none)
+                            Text(UpdateLocalization.text(ru: "Оставить Mac", en: "Keep Mac version"))
+                                .tag(Optional.some(SelectiveRemoteVaultConflictChoice.local))
+                            Text(UpdateLocalization.text(ru: "Использовать Cloud", en: "Use Cloud version"))
+                                .tag(Optional.some(SelectiveRemoteVaultConflictChoice.remote))
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .disabled(resolvingInitialVaultReview)
                     }
-                    if !difference.deletedInCloud, difference.profileFields.isEmpty, difference.credentials.isEmpty {
-                        Text(UpdateLocalization.text(ru: "Настройки различаются", en: "Settings differ"))
-                    }
+                    .padding(.vertical, 8)
                 }
-                .padding(.vertical, 4)
+                .listStyle(.plain)
+            } else if loadingInitialVaultReview {
+                ProgressView(UpdateLocalization.text(ru: "Сравниваем записи…", en: "Comparing records…"))
+            }
+            if let initialVaultReviewError {
+                Label(initialVaultReviewError, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
+                if resolvingInitialVaultReview {
+                    ProgressView().controlSize(.small)
+                }
+                Button(UpdateLocalization.text(ru: "Обновить сравнение", en: "Refresh comparison")) {
+                    Task { await loadInitialVaultReview() }
+                }
+                .disabled(loadingInitialVaultReview || resolvingInitialVaultReview)
                 Spacer()
-                Button(UpdateLocalization.text(ru: "Готово", en: "Done")) {
+                Button(UpdateLocalization.text(ru: "Закрыть", en: "Close")) {
                     showsInitialVaultDifferences = false
                 }
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(.cancelAction)
+                .disabled(resolvingInitialVaultReview)
+                Button(UpdateLocalization.text(ru: "Применить и синхронизировать", en: "Apply and sync")) {
+                    resolveInitialVaultReview()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled((initialVaultReview.map { Set(initialVaultChoices.keys) != $0.ids } ?? true)
+                    || loadingInitialVaultReview || resolvingInitialVaultReview || accountPhase.isBusy)
             }
         }
         .padding(22)
-        .frame(minWidth: 480, minHeight: 325)
+        .frame(minWidth: 615, minHeight: 420)
+    }
+
+    private func conflictVersionSummary(_ source: String, values: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(source).font(.caption.weight(.semibold))
+            ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                Text(value)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func vaultProfileFieldLabel(_ field: String) -> String {
