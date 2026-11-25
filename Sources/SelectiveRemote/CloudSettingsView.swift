@@ -418,6 +418,10 @@ struct CloudSettingsView: View {
         .task {
             await loadCloudStateIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+            guard phase == .available, accountPhase == .signedOut else { return }
+            Task { await loadCloudStateIfNeeded() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionLost)) { notification in
             guard let loss = notification.object as? SelectiveRemoteCloudSessionLoss,
                   let session = accountSession, loss.matches(session) else { return }
@@ -555,10 +559,18 @@ struct CloudSettingsView: View {
 
     @MainActor
     private func loadCloudStateIfNeeded() async {
-        guard phase == .idle else { return }
+        guard accountPhase == .signedOut else { return }
         let generation = accountPresentationGeneration
-        guard let url = await refreshCloudMetadata() else { return }
-        guard accountPresentationGeneration == generation, !accountPhase.isBusy else { return }
+        let url: URL?
+        switch phase {
+        case .idle:
+            url = await refreshCloudMetadata()
+        case .available:
+            url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
+        default:
+            return
+        }
+        guard let url, accountPresentationGeneration == generation, accountPhase == .signedOut else { return }
         await restoreStoredSession(at: url)
     }
 
@@ -654,7 +666,7 @@ struct CloudSettingsView: View {
     @MainActor
     private func restoreStoredSession(at url: URL) async {
         if accountEndpoint == url.absoluteString, accountUser != nil { return }
-        resetAccountPresentation(endpoint: url)
+        resetAccountPresentation(endpoint: url, invalidateSyncPresentation: false)
         let generation = accountPresentationGeneration
         accountPhase = .restoring
         do {
@@ -665,7 +677,6 @@ struct CloudSettingsView: View {
             guard accountPresentationGeneration == generation else { return }
             accountSession = session
             accountUser = user
-            SyncPresentationStore.shared.invalidateSession()
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
             guard isCurrentPresentation(generation, session: session) else { return }
@@ -675,7 +686,7 @@ struct CloudSettingsView: View {
             )
         } catch {
             guard accountPresentationGeneration == generation else { return }
-            resetAccountPresentation(endpoint: url)
+            resetAccountPresentation(endpoint: url, invalidateSyncPresentation: false)
             if error is CancellationError || error as? SelectiveRemoteCloudError == .authenticationRequired { return }
             accountErrorMessage = error.localizedDescription
         }
@@ -1174,9 +1185,10 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
-    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false) {
+    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false,
+                                          invalidateSyncPresentation: Bool = true) {
         if !preservingSignIn { accountPresentationGeneration = UUID() }
-        SyncPresentationStore.shared.invalidateSession()
+        if invalidateSyncPresentation { SyncPresentationStore.shared.invalidateSession() }
         if !preservingSignIn {
             accountEndpoint = url.absoluteString
             accountPhase = .signedOut
