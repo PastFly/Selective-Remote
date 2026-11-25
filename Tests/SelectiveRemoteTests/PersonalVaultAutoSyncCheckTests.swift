@@ -97,7 +97,7 @@ struct PersonalVaultAutoSyncCheckTests {
 
         let result = try await check(fixture)
         switch result {
-        case .unavailable, .signedOut, .setupRequired:
+        case .unavailable, .signedOut, .setupRequired, .initialDownloadRequired:
             Issue.record("Expected a check using the existing session and key")
         case let .current(revision):
             presentation.recordPersonalSuccess(revision: revision, generation: generation)
@@ -140,13 +140,47 @@ struct PersonalVaultAutoSyncCheckTests {
         let fixture = try PersonalCheckFixture(remoteRevision: 5, prerequisite: prerequisite)
         let result = try await check(fixture)
         switch (prerequisite, result) {
-        case (.noSession, .signedOut), (.noKey, .setupRequired), (.initialDownload, .setupRequired):
+        case (.noSession, .signedOut), (.noKey, .setupRequired), (.initialDownload, .initialDownloadRequired):
             break
         default:
             Issue.record("Expected a specific prerequisite for Personal Vault sync")
         }
-        #expect(fixture.requests.count == 0)
+        #expect(fixture.requests.count == (prerequisite == .initialDownload ? 1 : 0))
         #expect(fixture.keys.saveCount == 0)
+    }
+
+    @Test("A restored session reads the pending initial import without writing to the Vault")
+    func pendingImportIsNotNewSetup() async throws {
+        let requests = PersonalCheckRequests()
+        let fixture = try PersonalCheckFixture(
+            remoteRevision: 357, prerequisite: .initialDownload,
+            uploadResponse: { request, remote, _ in
+                requests.record()
+                return (try remote.acknowledge(request), try #require(HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+                )))
+            }
+        )
+        let result = try await check(fixture)
+        guard case let .initialDownloadRequired(.some(download)) = result else {
+            Issue.record("This Mac has the Vault key and is awaiting the first import")
+            return
+        }
+        #expect(download.revision == 357)
+        #expect(fixture.keys.value?.requiresInitialDownload == true)
+        #expect(fixture.requests.count == 1)
+        #expect(requests.count == 0)
+        #expect(fixture.keys.saveCount == 0)
+
+        var didReport = false
+        try fixture.sync.reportInitialImport(download, deviceID: Self.deviceID) { didReport = true }
+        #expect(didReport)
+        fixture.tokens.saveToken(String(repeating: "n", count: 43), for: Self.endpoint)
+        #expect(throws: CancellationError.self) {
+            try fixture.sync.reportInitialImport(download, deviceID: Self.deviceID) {
+                Issue.record("A comparison from the retired session must not reach the UI")
+            }
+        }
     }
 
     @Test("A decrypted newer download is not accepted by the read operation")

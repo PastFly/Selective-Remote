@@ -9,10 +9,7 @@ enum SelectiveRemotePersonalVaultImportError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .conflicts(ids):
-            UpdateLocalization.text(
-                ru: "Подключение приостановлено: расхождений между Mac и Cloud — \(ids.count). Обе копии сохранены.",
-                en: "Initial download stopped because local and Cloud data conflict (\(ids.count)). Nothing was overwritten."
-            )
+            Self.reviewMessage(count: ids.count)
         case .unsupportedWebForwarding:
             UpdateLocalization.text(
                 ru: "Forwarding с сайта не содержит полной конфигурации и не был применён.",
@@ -24,6 +21,13 @@ enum SelectiveRemotePersonalVaultImportError: LocalizedError, Equatable {
                 en: "Personal Vault contains an invalid record; import was stopped."
             )
         }
+    }
+
+    static func reviewMessage(count: Int) -> String {
+        UpdateLocalization.text(
+            ru: "Подключение приостановлено: расхождений между Mac и Cloud — \(count). Обе копии сохранены.",
+            en: "Initial download stopped because local and Cloud data conflict (\(count)). Both copies are preserved."
+        )
     }
 }
 
@@ -73,6 +77,58 @@ enum SelectiveRemotePersonalVaultImporter {
     private static let globalSnippetLibraryID = UUID(
         uuidString: "5A17407D-9F03-4F7B-80FB-BD06D3FA50B1"
     )!
+
+    @MainActor
+    static func compare(
+        _ snapshot: SelectiveRemotePersonalVaultImportSnapshot, with model: AppModel
+    ) async -> (plan: SelectiveRemotePersonalVaultImportPlan, differences: [PersonalVaultImportDifference]) {
+        let credentialSources = Set(model.profiles.map(\.id) + model.independentPortForwards.map(\.id))
+        var existingSecrets: [String: String]? = [:]
+        if snapshot.credentials.contains(where: { credentialSources.contains($0.sourceID) }) {
+            // An unavailable Keychain read remains a conflict.
+            existingSecrets = await Task.detached {
+                try? UnifiedCredentialVault.shared.exportedSecrets()
+            }.value
+        }
+        let snippets = TerminalCommandHistoryStore.shared.templates()
+        let plan = plan(
+            snapshot: snapshot,
+            localProfiles: model.profiles,
+            localSnippets: snippets,
+            localForwarding: model.independentPortForwards,
+            localSSHKeys: model.sshKeys,
+            existingPasswordsReadable: existingSecrets != nil,
+            existingPassword: { id, kind in
+                let reference = KeychainService.credentialReference(profileID: id, kind: kind)
+                return existingSecrets?[UnifiedCredentialVault.entryKey(for: reference)]
+            }
+        )
+        guard !plan.canApply else { return (plan, []) }
+        let labels = Dictionary(
+            model.profiles.map { ($0.id, $0.friendlyName) }
+                + snippets.map { ($0.id, $0.title) }
+                + model.independentPortForwards.map { ($0.id, $0.rule.displayName) }
+                + model.sshKeys.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let differences = plan.conflictIDs.map { id in
+            let title = labels[id] ?? UpdateLocalization.text(ru: "Запись \(id.uuidString)", en: "Record \(id.uuidString)")
+            let profileFields: [String]
+            if let local = model.profiles.first(where: { $0.id == id }),
+               let cloud = snapshot.profiles.first(where: { $0.id == id }) {
+                profileFields = differingProfileFields(local: local, cloud: cloud)
+            } else {
+                profileFields = []
+            }
+            return PersonalVaultImportDifference(
+                id: id, title: title,
+                profileFields: profileFields,
+                credentials: plan.credentialDifferences[id] ?? [:],
+                deletedInCloud: snapshot.tombstoneIDs.contains(id)
+            )
+        }
+        return (plan, differences)
+    }
 
     static func decode(_ document: SelectiveRemoteVaultDocument) throws
         -> SelectiveRemotePersonalVaultImportSnapshot

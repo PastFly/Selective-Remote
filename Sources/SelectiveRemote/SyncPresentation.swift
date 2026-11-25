@@ -8,7 +8,7 @@ enum SyncScope: Equatable, Sendable {
 
 enum SyncLifecycle: Equatable, Sendable {
     case security, error, conflict, offline, syncing, pending, synced, unknown
-    case signedOut, locked, disabled, setupRequired
+    case signedOut, locked, disabled, setupRequired, initialDownloadRequired
 
     var priority: Int {
         switch self {
@@ -19,7 +19,7 @@ enum SyncLifecycle: Equatable, Sendable {
         case .syncing: 3
         case .pending: 2
         case .synced: 1
-        case .unknown, .signedOut, .locked, .disabled, .setupRequired: 0
+        case .unknown, .signedOut, .locked, .disabled, .setupRequired, .initialDownloadRequired: 0
         }
     }
 
@@ -37,6 +37,7 @@ enum SyncLifecycle: Equatable, Sendable {
         case .locked: english ? "Unlock required" : "Требуется разблокировка"
         case .disabled: english ? "Sync disabled" : "Синхронизация выключена"
         case .setupRequired: english ? "Personal Vault needs setup" : "Нужно подключить личный Vault"
+        case .initialDownloadRequired: english ? "Finish connecting Personal Vault" : "Нужно завершить подключение личного Vault"
         }
     }
 }
@@ -116,12 +117,21 @@ struct SyncScopeSnapshot: Equatable, Sendable {
     }
 }
 
+struct PersonalVaultImportDifference: Identifiable {
+    let id: UUID
+    let title: String
+    let profileFields: [String]
+    let credentials: [KeychainCredentialKind: SelectiveRemotePersonalVaultImportPlan.CredentialDifference]
+    let deletedInCloud: Bool
+}
+
 @MainActor
 final class SyncPresentationStore: ObservableObject {
     static let shared = SyncPresentationStore()
 
     @Published private(set) var personal = SyncScopeSnapshot.unknown(.personal)
     @Published private(set) var team = SyncScopeSnapshot.unknown(.team)
+    @Published private(set) var personalImportDifferences: [PersonalVaultImportDifference] = []
     @Published private(set) var unconfirmedSessionCleanup = false
     private(set) var generation = UUID()
     private var accountKey: String?
@@ -135,7 +145,7 @@ final class SyncPresentationStore: ObservableObject {
         let scopes = [personal.lifecycle, team.lifecycle]
         if let urgent = scopes.filter({ [.security, .error, .conflict].contains($0) })
             .max(by: { $0.priority < $1.priority }) { return urgent }
-        for prerequisite in [SyncLifecycle.locked, .signedOut, .setupRequired, .disabled] {
+        for prerequisite in [SyncLifecycle.locked, .signedOut, .setupRequired, .initialDownloadRequired, .disabled] {
             if scopes.contains(prerequisite) { return prerequisite }
         }
         let highest = scopes.max { $0.priority < $1.priority } ?? .unknown
@@ -154,6 +164,7 @@ final class SyncPresentationStore: ObservableObject {
         generation = UUID()
         activeTeamCycle = nil
         activePersonalSetupCheck = nil
+        personalImportDifferences = []
         personal = .unknown(.personal)
         team = .unknown(.team)
     }
@@ -170,11 +181,13 @@ final class SyncPresentationStore: ObservableObject {
     }
 
     func begin(_ scope: SyncScope) {
+        guard scope != .personal || personalImportDifferences.isEmpty else { return }
         update(scope, lifecycle: .syncing, issue: nil, pending: nil)
     }
 
     func recordPersonalSuccess(revision: Int, generation expectedGeneration: UUID? = nil) {
         guard expectedGeneration == nil || expectedGeneration == generation else { return }
+        if !personalImportDifferences.isEmpty { personalImportDifferences = [] }
         let now = Date()
         personal = .init(scope: .personal, lifecycle: .synced, issue: nil,
                          lastConfirmedAt: now, appliedRevision: revision,
@@ -191,10 +204,12 @@ final class SyncPresentationStore: ObservableObject {
     }
 
     func recordPersonalPending() {
+        guard personalImportDifferences.isEmpty else { return }
         update(.personal, lifecycle: .pending, issue: nil, pending: true)
     }
 
     func recordPersonalUnknown() {
+        guard personalImportDifferences.isEmpty else { return }
         update(.personal, lifecycle: .unknown, issue: nil,
                pending: personal.pendingLocalChanges)
     }
@@ -205,14 +220,42 @@ final class SyncPresentationStore: ObservableObject {
         return token
     }
 
-    func recordPersonalSetupRequired(check: UUID) {
+    func recordPersonalSetupRequired(check: UUID, initialDownload: Bool = false) {
         guard let active = activePersonalSetupCheck, active.token == check else { return }
         activePersonalSetupCheck = nil
         if active.connectionVerified {
             if personal.lifecycle == .syncing { recordPersonalUnknown() }
             return
         }
-        setPrerequisite(.personal, lifecycle: .setupRequired)
+        if initialDownload, !personalImportDifferences.isEmpty {
+            // A prerequisite check has not compared the local and Cloud records.
+            if personal.lifecycle != .conflict { recordPersonalFailure(.conflict) }
+            return
+        }
+        if !personalImportDifferences.isEmpty { personalImportDifferences = [] }
+        setPrerequisite(.personal, lifecycle: initialDownload ? .initialDownloadRequired : .setupRequired)
+    }
+
+    func recordPersonalImportConflict(
+        _ differences: [PersonalVaultImportDifference], endpoint: String, deviceID: String, generation: UUID,
+        check: UUID? = nil
+    ) {
+        guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID),
+              !differences.isEmpty else { return }
+        if let check {
+            guard let active = activePersonalSetupCheck, active.token == check, !active.connectionVerified
+            else { return }
+        }
+        activePersonalSetupCheck?.connectionVerified = true
+        personalImportDifferences = differences
+        recordPersonalFailure(.conflict)
+    }
+
+    func recordPersonalImportApplied(endpoint: String, deviceID: String, generation: UUID) {
+        guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID),
+              !personalImportDifferences.isEmpty else { return }
+        personalImportDifferences = []
+        if personal.lifecycle == .conflict { recordPersonalUnknown() }
     }
 
     func recordPersonalVaultConnected(endpoint: String, deviceID: String, generation: UUID) {
@@ -220,7 +263,9 @@ final class SyncPresentationStore: ObservableObject {
         // Inventory verified the current Vault and key while a sync check may
         // still be returning an earlier missing-key result.
         activePersonalSetupCheck?.connectionVerified = true
-        if personal.lifecycle == .setupRequired { recordPersonalUnknown() }
+        if [.setupRequired, .initialDownloadRequired].contains(personal.lifecycle) {
+            recordPersonalUnknown()
+        }
     }
 
     func beginTeamCycle(token: UUID) {
@@ -280,13 +325,15 @@ final class SyncPresentationStore: ObservableObject {
     }
 
     func setPrerequisite(_ scope: SyncScope, lifecycle: SyncLifecycle) {
-        guard [.signedOut, .locked, .disabled, .setupRequired, .unknown].contains(lifecycle) else { return }
+        guard [.signedOut, .locked, .disabled, .setupRequired, .initialDownloadRequired, .unknown].contains(lifecycle)
+        else { return }
         update(scope, lifecycle: lifecycle, issue: nil, pending: nil)
     }
 
     func retry(_ scope: SyncScope) {
         let snapshot = scope == .personal ? personal : team
-        guard ![.syncing, .signedOut, .locked, .disabled, .setupRequired].contains(snapshot.lifecycle) else { return }
+        guard ![.syncing, .signedOut, .locked, .disabled, .setupRequired, .initialDownloadRequired].contains(snapshot.lifecycle),
+              scope != .personal || snapshot.lifecycle != .conflict || personalImportDifferences.isEmpty else { return }
         begin(scope)
         NotificationCenter.default.post(
             name: scope == .personal ? .selectiveRemotePersonalVaultSyncNow :
