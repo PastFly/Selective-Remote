@@ -12,7 +12,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex'),hex=(value,n)
 const fail=code=>{throw Error('staging_install_'+code);};
 export function validateInstallerCapabilities(capabilities){
  if(!capabilities||Object.keys(capabilities).length!==10||capabilities.teamSafetyStopVersion!==1||capabilities.emptyVaultCreationVersion!==1||capabilities.v1AnchorProtocol!==1||capabilities.wrapperEnvelopeVersion!==1||capabilities.version!==1||capabilities.fenceVersion!==2
-  ||capabilities.maxSchemaVersion!==22||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
+  ||![22,23].includes(capabilities.maxSchemaVersion)||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
   ||capabilities.v1WriterProtocol!==1)fail('candidate_code');
  return true;
 }

@@ -103,6 +103,35 @@ test("the journal requires an independent anchor and an unresolved Team write bl
     }
 });
 
+test("a proven account deletion rollback closes both projections and restores authentication together", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sr-account-deletion-abort-"));
+    try {
+        const path = join(directory, "journal");
+        await writeFile(path, "");
+        const fence = await syntheticAnchoredFence(path);
+        for (const event of [...events, { ...baseline, authorizationProtocol: 2 }]) await fence.append(event);
+        const query = async sql => assert.equal(sql, "ROLLBACK");
+        const transaction = createPublicationFenceTransaction({ fence, query });
+        const userID = "88888888-8888-4888-8888-888888888888";
+        const fields = { kind: "V1_ACCOUNT_DELETION", userID, vault: null, changes: [],
+            authorizationIntentID: stage.intentID, previousDigest: original, nextDigest: updated };
+        const intent = await transaction.beforeCommit(fields);
+        const pending = await fence.snapshot();
+        assert.deepEqual(pending.revokedAccountIDs, [userID]);
+        assert.equal(pending.v1TeamAuthorization.pending.vaultIntentID, intent.intentID);
+        await transaction.rollback();
+        const retained = await fence.snapshot();
+        assert.equal(retained.revokedAccountIDs, undefined);
+        assert.deepEqual(retained.v1Pending, []);
+        assert.deepEqual(retained.v1TeamAuthorization, { protocol: 2, digest: original, pending: null });
+        assert.equal(retained.v1TeamAuthorizationOutcomes[0].type, "V1_TEAM_AUTHORIZATION_ABORTED");
+        assert.deepEqual((await fence.readRecords()).slice(-2).map(event => event.type),
+            ["V1_ACCOUNT_DELETION_PENDING_INTENT", "V1_PROVEN_ABORT"]);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("a lost Team COMMIT response requires positive readback and cannot be cleared by a later rollback", async () => {
     const directory = await mkdtemp(join(tmpdir(), "sr-team-authorization-commit-"));
     try {

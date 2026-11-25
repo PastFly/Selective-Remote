@@ -37,11 +37,18 @@ test('a pending outcome stops traffic before DB access', async () => {
 });
 
 test('old and unknown newer schemas deny before publication queries', async () => {
-  for (const schema of ['12', '18', '23']) {
+  for (const schema of ['12', '18', String(candidate.maxSchemaVersion + 1)]) {
     const s = scenario({ schema });
     await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate }), /deployment_schema_floor/);
     assert.ok(!s.events.includes('publications'));
   }
+});
+
+test('a schema-22 candidate cannot start against the account-deletion migration', async () => {
+  const s = scenario({ schema: '23' });
+  await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: { ...candidate, maxSchemaVersion: 22 } }),
+    /deployment_schema_floor/);
+  assert.ok(!s.events.includes('publications'));
 });
 
 test('matching committed generation passes but missing/older/forked or unfenced rows deny', async () => {

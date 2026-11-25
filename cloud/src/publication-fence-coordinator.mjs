@@ -6,7 +6,7 @@ import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL,readV1VaultState} fr
 import {holdV1CommitReadback,requireIndependentV1Anchor} from './v1-commit-fence.mjs';
 import {
   holdV1TeamAuthorizationFence,holdV1TeamAuthorizationReadback,lockV1TeamAuthorizationWriter,
-  readCommittedV1TeamAuthorizationOutcome,readV1TeamAuthorizationDigest,
+  readCommittedV1TeamAuthorizationOutcome,readV1TeamAuthorizationDigest,teamAuthorizationProtocol,
 } from './v1-team-authorization.mjs';
 
 const same=(a,b)=>canonicalMigrationJSON(a)===canonicalMigrationJSON(b);
@@ -16,6 +16,7 @@ function fail(code){throw Error(code);}
 const intentTypes={
   V1:'V1_PENDING_INTENT',
   V1_WRAPPER_BATCH:'V1_WRAPPER_BATCH_PENDING_INTENT',
+  V1_ACCOUNT_DELETION:'V1_ACCOUNT_DELETION_PENDING_INTENT',
   V1_TEAM_AUTHORIZATION:'V1_TEAM_AUTHORIZATION_PENDING',
 };
 const confirmedTypes=['CONFIRMED_COMMIT','V1_CONFIRMED_COMMIT','V1_TEAM_AUTHORIZATION_CONFIRMED'];
@@ -58,6 +59,9 @@ export class PublicationFenceCoordinator{
       confirmedType='V1_CONFIRMED_COMMIT';
     }else if(intent.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
       if(outcome.kind!=='V1_WRAPPER_BATCH'||outcome.operationID!==intent.operationID||!same(outcome.changes,intent.changes))fail('deployment_fence_mismatch');
+      confirmedType='V1_CONFIRMED_COMMIT';
+    }else if(intent.type===intentTypes.V1_ACCOUNT_DELETION){
+      if(outcome.kind!=='V1_ACCOUNT_DELETION'||outcome.userID!==intent.userID)fail('deployment_fence_mismatch');
       confirmedType='V1_CONFIRMED_COMMIT';
     }else if(outcome.kind!==intent.kind||outcome.operationID!==intent.operationID||!same(outcome.vaults,intent.vaults))fail('deployment_fence_mismatch');
     // Cache retains only the exact authenticated intent, allowing the same
@@ -105,6 +109,7 @@ export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
     unlock = await lockV1TeamAuthorizationWriter(client);
     const records = await fence.readRecords();
     const state = reduceFenceEvents(records);
+    if(state.v1TeamAuthorization?.protocol!==teamAuthorizationProtocol)fail('deployment_code_floor');
     const terminal = state.v1TeamAuthorizationOutcomes?.find(outcome => outcome.intentID === intentID);
     if (terminal) {
       return { status: confirmedTypes.includes(terminal.type) ? 'confirmed' : 'aborted', intentID };
@@ -131,14 +136,14 @@ export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
     }
 
     const peer = records.find(event => event.intentID===intent.vaultIntentID
-      && ['V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(event.type));
+      && vaultIntentTypes.has(event.type));
     const settled = state.v1Outcomes?.find(outcome => outcome.intentID===intent.vaultIntentID);
     if(!peer||fenceIntentDigest(peer)!==intent.vaultIntentDigest||
       (settled&&settled.type!=='V1_CONFIRMED_COMMIT'))fail('deployment_fence_mismatch');
     await holdV1CommitReadback(query);
     // Read both outcomes before appending either. These locks keep both
     // projections stable through the final independently anchored receipt.
-    const vaultOutcome = await committedOutcomeReaders[peer.type]({query,intent:peer});
+    const vaultOutcome = await committedOutcomeReaders[peer.type]({query,intent:peer,state});
     const authorizationOutcome = await readCommittedV1TeamAuthorizationOutcome({query,intent});
     if(!vaultOutcome&&!authorizationOutcome&&!settled)return {status:'pending',intentID};
     if(!vaultOutcome||!authorizationOutcome)fail('deployment_fence_mismatch');
@@ -146,6 +151,7 @@ export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
       const result = await confirm({...peer,intentDigest:intent.vaultIntentDigest},vaultOutcome);
       if(result.status!=='confirmed')fail('deployment_fence_pending');
     }
+    if(peer.type===intentTypes.V1_ACCOUNT_DELETION)return {status:'confirmed',intentID};
     return await confirm(intent,authorizationOutcome);
   } catch (error) {
     // A lost advisory-lock reply can leave the session owning that lock.
@@ -165,8 +171,10 @@ export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
 const committedOutcomeReaders={
   V1_PENDING_INTENT:readCommittedV1Outcome,
   V1_WRAPPER_BATCH_PENDING_INTENT:readCommittedV1WrapperBatchOutcome,
+  [intentTypes.V1_ACCOUNT_DELETION]:readCommittedV1AccountDeletionOutcome,
   V1_TEAM_AUTHORIZATION_PENDING:readCommittedV1TeamAuthorizationOutcome,
 };
+const vaultIntentTypes=new Set([intentTypes.V1,intentTypes.V1_WRAPPER_BATCH,intentTypes.V1_ACCOUNT_DELETION]);
 
 // The abort capability never crosses the transaction adapter. A caller's JSON,
 // a new process, or ROLLBACK after any COMMIT dispatch cannot manufacture it.
@@ -181,7 +189,7 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
       // a Vault or wrapper outcome. Both must survive a single SQL COMMIT.
       if(commitDispatched||rolledBack||Object.hasOwn(fields,'vaultIntentID')||Object.hasOwn(fields,'vaultIntentDigest')||(intents.length>0&&
         (intents.length!==1||fields.kind!=='V1_TEAM_AUTHORIZATION'||
-          !['V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(intents[0].type))))
+          ![intentTypes.V1,intentTypes.V1_WRAPPER_BATCH].includes(intents[0].type))))
         fail('deployment_fence_transaction_state');
       coordinator??=providedCoordinator??new PublicationFenceCoordinator({fence});
       const previous=intents[0];
@@ -204,9 +212,15 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
       let result;
       for(const intent of intents){
         result=await coordinator.reconcile({intentID:intent.intentID,
-          readCommittedOutcome:readCommittedOutcome??(pending=>{
+          readCommittedOutcome:readCommittedOutcome??(async pending=>{
             const read=committedOutcomeReaders[pending.type]??readCommittedPublicationOutcome;
-            return read({query,intent:pending});
+            if(pending.type!==intentTypes.V1_ACCOUNT_DELETION)return read({query,intent:pending});
+            const state=await fence.snapshot(),authorization=state.v1TeamAuthorization?.pending;
+            if(authorization?.intentID!==pending.authorizationIntentID)fail('deployment_fence_mismatch');
+            const outcome=await read({query,intent:pending,state});
+            if(!outcome||!await readCommittedV1TeamAuthorizationOutcome({query,intent:authorization}))
+              fail('deployment_fence_mismatch');
+            return outcome;
           })});
         if(result.status!=='confirmed')fail('deployment_fence_pending');
       }
@@ -245,11 +259,15 @@ export function createTeamAuthorizationTransaction({client,fence,retainVaultOutc
       await query('BEGIN');
       if(retainTeamAuthorization)previousDigest=await holdV1TeamAuthorizationFence(client,fence);
     },
-    async commit(){
+    async commit({accountDeletion}={}){
       if(!fenced)return query('COMMIT');
       if(previousDigest){
         const nextDigest=await readV1TeamAuthorizationDigest(query);
-        if(nextDigest!==previousDigest)
+        if(accountDeletion){
+          if(nextDigest===previousDigest||!retainVaultOutcome)fail('deployment_fence_mismatch');
+          await fenced.beforeCommit({kind:'V1_ACCOUNT_DELETION',...accountDeletion,
+            authorizationIntentID:randomUUID(),previousDigest,nextDigest});
+        }else if(nextDigest!==previousDigest)
           await fenced.beforeCommit({kind:'V1_TEAM_AUTHORIZATION',previousDigest,nextDigest});
       }
       await fenced.commit();
@@ -280,6 +298,24 @@ export async function readCommittedV1WrapperBatchOutcome({query,intent}){
   if(before===intent.changes.length)return null;
   if(after!==intent.changes.length)fail('deployment_fence_mismatch');
   return {kind:'V1_WRAPPER_BATCH',operationID:intent.operationID,changes:structuredClone(intent.changes)};
+}
+
+async function readCommittedV1AccountDeletionOutcome({query,intent,state}){
+  if(!state.revokedAccountIDs?.includes(intent.userID))fail('deployment_fence_mismatch');
+  const user=await query('SELECT id FROM public.users WHERE id=$1',[intent.userID]);
+  const deleted=user.rows.length===0;
+  const settled=state.v1Outcomes.some(outcome=>outcome.intentID===intent.intentID);
+  if(settled&&!deleted)fail('deployment_fence_mismatch');
+  const key=item=>item.vaultKind+':'+item.vaultID;
+  const expected=new Map(state.v1Committed.map(item=>[key(item),item]));
+  if(deleted&&!settled){
+    if(intent.vault)expected.delete(key(intent.vault));
+    for(const {beforeEnvelopeHash,...item} of intent.changes)expected.set(key(item),item);
+  }
+  const observed=await readV1VaultState(query);
+  if(observed.length!==expected.size||observed.some(item=>!expected.has(key(item))||
+    !same(expected.get(key(item)),item)))fail('deployment_fence_mismatch');
+  return deleted?{kind:'V1_ACCOUNT_DELETION',userID:intent.userID}:null;
 }
 
 // Positive evidence only: a missing historical revision is unresolved, never

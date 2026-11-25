@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, webcrypto } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { encryptResourcePart, generateResourceCEK, wrapResourceCEK } from "../public/resource-crypto-v2.js";
+import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
 import { currentCapabilities, verifyDeploymentCompatibility } from "../src/deployment-compatibility.mjs";
 import { PostgresStore } from "../src/postgres-store.mjs";
 import {
@@ -16,32 +18,75 @@ import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 import { readV1VaultState } from "../src/v1-data-fence.mjs";
 import {
     holdV1TeamAuthorizationFence, installV1TeamAuthorizationFence,
-    readV1TeamAuthorizationDigest,
+    readV1TeamAuthorizationDigest, teamAuthorizationProtocol,
 } from "../src/v1-team-authorization.mjs";
 import { isolatedPublicationDatabase, publicationRuntimeFixture } from "./publication-runtime-fixture.mjs";
 import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-http-anchor-fixture.mjs";
 
 const exec = promisify(execFile);
 
-test("protected Team recovery checks both intents across PostgreSQL restores with the TLS anchor retained", {
+test("protected Team recovery checks Vaults, account deletion and resource rights across PostgreSQL restores with the TLS anchor retained", {
     skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
     timeout: 60000,
 }, async () => {
     const db = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
     const directory = await realpath(await mkdtemp(join(tmpdir(), "sr-team-authorization-restore-")));
-    let runtime, anchor, restored, beforePair, committedCopy;
+    let runtime, anchor, restored, beforePair, committedCopy, beforeDeletion, rotationCopy, rotationRuntime, rotationAnchor;
     try {
         const owner = randomUUID(), member = randomUUID(), team = randomUUID(), device = randomUUID();
         await db.pool.query(`INSERT INTO users(id,email,username,email_verified_at)
             VALUES($1,'team-auth-owner@example.test','team_auth_owner',now()),
             ($2,'team-auth-member@example.test','team_auth_member',now())`, [owner, member]);
-        await db.pool.query("INSERT INTO devices(id,user_id,name,platform) VALUES($1,$2,'synthetic','web')", [device, member]);
+        const memberKeys = await generateTeamDeviceIdentity(webcrypto);
+        await db.pool.query(`INSERT INTO devices(id,user_id,name,platform,public_key,public_key_algorithm,key_registered_at,key_approved_at)
+            VALUES($1,$2,'synthetic','web',$3,'p256-ecdh-v1',now(),now())`, [device, member, JSON.stringify(memberKeys.publicKey)]);
         await db.pool.query("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,'Synthetic authorization team',$2)", [team, owner]);
         const membership = randomUUID();
-        await db.pool.query(`INSERT INTO team_memberships(team_id,user_id,role)
-            VALUES($1,$2,'owner')`, [team, owner]);
+        const ownerMembership = (await db.pool.query(`INSERT INTO team_memberships(team_id,user_id,role)
+            VALUES($1,$2,'owner') RETURNING id`, [team, owner])).rows[0].id;
         await db.pool.query(`INSERT INTO team_memberships(id,team_id,user_id,role)
             VALUES($1,$2,$3,'editor')`, [membership, team, member]);
+        const memberVault = (await db.pool.query(
+            "INSERT INTO personal_vaults(user_id) VALUES($1) RETURNING id", [member],
+        )).rows[0].id;
+        const memberSession = randomBytes(32).toString("hex");
+        await db.pool.query(`INSERT INTO sessions(user_id,device_id,token_hash,expires_at)
+            VALUES($1,$2,$3,now()+interval '1 hour')`, [member, device, memberSession]);
+        const wrappedVault = randomUUID();
+        await db.pool.query(`INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,revision,
+            envelope_version,ciphertext,nonce,auth_tag,content_hash,updated_by_device_id)
+            VALUES($1,$2,'Synthetic wrapped Vault',$3,1,1,'synthetic','nonce','tag','hash',$4)`,
+            [wrappedVault, team, owner, device]);
+        await db.pool.query(`INSERT INTO shared_vault_key_wrappers(vault_id,key_generation,membership_id,
+            membership_epoch,device_id,wrapper_version,ephemeral_public_key,ciphertext,nonce,auth_tag,context_hash,created_by_device_id)
+            VALUES($1,1,$2,1,$3,1,'{}',repeat('A',43),repeat('B',16),repeat('C',22),repeat('D',43),$3)`,
+            [wrappedVault, membership, device]);
+        const ownerDevice = randomUUID(), unusedDevice = randomUUID(), preparingVault = randomUUID();
+        const ownerKeys = await generateTeamDeviceIdentity(webcrypto);
+        const unusedKeys = await generateTeamDeviceIdentity(webcrypto);
+        await db.pool.query(`INSERT INTO devices(id,user_id,name,platform,public_key,public_key_algorithm,key_registered_at,key_approved_at)
+            VALUES($1,$2,'synthetic main','web',$3,'p256-ecdh-v1',now(),now()),
+              ($4,$2,'synthetic spare','web',$5,'p256-ecdh-v1',now(),now())`,
+            [ownerDevice, owner, JSON.stringify(ownerKeys.publicKey), unusedDevice, JSON.stringify(unusedKeys.publicKey)]);
+        await db.pool.query(`INSERT INTO team_membership_device_admissions(membership_id,membership_epoch,device_id)
+            VALUES($1,1,$2),($1,1,$3),($4,1,$5)`, [ownerMembership, ownerDevice, unusedDevice, membership, device]);
+        await db.pool.query(`INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,format_state,format_schema_version)
+            VALUES($1,$2,'Synthetic preparing Vault',$3,'V2_PREPARING',2)`, [preparingVault, team, owner]);
+        const archivedTeam = (await db.pool.query(`INSERT INTO teams(name,created_by_user_id,archived_at)
+            VALUES('Synthetic archived Team',$1,now()) RETURNING id`, [member])).rows[0].id;
+        await db.pool.query("INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,'owner')",
+            [archivedTeam, member]);
+        const groupID = (await db.pool.query(`INSERT INTO team_access_groups(team_id,name,created_by_user_id)
+            VALUES($1,'Synthetic group',$2) RETURNING id`, [team, member])).rows[0].id;
+        await db.pool.query(`INSERT INTO team_access_group_members(team_id,group_id,user_id,membership_id,membership_epoch,created_by_user_id)
+            VALUES($1,$2,$3,$4,1,$5),($1,$2,$5,$6,1,$3)`, [team, groupID, member, membership, owner, ownerMembership]);
+        await db.pool.query(`INSERT INTO vault_access_grants(team_id,vault_id,principal_kind,principal_id,
+            membership_id,membership_epoch,target_kind,target_id,permission_mask,created_by_user_id)
+            VALUES($1,$2,'GROUP',$3,NULL,NULL,'VAULT',$2,1,$4),
+                  ($1,$2,'USER',$4,$5,1,'VAULT',$2,1,$6)`, [team, preparingVault, groupID, member, membership, owner]);
+        const cancelledPublication = randomUUID();
+        await db.pool.query(`INSERT INTO team_publication_cancellations(operation_id,team_id,actor_user_id,actor_device_id,confirmed_by_session)
+            VALUES($1,$2,$3,$4,$5)`, [cancelledPublication, team, member, device, randomUUID()]);
 
         const legacyStore = new PostgresStore(db.databaseURL, db.pool, {
             v1Fence: { anchor: {}, snapshot: async () => { throw new Error("deployment_fence_locked"); } },
@@ -53,7 +98,7 @@ test("protected Team recovery checks both intents across PostgreSQL restores wit
         anchor = await syntheticHttpAnchor(runtime.path);
         const { fence } = anchor;
         const query = (sql, params) => db.pool.query(sql, params);
-        const verifiedCandidate = { ...currentCapabilities, v1TeamAuthorizationProtocol: 1 };
+        const verifiedCandidate = { ...currentCapabilities, v1TeamAuthorizationProtocol: teamAuthorizationProtocol };
         await installV1CommitFence(db.pool);
         await fence.append({ version: 2, type: "V1_BASELINE", baselineID: randomUUID(), vaults: await readV1VaultState(query) });
         await fence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
@@ -61,9 +106,17 @@ test("protected Team recovery checks both intents across PostgreSQL restores wit
         await installV1TeamAuthorizationFence(db.pool);
         await db.pool.query("UPDATE devices SET last_seen_at=last_seen_at+interval '10 seconds' WHERE id=$1", [device]);
         assert.equal(await readV1TeamAuthorizationDigest(query), baseline);
-        await fence.append({ version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: 1, digest: baseline });
+        await fence.append({ version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: teamAuthorizationProtocol, digest: baseline });
         const { v1TeamAuthorizationProtocol: _older, ...oldCandidate } = verifiedCandidate;
         await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old candidate reached SQL"), candidate: oldCandidate }), /deployment_code_floor/u);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old candidate reached SQL"),
+            candidate: { ...verifiedCandidate, v1TeamAuthorizationProtocol: 1 } }), /deployment_code_floor/u);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old schema candidate reached SQL"),
+            candidate: { ...verifiedCandidate, maxSchemaVersion: 22 } }), /deployment_code_floor/u);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, candidate: verifiedCandidate, query: sql => {
+            assert.match(sql, /schema_migrations/u);
+            return { rows: [{ version: 22 }] };
+        } }), /deployment_schema_floor/u);
         assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
 
         const archive = join(directory, "before-team-role-change.dump");
@@ -292,11 +345,173 @@ test("protected Team recovery checks both intents across PostgreSQL restores wit
         }
         assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
 
+        const scope = { actorUserID: owner, actorDeviceID: ownerDevice, teamID: team, vaultID: preparingVault };
+        const folderCreate = { ...scope, resourceID: randomUUID(), policyClass: "folder", idempotencyKey: randomUUID() };
+        const resourceCreate = { ...scope, resourceID: randomUUID(), policyClass: "general", idempotencyKey: randomUUID() };
+        assert.equal((await store.registerResourceIdentity(folderCreate)).id, folderCreate.resourceID);
+        assert.equal((await store.registerResourceIdentity(resourceCreate)).id, resourceCreate.resourceID);
+        const move = { ...scope, resourceID: resourceCreate.resourceID, parentFolderID: folderCreate.resourceID,
+            expectedVersion: 1, idempotencyKey: randomUUID() };
+        assert.equal((await store.moveResourceIdentity(move)).parent_folder_id, folderCreate.resourceID);
+        const tombstone = { ...scope, resourceID: resourceCreate.resourceID, expectedVersion: 2, idempotencyKey: randomUUID() };
+        assert.ok((await store.tombstoneResourceIdentity(tombstone)).deleted_at);
+        await assert.rejects(store.getResourceIdentity(tombstone), /resource_not_found/u);
+        assert.deepEqual(await store.tombstoneResourceIdentity(tombstone), await store.tombstoneResourceIdentity(tombstone));
+
+        const cryptoResource = { ...resourceCreate, resourceID: randomUUID(), idempotencyKey: randomUUID() };
+        await store.registerResourceIdentity(cryptoResource);
+        const beforePublication = join(directory, "before-resource-publication.dump");
+        await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", beforePublication, db.databaseURL]);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", restored.databaseURL, beforePublication]);
+        const restoredRights = new PostgresStore(restored.databaseURL, restored.pool, {
+            v1Fence: fence, retainTeamAuthorization: true,
+        });
+        const context = { teamID: team, vaultID: preparingVault, resourceID: cryptoResource.resourceID, part: "GENERAL",
+            keyVersion: 1, policyVersion: 3, registryVersion: 1, resourceVersion: 1, manifestVersion: 1 };
+        const ownerRecipient = [ownerMembership, ownerDevice, ownerKeys.publicKey];
+        const spareRecipient = [ownerMembership, unusedDevice, unusedKeys.publicKey];
+        const memberRecipient = [membership, device, memberKeys.publicKey];
+        const makePublication = async (context, recipients) => {
+            const cek = generateResourceCEK(webcrypto);
+            return { ...scope, resourceID: context.resourceID,
+                expectedManifestVersion: context.manifestVersion - 1, idempotencyKey: randomUUID(),
+                ciphertext: await encryptResourcePart({ plaintext: Buffer.from("synthetic"), cek, context, cryptoValue: webcrypto }),
+                wrappers: await Promise.all(recipients.map(([membershipID, deviceID, recipientPublicKey]) => wrapResourceCEK({
+                    context: { ...context, membershipID, membershipEpoch: 1, deviceID },
+                    cek, recipientPublicKey, cryptoValue: webcrypto,
+                }))),
+            };
+        };
+        const publication = await makePublication(context, [ownerRecipient, spareRecipient, memberRecipient]);
+        assert.equal(Number((await store.publishResourceCryptoVersion(publication)).manifest_version), 1);
+        await assert.rejects(restoredRights.publishResourceCryptoVersion(publication), /deployment_team_authorization_mismatch/u);
+        await assert.rejects(query("DELETE FROM vault_resource_mutation_receipts_v2 WHERE idempotency_key=$1",
+            [publication.idempotencyKey]), /v1_team_authorization_writer_required/u);
+        assert.equal(await store.revokeDevice(owner, unusedDevice), true);
+        const rightsArchive = join(directory, "before-resource-wrapper-revocation.dump");
+        await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", rightsArchive, db.databaseURL]);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", restored.databaseURL, rightsArchive]);
+        const revokeWrapper = { ...scope, resourceID: cryptoResource.resourceID, part: context.part, keyVersion: 1,
+            membershipID: ownerMembership, membershipEpoch: 1, deviceID: unusedDevice, expectedManifestVersion: 1,
+            idempotencyKey: randomUUID() };
+        const revoked = await store.revokeResourceWrapper(revokeWrapper);
+        assert.ok(revoked.obsolete_at);
+        assert.deepEqual(await store.revokeResourceWrapper(revokeWrapper), revoked);
+        await assert.rejects(restoredRights.getResourceIdentity(cryptoResource), /deployment_team_authorization_mismatch/u);
+        await assert.rejects(restoredRights.revokeResourceWrapper(revokeWrapper), /deployment_team_authorization_mismatch/u);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate }),
+            /deployment_team_authorization_mismatch/u);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+
+        await assert.rejects(store.deleteAccount(owner), /account_owns_teams/u);
+        assert.equal((await store.session(memberSession)).user_id, member);
+        const deletionArchive = join(directory, "before-account-deletion.dump");
+        await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", deletionArchive, db.databaseURL]);
+        beforeDeletion = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", beforeDeletion.databaseURL, deletionArchive]);
+        const deletionBefore = await fence.snapshot();
+        await assert.rejects(lostReplyStore.deleteAccount(member), /synthetic_lost_commit_response/u);
+        const deletionPending = await fence.snapshot();
+        const deletionPair = deletionPending.v1TeamAuthorization.pending;
+        const deletionIntent = deletionPending.v1Pending[0];
+        assert.equal(deletionPair.vaultIntentID, deletionIntent.intentID);
+        assert.equal(deletionIntent.vault.vaultID, memberVault);
+        assert.deepEqual(deletionIntent.changes.map(item => item.vaultID), [wrappedVault]);
+        assert.ok(deletionPending.revokedAccountIDs.includes(member));
+        const staleStore = new PostgresStore(beforeDeletion.databaseURL, beforeDeletion.pool, {
+            v1Fence: fence, retainTeamAuthorization: true,
+        });
+        assert.equal(await staleStore.session(memberSession), null);
+        const deletionRequest = { ...request, intentID: deletionPair.intentID };
+        const accountAnchor = await fence.anchor.read();
+        assert.deepEqual(await recover(beforeDeletion.databaseURL, {}, deletionRequest), {
+            status: "pending", intentID: deletionPair.intentID,
+        });
+        assert.deepEqual(await fence.anchor.read(), accountAnchor);
+        const deletedArchive = join(directory, "after-account-deletion.dump");
+        await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", deletedArchive, db.databaseURL]);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", committedCopy.databaseURL, deletedArchive]);
+        assert.deepEqual(await recover(committedCopy.databaseURL, {}, deletionRequest), {
+            status: "confirmed", intentID: deletionPair.intentID,
+        });
+        assert.equal((await fence.anchor.read()).position, accountAnchor.position + 1);
+        assert.deepEqual(await recover(committedCopy.databaseURL, {}, deletionRequest), {
+            status: "confirmed", intentID: deletionPair.intentID,
+        });
+        assert.equal((await fence.anchor.read()).position, accountAnchor.position + 1);
+        const deletionAfter = await fence.snapshot();
+        assert.ok(!deletionAfter.v1Committed.some(item => item.vaultID === memberVault));
+        const beforeWrapper = deletionBefore.v1Committed.find(item => item.vaultID === wrappedVault);
+        const afterWrapper = deletionAfter.v1Committed.find(item => item.vaultID === wrappedVault);
+        assert.equal(afterWrapper.revision, beforeWrapper.revision);
+        assert.equal(afterWrapper.ciphertextHash, beforeWrapper.ciphertextHash);
+        assert.notEqual(afterWrapper.envelopeHash, beforeWrapper.envelopeHash);
+        assert.equal((await committedQuery("SELECT id FROM users WHERE id=$1", [member])).rowCount, 0);
+        assert.equal((await committedQuery("SELECT actor_user_id FROM team_publication_cancellations WHERE operation_id=$1", [cancelledPublication])).rows[0].actor_user_id, member);
+        await assert.rejects(committedQuery(`INSERT INTO team_publication_cancellations(operation_id,team_id,actor_user_id,actor_device_id,confirmed_by_session)
+            VALUES($1,$2,$3,$4,$5)`, [randomUUID(), team, member, device, randomUUID()]), /publication_scope_mismatch/u);
+        assert.deepEqual((await committedQuery(`SELECT device_id FROM vault_resource_key_wrappers_v2
+            WHERE resource_id=$1 AND obsolete_at IS NULL`, [cryptoResource.resourceID])).rows, [{ device_id: ownerDevice }]);
+        assert.equal((await committedQuery("SELECT device_id FROM vault_resource_key_wrappers_v2 WHERE device_id=$1",
+            [device])).rowCount, 0);
+        assert.equal((await committedQuery("SELECT user_id FROM team_memberships WHERE id=$1 AND revoked_at IS NOT NULL", [membership])).rows[0].user_id, null);
+        assert.equal((await committedQuery("SELECT user_id FROM team_memberships WHERE team_id=$1 AND revoked_at IS NOT NULL", [archivedTeam])).rows[0].user_id, null);
+        assert.equal((await committedQuery("SELECT created_by_user_id FROM team_access_groups WHERE id=$1", [groupID])).rows[0].created_by_user_id, null);
+        assert.deepEqual((await committedQuery(`SELECT user_id,created_by_user_id,removed_at IS NOT NULL AS removed
+            FROM team_access_group_members WHERE group_id=$1 ORDER BY removed`, [groupID])).rows, [
+            { user_id: owner, created_by_user_id: null, removed: false },
+            { user_id: null, created_by_user_id: owner, removed: true },
+        ]);
+        assert.deepEqual((await committedQuery(`SELECT principal_kind,created_by_user_id,revoked_at IS NOT NULL AS revoked
+            FROM vault_access_grants WHERE vault_id=$1 ORDER BY principal_kind`, [preparingVault])).rows, [
+            { principal_kind: "GROUP", created_by_user_id: null, revoked: false },
+            { principal_kind: "USER", created_by_user_id: owner, revoked: true },
+        ]);
+        assert.equal((await committedQuery("SELECT rotation_required FROM shared_vaults WHERE id=$1", [wrappedVault])).rows[0].rotation_required, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query: committedQuery, candidate: verifiedCandidate })).compatible, true);
+        const staleQuery = (sql, params) => beforeDeletion.pool.query(sql, params);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: staleQuery, candidate: verifiedCandidate }), /deployment_v1_data_mismatch/u);
+        assert.equal(await staleStore.session(memberSession), null);
+        assert.deepEqual(await store.deleteAccount(account.id), { deleted: true });
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+
+        rotationCopy = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", rotationCopy.databaseURL, deletionArchive]);
+        rotationRuntime = await publicationRuntimeFixture(rotationCopy.databaseURL);
+        rotationAnchor = await syntheticHttpAnchor(rotationRuntime.path);
+        const rotationFence = rotationAnchor.fence;
+        const rotationQuery = (sql, params) => rotationCopy.pool.query(sql, params);
+        await rotationFence.append({ version: 2, type: "V1_BASELINE", baselineID: randomUUID(),
+            vaults: await readV1VaultState(rotationQuery) });
+        await rotationFence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
+        await rotationFence.append({ version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE",
+            authorizationProtocol: teamAuthorizationProtocol, digest: await readV1TeamAuthorizationDigest(rotationQuery) });
+        const rotationStore = new PostgresStore(rotationCopy.databaseURL, rotationCopy.pool, {
+            v1Fence: rotationFence, retainTeamAuthorization: true,
+        });
+        assert.equal(await rotationStore.revokeDevice(owner, ownerDevice), true);
+        const beforeDeniedDeletion = await rotationFence.anchor.read();
+        await assert.rejects(rotationStore.deleteAccount(member), /account_team_keys_need_rotation/u);
+        assert.deepEqual(await rotationFence.anchor.read(), beforeDeniedDeletion);
+        assert.equal((await rotationStore.session(memberSession)).user_id, member);
+
+        const unfinishedAccount = await store.createUser({
+            email: "synthetic-unfinished-deletion@example.test", username: "synthetic_unfinished_deletion",
+            displayName: "Synthetic unfinished deletion", passwordHash, device: { ...newDevice, id: randomUUID() },
+            verificationHash: randomBytes(32).toString("hex"), verificationExpiresAt: expiresAt,
+        });
         loseCommitBeforeWrite = true;
-        await assert.rejects(lostReplyStore.updateTeamMembershipRole({
-            ...change, idempotencyKey: randomUUID(),
-        }), /synthetic_lost_commit_response/u);
-        const uncommitted = (await fence.snapshot()).v1TeamAuthorization.pending;
+        await assert.rejects(lostReplyStore.deleteAccount(unfinishedAccount.id), /synthetic_lost_commit_response/u);
+        const unfinished = await fence.snapshot();
+        const uncommitted = unfinished.v1TeamAuthorization.pending;
+        assert.ok(unfinished.revokedAccountIDs.includes(unfinishedAccount.id));
+        assert.equal(unfinished.v1Pending[0].intentID, uncommitted.vaultIntentID);
+        assert.equal((await query("SELECT id FROM users WHERE id=$1", [unfinishedAccount.id])).rowCount, 1);
         const uncommittedHistory = await fence.readRecords();
         assert.equal(await readV1TeamAuthorizationDigest(query), uncommitted.previousDigest);
         assert.deepEqual(await reconcileV1TeamAuthorization({
@@ -305,6 +520,10 @@ test("protected Team recovery checks both intents across PostgreSQL restores wit
         assert.deepEqual(await fence.readRecords(), uncommittedHistory);
         await assert.rejects(verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate }), /deployment_fence_pending/u);
     } finally {
+        await rotationAnchor?.cleanup();
+        await rotationRuntime?.cleanup();
+        await rotationCopy?.cleanup();
+        await beforeDeletion?.cleanup();
         await committedCopy?.cleanup();
         await beforePair?.cleanup();
         await restored?.cleanup();

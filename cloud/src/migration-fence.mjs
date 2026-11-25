@@ -193,8 +193,10 @@ export class MigrationFence{
     if(size+line.length>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
     if(budget.bytes+line.length>FENCE_MAX_REPLAY_BYTES||budget.records+1>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
     const teamPending=snapshot.v1TeamAuthorization?.pending;
+    const atomicAccountDeletion=(snapshot.v1Pending??[]).some(intent=>intent.type==='V1_ACCOUNT_DELETION_PENDING_INTENT');
     if(teamPending||!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'
-      ||record.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||record.type==='V1_SESSION_REVOKED'
+      ||record.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||record.type==='V1_ACCOUNT_DELETION_PENDING_INTENT'
+      ||record.type==='V1_SESSION_REVOKED'
       ||record.type==='V1_DEVICE_REVOKED'||record.type==='V1_ACCOUNT_REVOKED'
       ||record.type==='V1_PASSWORD_RESET_ISSUED'||record.type==='V1_PASSWORD_RESET_COMPLETED'
       ||record.type==='V1_PERSONAL_PILOT_CLOSED'){
@@ -204,11 +206,11 @@ export class MigrationFence{
       version:2,type:'CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
      })+'\n'),0)+(snapshot.v1Pending??[]).reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({
       version:2,type:'V1_CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
-     })+'\n'),0)+(teamPending?Buffer.byteLength(JSON.stringify({
+     })+'\n'),0)+(teamPending&&!atomicAccountDeletion?Buffer.byteLength(JSON.stringify({
       version:2,type:'V1_TEAM_AUTHORIZATION_CONFIRMED',intentID:teamPending.intentID,intentDigest:teamPending.intentDigest,
      })+'\n'):0);
      if(size+line.length+reserved>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
-     const terminalCount=snapshot.pending.length+(snapshot.v1Pending??[]).length+(teamPending?1:0);
+     const terminalCount=snapshot.pending.length+(snapshot.v1Pending??[]).length+(teamPending&&!atomicAccountDeletion?1:0);
      if(budget.bytes+line.length+reserved>FENCE_MAX_REPLAY_BYTES||budget.records+1+terminalCount>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
     }
     // A failed write or barrier leaves the lock. Only this instance's exact

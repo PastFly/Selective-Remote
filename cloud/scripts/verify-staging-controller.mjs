@@ -61,10 +61,11 @@ export function validateCandidateIdentity(settings,image){
     fail('deployment_candidate_digest');
 }
 export function validateCandidateCapabilities(candidate,settings={}){
-  const expected={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1};
+  const expected={version:1,fenceVersion:2,readerProjectionVersion:1,wholePublicationVersion:1};
   const count=candidate&&Object.keys(candidate).length;
   const validExtended=(count===9||count===10&&candidate.teamSafetyStopVersion===1)&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1&&candidate.wrapperEnvelopeVersion===1;
   if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1)||(count===8&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&((candidate.v1AnchorProtocol===1)!==(candidate.wrapperEnvelopeVersion===1)))||validExtended)
+    ||![22,23].includes(candidate.maxSchemaVersion)
     ||(settings.anchorProtocol===1&&candidate.v1AnchorProtocol!==1)
     ||(settings.teamSafetyStopVersion===1&&candidate.teamSafetyStopVersion!==1)
     ||Object.entries(expected).some(([k,v])=>candidate[k]!==v))fail('deployment_code_floor');

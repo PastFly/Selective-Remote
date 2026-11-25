@@ -3,6 +3,8 @@ import { assertWriterTriggers, requireIndependentV1Anchor } from "./v1-commit-fe
 
 const maxRowsPerTable = 20_000;
 const digestPattern = /^[a-f0-9]{64}$/u;
+export const teamAuthorizationProtocol = 2;
+export const teamAuthorizationSchemaFloor = 23;
 
 // All identifiers and row expressions below are fixed by the Cloud schema.
 // Signed trust records and invitation state are part of the authorization
@@ -37,6 +39,11 @@ const projections = [
     ["teams"],
     ["users", ["id", "email", "username", "email_verified_at", "disabled_at"]],
     ["vault_access_grants"],
+    ["vault_resource_ciphertext_versions", ["team_id", "vault_id", "resource_id", "part", "key_version",
+        "policy_version", "registry_version", "resource_version", "manifest_version", "lifecycle", "obsolete_at"]],
+    ["vault_resource_key_wrappers_v2"],
+    ["vault_resource_manifest_pointers_v2"],
+    ["vault_resource_mutation_receipts_v2"],
     ["vault_resource_registry"],
 ];
 
@@ -72,12 +79,18 @@ const functionBody = `
       RETURN NEW;
     END `;
 
+async function requireTeamAuthorizationSchema(query) {
+    const result = await query("SELECT 1 FROM public.schema_migrations WHERE version = $1", [teamAuthorizationSchemaFloor]);
+    if (result.rows.length !== 1) throw new Error("deployment_schema_floor");
+}
+
 // Installation belongs to isolated maintenance. A retained floor must never
 // reinstall these triggers to make a restored database pass compatibility.
 export async function installV1TeamAuthorizationFence(pool) {
     const client = await pool.connect();
     try {
         await client.query("BEGIN");
+        await requireTeamAuthorizationSchema((sql, values) => client.query(sql, values));
         await client.query(`LOCK TABLE ${guardedTables} IN ACCESS EXCLUSIVE MODE`);
         await client.query(`CREATE FUNCTION public.${functionName}()
             RETURNS trigger LANGUAGE plpgsql AS $$${functionBody}$$`);
@@ -98,6 +111,7 @@ export async function installV1TeamAuthorizationFence(pool) {
 }
 
 export async function assertV1TeamAuthorizationFence(query) {
+    await requireTeamAuthorizationSchema(query);
     const expected = new Map(projections.flatMap(([table, fields]) => [
         [rowTrigger + ":" + table, { type: 31, columns: fields ?? [] }],
         [truncateTrigger + ":" + table, { type: 34, columns: [] }],
@@ -142,7 +156,7 @@ export async function readV1TeamAuthorizationDigest(query) {
     if (!Array.isArray(result?.rows) || result.rows.length !== names.size) {
         throw new Error("deployment_team_authorization_mismatch");
     }
-    const digest = createHash("sha256").update("selective-remote/v1-team-authorization-pg16/v1\0");
+    const digest = createHash("sha256").update("selective-remote/v1-team-authorization-pg16/v2\0");
     for (const { table_name, row_count, table_digest } of result.rows) {
         if (!names.delete(table_name) || !Number.isSafeInteger(row_count) || row_count < 0
             || row_count > maxRowsPerTable || typeof table_digest !== "string" || !digestPattern.test(table_digest)) {
@@ -155,7 +169,7 @@ export async function readV1TeamAuthorizationDigest(query) {
 
 export async function assertV1TeamAuthorization(query, authorization) {
     if (authorization?.pending) throw new Error("deployment_fence_pending");
-    if (authorization?.protocol !== 1 || typeof authorization.digest !== "string" || !digestPattern.test(authorization.digest)
+    if (authorization?.protocol !== teamAuthorizationProtocol || typeof authorization.digest !== "string" || !digestPattern.test(authorization.digest)
         || await readV1TeamAuthorizationDigest(query) !== authorization.digest) {
         throw new Error("deployment_team_authorization_mismatch");
     }

@@ -8,7 +8,7 @@ import { DeviceTrustStore } from "../src/device-trust-store.mjs";
 import { validateSignedDeviceBundle, validateSignedDeviceDirectory } from "../src/device-trust-policy.mjs";
 import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 import { readV1VaultState } from "../src/v1-data-fence.mjs";
-import { installV1TeamAuthorizationFence, readV1TeamAuthorizationDigest } from "../src/v1-team-authorization.mjs";
+import { installV1TeamAuthorizationFence, readV1TeamAuthorizationDigest, teamAuthorizationProtocol } from "../src/v1-team-authorization.mjs";
 import { isolatedPublicationDatabase, publicationRuntimeFixture } from "./publication-runtime-fixture.mjs";
 import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-http-anchor-fixture.mjs";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
@@ -144,7 +144,7 @@ test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocat
       await anchor.fence.append({ version: 2, type: "V1_BASELINE", baselineID: randomUUID(), vaults: await readV1VaultState(query) });
       await anchor.fence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
       await anchor.fence.append({
-        version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: 1,
+        version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: teamAuthorizationProtocol,
         digest: await readV1TeamAuthorizationDigest(query),
       });
     }

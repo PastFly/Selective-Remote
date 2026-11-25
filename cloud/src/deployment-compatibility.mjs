@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
 import { assertV1CommitFence, requireIndependentV1Anchor } from './v1-commit-fence.mjs';
 import { assertV1DataFloor } from './v1-data-fence.mjs';
-import { assertV1TeamAuthorization, assertV1TeamAuthorizationFence } from './v1-team-authorization.mjs';
+import { assertV1TeamAuthorization, assertV1TeamAuthorizationFence, teamAuthorizationProtocol,
+  teamAuthorizationSchemaFloor } from './v1-team-authorization.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
 function requireCandidate(candidate) {
@@ -17,9 +18,10 @@ function requireCandidate(candidate) {
     ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion'],
     ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol']];
   const extended=variants.some(extra=>fields===[...keys,'v1WriterProtocol','emptyVaultCreationVersion',...extra].sort().join(',')
-    &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&extra.every(k=>candidate[k]===1));
+    &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1
+    &&extra.every(k=>candidate[k]===(k==='v1TeamAuthorizationProtocol'?teamAuthorizationProtocol:1)));
   if ((!legacy && !writerAware && !emptyCreateAware && !extended)
-      || candidate.version !== 1 || candidate.fenceVersion !== 2 || candidate.maxSchemaVersion !== 22
+      || candidate.version !== 1 || candidate.fenceVersion !== 2 || ![22, 23].includes(candidate.maxSchemaVersion)
       || candidate.readerProjectionVersion !== 1 || candidate.wholePublicationVersion !== 1)
     throw Error('deployment_code_floor');
 }
@@ -39,7 +41,9 @@ function requireResolved(snapshot) {
 
 function requireTeamAuthorizationCapability(snapshot, candidate) {
   if (!snapshot.v1TeamAuthorization) return;
-  if (candidate.v1TeamAuthorizationProtocol !== 1) throw Error('deployment_code_floor');
+  if (snapshot.v1TeamAuthorization.protocol !== teamAuthorizationProtocol ||
+    candidate.v1TeamAuthorizationProtocol !== teamAuthorizationProtocol ||
+    candidate.maxSchemaVersion < teamAuthorizationSchemaFloor) throw Error('deployment_code_floor');
   if (snapshot.writerFloor !== 1 || !snapshot.v1BaselineID) throw Error('invalid_deployment_fence');
 }
 
