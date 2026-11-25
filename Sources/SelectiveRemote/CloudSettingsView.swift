@@ -10,6 +10,7 @@ enum SelectiveRemoteCloudSessionTransition {
 
 struct CloudSettingsView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var syncPresentation = SyncPresentationStore.shared
 
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var endpoint = SelectiveRemoteCloudEndpoint.production
@@ -46,15 +47,6 @@ struct CloudSettingsView: View {
     @State private var accountSheetMode = AccountSheetMode.signIn
     @State private var showsConflictReview = false
     @State private var showsInitialVaultDifferences = false
-    @State private var initialVaultDifferences: [InitialVaultDifference] = []
-
-    private struct InitialVaultDifference: Identifiable {
-        let id: UUID
-        let title: String
-        let profileFields: [String]
-        let credentials: [KeychainCredentialKind: SelectiveRemotePersonalVaultImportPlan.CredentialDifference]
-        let deletedInCloud: Bool
-    }
     @State private var conflictReviewMessage: String?
     @State private var personalVaultRevision: Int?
     @State private var personalVaultMessage: String?
@@ -71,6 +63,17 @@ struct CloudSettingsView: View {
     @State private var personalVaultSetup = PersonalVaultSetup.checking
 
     private var personalVaultAutoSyncConfigured: Bool { personalVaultSetup == .connected }
+    private var initialVaultDifferences: [PersonalVaultImportDifference] {
+        guard personalVaultSetup == .initialDownload, syncPresentation.personal.lifecycle == .conflict,
+              let session = accountSession,
+              syncPresentation.matchesAccount(endpoint: session.endpoint.absoluteString, deviceID: storedDeviceID)
+        else { return [] }
+        return syncPresentation.personalImportDifferences
+    }
+    private var initialVaultReviewMessage: String? {
+        let count = initialVaultDifferences.count
+        return count == 0 ? nil : SelectiveRemotePersonalVaultImportError.reviewMessage(count: count)
+    }
     private var personalVaultEnrollmentPending: Bool {
         guard let epoch = accountSession?.epoch else { return false }
         return model.pendingPersonalVaultEnrollmentEpoch == epoch
@@ -240,10 +243,21 @@ struct CloudSettingsView: View {
                     }
                     LabeledContent(UpdateLocalization.text(ru: "Состояние Vault", en: "Vault status")) {
                         Text(personalVaultSetupTitle)
-                            .foregroundStyle(personalVaultAutoSyncConfigured ? Color.green : Color.secondary)
+                            .foregroundStyle(initialVaultReviewMessage != nil ? Color.orange :
+                                (personalVaultAutoSyncConfigured ? Color.green : Color.secondary))
                     }
 
-                    if !personalVaultEnrollmentPending, personalVaultSetup != .connected, personalVaultSetup != .checking {
+                    if initialVaultReviewMessage != nil {
+                        Button(UpdateLocalization.text(ru: "Посмотреть расхождения…", en: "View differences…"),
+                               systemImage: "list.bullet") {
+                            showsInitialVaultDifferences = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button(UpdateLocalization.text(ru: "Проверить снова", en: "Check again")) {
+                            connectPersonalVault()
+                        }
+                        .disabled(accountPhase.isBusy)
+                    } else if !personalVaultEnrollmentPending, personalVaultSetup != .connected, personalVaultSetup != .checking {
                         Button(
                             personalVaultSetupAction,
                             systemImage: "key.fill"
@@ -337,18 +351,18 @@ struct CloudSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    if let personalVaultLoadErrorMessage {
+                    if let personalVaultLoadErrorMessage, personalVaultLoadErrorMessage != initialVaultReviewMessage {
                         Label(personalVaultLoadErrorMessage, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.caption)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    if !initialVaultDifferences.isEmpty {
-                        Button(UpdateLocalization.text(ru: "Посмотреть расхождения…", en: "View differences…"),
-                               systemImage: "list.bullet") {
-                            showsInitialVaultDifferences = true
-                        }
+                    if let initialVaultReviewMessage {
+                        Label(initialVaultReviewMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Text(UpdateLocalization.text(
@@ -931,7 +945,6 @@ struct CloudSettingsView: View {
     private func loadInventory(endpoint url: URL) async {
         guard let session = accountSession else { return }
         let generation = accountPresentationGeneration
-        let syncPresentation = SyncPresentationStore.shared
         let syncGeneration = syncPresentation.generation
         accountPhase = .refreshing
         inventoryErrorMessage = nil
@@ -1105,6 +1118,7 @@ struct CloudSettingsView: View {
         guard let material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
               material.requiresInitialDownload == true
         else { return }
+        let syncGeneration = syncPresentation.generation
         let remote = try await client.personalVault(endpoint: url, session: session)
         guard remote.id == material.vaultID, remote.revision >= material.revision,
               let envelope = remote.envelope, envelope.wrappedKey == material.wrappedKey
@@ -1139,7 +1153,6 @@ struct CloudSettingsView: View {
                 return existingSecrets?[UnifiedCredentialVault.entryKey(for: reference)]
             }
         )
-        initialVaultDifferences = []
         guard plan.canApply else {
             let labels = Dictionary(
                 model.profiles.map { ($0.id, $0.friendlyName) }
@@ -1148,8 +1161,8 @@ struct CloudSettingsView: View {
                     + model.sshKeys.map { ($0.id, $0.name) },
                 uniquingKeysWith: { first, _ in first }
             )
-            initialVaultDifferences = plan.conflictIDs.compactMap { id in
-                guard let title = labels[id] else { return nil }
+            let differences = plan.conflictIDs.map { id in
+                let title = labels[id] ?? UpdateLocalization.text(ru: "Запись \(id.uuidString)", en: "Record \(id.uuidString)")
                 let profileFields: [String]
                 if let local = model.profiles.first(where: { $0.id == id }),
                    let cloud = snapshot.profiles.first(where: { $0.id == id }) {
@@ -1157,13 +1170,16 @@ struct CloudSettingsView: View {
                 } else {
                     profileFields = []
                 }
-                return InitialVaultDifference(
+                return PersonalVaultImportDifference(
                     id: id, title: title,
                     profileFields: profileFields,
                     credentials: plan.credentialDifferences[id] ?? [:],
                     deletedInCloud: snapshot.tombstoneIDs.contains(id)
                 )
             }
+            syncPresentation.recordPersonalImportConflict(
+                differences, endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+            )
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
         let applied = try SelectiveRemotePersonalVaultKeyMaterial(
@@ -1183,6 +1199,9 @@ struct CloudSettingsView: View {
             return true
         }
         guard committed else { throw CancellationError() }
+        syncPresentation.recordPersonalImportApplied(
+            endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+        )
     }
 
     @MainActor
@@ -1203,7 +1222,6 @@ struct CloudSettingsView: View {
         personalVaultMessage = nil
         personalVaultMessageIsError = false
         personalVaultSetup = .checking
-        initialVaultDifferences = []
         showsInitialVaultDifferences = false
         showsPersonalVaultUnlock = false
         showsPersonalVaultUpload = false
@@ -1253,6 +1271,9 @@ struct CloudSettingsView: View {
     }
 
     private var personalVaultSetupTitle: String {
+        if initialVaultReviewMessage != nil {
+            return SyncLifecycle.conflict.title(english: AppLanguageStore.shared.selection.usesEnglish)
+        }
         if personalVaultEnrollmentPending {
             return UpdateLocalization.text(
                 ru: "Ожидает разрешения записи в Cloud",
@@ -1560,8 +1581,8 @@ struct CloudSettingsView: View {
             Text(UpdateLocalization.text(ru: "Расхождения в Personal Vault", en: "Personal Vault differences"))
                 .font(.title2.weight(.semibold))
             Text(UpdateLocalization.text(
-                ru: "Сверьте отмеченные записи на Mac и в Cloud. После этого снова нажмите «Завершить подключение».",
-                en: "Review the listed records on this Mac and in Cloud, then choose Finish Connecting again."
+                ru: "Сверьте отмеченные записи на Mac и в Cloud. После этого нажмите «Проверить снова».",
+                en: "Review the listed records on this Mac and in Cloud, then choose Check again."
             ))
             .foregroundStyle(.secondary)
             List(initialVaultDifferences) { difference in

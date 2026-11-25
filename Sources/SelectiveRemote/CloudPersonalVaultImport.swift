@@ -9,10 +9,7 @@ enum SelectiveRemotePersonalVaultImportError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .conflicts(ids):
-            UpdateLocalization.text(
-                ru: "Подключение приостановлено: расхождений между Mac и Cloud — \(ids.count). Обе копии сохранены.",
-                en: "Initial download stopped because local and Cloud data conflict (\(ids.count)). Nothing was overwritten."
-            )
+            Self.reviewMessage(count: ids.count)
         case .unsupportedWebForwarding:
             UpdateLocalization.text(
                 ru: "Forwarding с сайта не содержит полной конфигурации и не был применён.",
@@ -24,6 +21,13 @@ enum SelectiveRemotePersonalVaultImportError: LocalizedError, Equatable {
                 en: "Personal Vault contains an invalid record; import was stopped."
             )
         }
+    }
+
+    static func reviewMessage(count: Int) -> String {
+        UpdateLocalization.text(
+            ru: "Подключение приостановлено: расхождений между Mac и Cloud — \(count). Обе копии сохранены.",
+            en: "Initial download stopped because local and Cloud data conflict (\(count)). Both copies are preserved."
+        )
     }
 }
 

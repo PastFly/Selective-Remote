@@ -618,7 +618,8 @@ struct SelectiveRemoteApp: App {
         let syncDeviceID = deviceID.uuidString
         let uploadGeneration = UUID()
         personalUploadGeneration = uploadGeneration
-        if !editDates.isEmpty, ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
+        if !editDates.isEmpty,
+           ![.setupRequired, .initialDownloadRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.recordPersonalPending()
         }
         let legacyAppliedRevision = UserDefaults.standard.integer(
@@ -694,7 +695,7 @@ struct SelectiveRemoteApp: App {
         let uploadGeneration = personalUploadGeneration
         let setupCheck = syncPresentation.beginPersonalSetupCheck()
         if syncPresentation.personal.pendingLocalChanges != true,
-           ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
+           ![.setupRequired, .initialDownloadRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.begin(.personal)
         }
         defer {
@@ -722,6 +723,9 @@ struct SelectiveRemoteApp: App {
                 return
             case .setupRequired:
                 syncPresentation.recordPersonalSetupRequired(check: setupCheck)
+                return
+            case .initialDownloadRequired:
+                syncPresentation.recordPersonalSetupRequired(check: setupCheck, initialDownload: true)
                 return
             case let .unconfirmedUpload(issue):
                 if let issue {

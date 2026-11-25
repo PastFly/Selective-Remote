@@ -468,6 +468,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         case unavailable
         case signedOut
         case setupRequired
+        case initialDownloadRequired
         case unconfirmedUpload(issue: SyncIssue?)
         case current(revision: Int)
         case download(Download)
@@ -560,8 +561,9 @@ actor SelectiveRemotePersonalVaultAutoSync {
             return sessionEpoch == SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
                 ? .signedOut : .unavailable
         }
-        guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
-              material.allowsUpload else { return .setupRequired }
+        guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID)
+        else { return .setupRequired }
+        guard material.allowsUpload else { return .initialDownloadRequired }
         let remote = try await client.personalVault(endpoint: endpoint, session: session)
         guard await client.hasStoredSession(endpoint: endpoint),
               SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == sessionEpoch,

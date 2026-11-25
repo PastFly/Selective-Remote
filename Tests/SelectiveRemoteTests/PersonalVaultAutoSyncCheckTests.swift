@@ -97,7 +97,7 @@ struct PersonalVaultAutoSyncCheckTests {
 
         let result = try await check(fixture)
         switch result {
-        case .unavailable, .signedOut, .setupRequired:
+        case .unavailable, .signedOut, .setupRequired, .initialDownloadRequired:
             Issue.record("Expected a check using the existing session and key")
         case let .current(revision):
             presentation.recordPersonalSuccess(revision: revision, generation: generation)
@@ -140,10 +140,22 @@ struct PersonalVaultAutoSyncCheckTests {
         let fixture = try PersonalCheckFixture(remoteRevision: 5, prerequisite: prerequisite)
         let result = try await check(fixture)
         switch (prerequisite, result) {
-        case (.noSession, .signedOut), (.noKey, .setupRequired), (.initialDownload, .setupRequired):
+        case (.noSession, .signedOut), (.noKey, .setupRequired), (.initialDownload, .initialDownloadRequired):
             break
         default:
             Issue.record("Expected a specific prerequisite for Personal Vault sync")
+        }
+        #expect(fixture.requests.count == 0)
+        #expect(fixture.keys.saveCount == 0)
+    }
+
+    @Test("A saved key awaiting the initial download does not report new Vault setup")
+    func pendingImportIsNotNewSetup() async throws {
+        let fixture = try PersonalCheckFixture(remoteRevision: 357, prerequisite: .initialDownload)
+        let result = try await check(fixture)
+        guard case .initialDownloadRequired = result else {
+            Issue.record("This Mac has the Vault key and is awaiting the first import")
+            return
         }
         #expect(fixture.requests.count == 0)
         #expect(fixture.keys.saveCount == 0)
