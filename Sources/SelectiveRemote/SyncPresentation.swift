@@ -124,6 +124,7 @@ final class SyncPresentationStore: ObservableObject {
     @Published private(set) var team = SyncScopeSnapshot.unknown(.team)
     @Published private(set) var unconfirmedSessionCleanup = false
     private(set) var generation = UUID()
+    private(set) var personalSetupCheck = UUID()
     private var accountKey: String?
     private var activeTeamCycle: (token: UUID, generation: UUID)?
 
@@ -151,6 +152,7 @@ final class SyncPresentationStore: ObservableObject {
 
     func invalidateSession() {
         generation = UUID()
+        personalSetupCheck = UUID()
         activeTeamCycle = nil
         personal = .unknown(.personal)
         team = .unknown(.team)
@@ -195,6 +197,23 @@ final class SyncPresentationStore: ObservableObject {
     func recordPersonalUnknown() {
         update(.personal, lifecycle: .unknown, issue: nil,
                pending: personal.pendingLocalChanges)
+    }
+
+    func recordPersonalSetupRequired(check: UUID) {
+        guard check == personalSetupCheck else { return }
+        setPrerequisite(.personal, lifecycle: .setupRequired)
+    }
+
+    func recordPersonalVaultConnected(endpoint: String, deviceID: String, generation: UUID) -> Bool {
+        guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID) else {
+            return false
+        }
+        // Inventory verified the current Vault and key while a sync check may
+        // still be returning an earlier missing-key result.
+        personalSetupCheck = UUID()
+        guard personal.lifecycle == .setupRequired else { return false }
+        recordPersonalUnknown()
+        return true
     }
 
     func beginTeamCycle(token: UUID) {

@@ -173,6 +173,43 @@ struct SyncPresentationTests {
         #expect(store.personal.lifecycle == .setupRequired)
     }
 
+    @Test("Settings clears obsolete Personal Vault setup without confirming a sync")
+    func connectedVaultSupersedesAnOlderSetupCheck() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        store.recordTeamReport(.init(scannedVaults: 3, synchronizedVaults: 3))
+        let check = store.personalSetupCheck
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.aggregate == .setupRequired)
+
+        #expect(store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: store.generation))
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.aggregate == .unknown)
+        #expect(store.personal.lastConfirmedAt == nil)
+        #expect(store.team.lifecycle == .synced)
+
+        store.recordPersonalSetupRequired(check: store.personalSetupCheck)
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
+    @Test("Connection evidence from a different session or device keeps setup visible")
+    func staleConnectionDoesNotResolvePersonalSetup() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        let oldGeneration = store.generation
+        store.invalidateSession()
+        store.recordPersonalSetupRequired(check: store.personalSetupCheck)
+
+        #expect(!store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: oldGeneration))
+        #expect(!store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: UUID().uuidString, generation: store.generation))
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
     @Test("Lifecycle has distinct Russian and English labels")
     func localizedLabels() {
         #expect(SyncLifecycle.security.title(english: true) == "Action required")
