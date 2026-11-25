@@ -126,6 +126,7 @@ final class SyncPresentationStore: ObservableObject {
     private(set) var generation = UUID()
     private var accountKey: String?
     private var activeTeamCycle: (token: UUID, generation: UUID)?
+    private var activePersonalSetupCheck: (token: UUID, connectionVerified: Bool)?
 
     func reportUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = true }
     func acknowledgeUnconfirmedSessionCleanup() { unconfirmedSessionCleanup = false }
@@ -152,6 +153,7 @@ final class SyncPresentationStore: ObservableObject {
     func invalidateSession() {
         generation = UUID()
         activeTeamCycle = nil
+        activePersonalSetupCheck = nil
         personal = .unknown(.personal)
         team = .unknown(.team)
     }
@@ -195,6 +197,30 @@ final class SyncPresentationStore: ObservableObject {
     func recordPersonalUnknown() {
         update(.personal, lifecycle: .unknown, issue: nil,
                pending: personal.pendingLocalChanges)
+    }
+
+    func beginPersonalSetupCheck() -> UUID {
+        let token = UUID()
+        activePersonalSetupCheck = (token, false)
+        return token
+    }
+
+    func recordPersonalSetupRequired(check: UUID) {
+        guard let active = activePersonalSetupCheck, active.token == check else { return }
+        activePersonalSetupCheck = nil
+        if active.connectionVerified {
+            if personal.lifecycle == .syncing { recordPersonalUnknown() }
+            return
+        }
+        setPrerequisite(.personal, lifecycle: .setupRequired)
+    }
+
+    func recordPersonalVaultConnected(endpoint: String, deviceID: String, generation: UUID) {
+        guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID) else { return }
+        // Inventory verified the current Vault and key while a sync check may
+        // still be returning an earlier missing-key result.
+        activePersonalSetupCheck?.connectionVerified = true
+        if personal.lifecycle == .setupRequired { recordPersonalUnknown() }
     }
 
     func beginTeamCycle(token: UUID) {

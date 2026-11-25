@@ -124,8 +124,8 @@ struct CloudSettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
-            Section(UpdateLocalization.text(ru: "Аккаунт и Vault", en: "Account & Vault")) {
-                LabeledContent(UpdateLocalization.text(ru: "Состояние", en: "Status")) {
+            Section(UpdateLocalization.text(ru: "Аккаунт Cloud", en: "Cloud Account")) {
+                LabeledContent(UpdateLocalization.text(ru: "Сеанс Cloud", en: "Cloud session")) {
                     accountStatus
                 }
                 LabeledContent("API") {
@@ -229,7 +229,7 @@ struct CloudSettingsView: View {
             }
 
             if accountUser != nil {
-                Section("Personal Vault") {
+                Section(UpdateLocalization.text(ru: "Личный Vault", en: "Personal Vault")) {
                     LabeledContent(UpdateLocalization.text(ru: "Ревизия в Cloud", en: "Cloud revision")) {
                         Text(personalVaultRevision.map { "r\($0)" } ?? "—")
                             .monospacedDigit()
@@ -238,10 +238,9 @@ struct CloudSettingsView: View {
                         Text(localPersonalVaultSummary)
                             .foregroundStyle(.secondary)
                     }
-                    LabeledContent(UpdateLocalization.text(ru: "Автосинхронизация", en: "Automatic sync")) {
+                    LabeledContent(UpdateLocalization.text(ru: "Состояние Vault", en: "Vault status")) {
                         Text(personalVaultSetupTitle)
-                            .foregroundStyle(personalVaultAutoSyncConfigured && personalVaultSyncEnabled
-                                             ? Color.green : Color.secondary)
+                            .foregroundStyle(personalVaultAutoSyncConfigured ? Color.green : Color.secondary)
                     }
 
                     if !personalVaultEnrollmentPending, personalVaultSetup != .connected, personalVaultSetup != .checking {
@@ -419,6 +418,10 @@ struct CloudSettingsView: View {
         .task {
             await loadCloudStateIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+            guard phase == .available, accountPhase == .signedOut else { return }
+            Task { await loadCloudStateIfNeeded() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionLost)) { notification in
             guard let loss = notification.object as? SelectiveRemoteCloudSessionLoss,
                   let session = accountSession, loss.matches(session) else { return }
@@ -515,7 +518,7 @@ struct CloudSettingsView: View {
             }
             .foregroundStyle(.secondary)
         case .signedIn, .connectingPersonalVault:
-            Label(UpdateLocalization.text(ru: "Подключён", en: "Connected"), systemImage: "checkmark.circle.fill")
+            Label(UpdateLocalization.text(ru: "Вход выполнен", en: "Signed in"), systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case .refreshing:
             Label(UpdateLocalization.text(ru: "Обновление…", en: "Refreshing…"), systemImage: "arrow.clockwise")
@@ -556,10 +559,18 @@ struct CloudSettingsView: View {
 
     @MainActor
     private func loadCloudStateIfNeeded() async {
-        guard phase == .idle else { return }
+        guard accountPhase == .signedOut else { return }
         let generation = accountPresentationGeneration
-        guard let url = await refreshCloudMetadata() else { return }
-        guard accountPresentationGeneration == generation, !accountPhase.isBusy else { return }
+        let url: URL?
+        switch phase {
+        case .idle:
+            url = await refreshCloudMetadata()
+        case .available:
+            url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
+        default:
+            return
+        }
+        guard let url, accountPresentationGeneration == generation, accountPhase == .signedOut else { return }
         await restoreStoredSession(at: url)
     }
 
@@ -655,7 +666,7 @@ struct CloudSettingsView: View {
     @MainActor
     private func restoreStoredSession(at url: URL) async {
         if accountEndpoint == url.absoluteString, accountUser != nil { return }
-        resetAccountPresentation(endpoint: url)
+        resetAccountPresentation(endpoint: url, invalidateSyncPresentation: false)
         let generation = accountPresentationGeneration
         accountPhase = .restoring
         do {
@@ -666,7 +677,6 @@ struct CloudSettingsView: View {
             guard accountPresentationGeneration == generation else { return }
             accountSession = session
             accountUser = user
-            SyncPresentationStore.shared.invalidateSession()
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
             guard isCurrentPresentation(generation, session: session) else { return }
@@ -676,7 +686,7 @@ struct CloudSettingsView: View {
             )
         } catch {
             guard accountPresentationGeneration == generation else { return }
-            resetAccountPresentation(endpoint: url)
+            resetAccountPresentation(endpoint: url, invalidateSyncPresentation: false)
             if error is CancellationError || error as? SelectiveRemoteCloudError == .authenticationRequired { return }
             accountErrorMessage = error.localizedDescription
         }
@@ -760,6 +770,7 @@ struct CloudSettingsView: View {
                     do {
                         try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID, session: signedIn.session)
                         guard isCurrentPresentation(generation, session: signedIn.session) else { return }
+                        NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
                         await loadInventory(endpoint: url)
                     } catch {
                         enrollmentError = error.localizedDescription
@@ -920,6 +931,8 @@ struct CloudSettingsView: View {
     private func loadInventory(endpoint url: URL) async {
         guard let session = accountSession else { return }
         let generation = accountPresentationGeneration
+        let syncPresentation = SyncPresentationStore.shared
+        let syncGeneration = syncPresentation.generation
         accountPhase = .refreshing
         inventoryErrorMessage = nil
         personalVaultLoadErrorMessage = nil
@@ -938,12 +951,13 @@ struct CloudSettingsView: View {
                 }.value
                 try await client.checkSession(session)
                 guard isCurrentPresentation(generation, session: session) else { return }
-                if let material, material.vaultID == personalVault.id {
+                if let material, material.vaultID == personalVault.id,
+                   material.wrappedKey == personalVault.envelope?.wrappedKey {
+                    personalVaultSetup = material.allowsUpload ? .connected : .initialDownload
                     if material.allowsUpload {
-                        personalVaultSetup = .connected
-                    } else {
-                        personalVaultSetup = material.wrappedKey == personalVault.envelope?.wrappedKey
-                            ? .initialDownload : .needsUnlock
+                        syncPresentation.recordPersonalVaultConnected(
+                            endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
+                        )
                     }
                 } else {
                     personalVaultSetup = .needsUnlock
@@ -1172,9 +1186,10 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
-    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false) {
+    private func resetAccountPresentation(endpoint url: URL, preservingSignIn: Bool = false,
+                                          invalidateSyncPresentation: Bool = true) {
         if !preservingSignIn { accountPresentationGeneration = UUID() }
-        SyncPresentationStore.shared.invalidateSession()
+        if invalidateSyncPresentation { SyncPresentationStore.shared.invalidateSession() }
         if !preservingSignIn {
             accountEndpoint = url.absoluteString
             accountPhase = .signedOut
@@ -1254,9 +1269,7 @@ struct CloudSettingsView: View {
         case .initialDownload:
             UpdateLocalization.text(ru: "Нужно завершить подключение", en: "Finish connecting")
         case .connected:
-            personalVaultSyncEnabled
-                ? UpdateLocalization.text(ru: "Включена", en: "Enabled")
-                : UpdateLocalization.text(ru: "Выключена", en: "Disabled")
+            UpdateLocalization.text(ru: "Подключён на этом Mac", en: "Connected on this Mac")
         }
     }
 

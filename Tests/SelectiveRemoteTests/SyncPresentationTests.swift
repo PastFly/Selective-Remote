@@ -173,6 +173,67 @@ struct SyncPresentationTests {
         #expect(store.personal.lifecycle == .setupRequired)
     }
 
+    @Test("Settings clears obsolete Personal Vault setup without confirming a sync")
+    func connectedVaultSupersedesAnOlderSetupCheck() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        store.recordTeamReport(.init(scannedVaults: 3, synchronizedVaults: 3))
+        let check = store.beginPersonalSetupCheck()
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.aggregate == .setupRequired)
+
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.aggregate == .unknown)
+        #expect(store.personal.lastConfirmedAt == nil)
+        #expect(store.team.lifecycle == .synced)
+
+        store.recordPersonalSetupRequired(check: store.beginPersonalSetupCheck())
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
+    @Test("Connection evidence from a different session or device keeps setup visible")
+    func staleConnectionDoesNotResolvePersonalSetup() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        let oldGeneration = store.generation
+        store.invalidateSession()
+        store.recordPersonalSetupRequired(check: store.beginPersonalSetupCheck())
+
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: oldGeneration)
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: UUID().uuidString, generation: store.generation)
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
+    @Test("An obsolete setup result ends its in-flight check")
+    func obsoleteSetupFinishesChecking() {
+        let store = SyncPresentationStore()
+        let endpoint = "https://cloud.example.test"
+        let deviceID = UUID().uuidString
+        store.setAccount(endpoint: endpoint, deviceID: deviceID)
+        let check = store.beginPersonalSetupCheck()
+        store.begin(.personal)
+        store.recordPersonalVaultConnected(endpoint: endpoint, deviceID: deviceID, generation: store.generation)
+
+        #expect(store.personal.lifecycle == .syncing)
+        store.recordPersonalSetupRequired(check: check)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.personal.lastConfirmedAt == nil)
+
+        let superseded = store.beginPersonalSetupCheck()
+        let current = store.beginPersonalSetupCheck()
+        store.begin(.personal)
+        store.recordPersonalSetupRequired(check: superseded)
+        #expect(store.personal.lifecycle == .syncing)
+        store.recordPersonalSetupRequired(check: current)
+        #expect(store.personal.lifecycle == .setupRequired)
+    }
+
     @Test("Lifecycle has distinct Russian and English labels")
     func localizedLabels() {
         #expect(SyncLifecycle.security.title(english: true) == "Action required")

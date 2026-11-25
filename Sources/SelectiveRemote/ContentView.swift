@@ -161,6 +161,7 @@ struct ContentView: View {
     @State private var showsDeviceTrust = false
     @State private var showsCloudOnboarding = false
     @State private var showsSyncCenter = false
+    @State private var opensCloudSettingsAfterSyncCenterDismissal = false
     @State private var diagnosticsCloudSyncRequestID: UUID?
     @State private var cloudSessionAvailable = false
     @State private var cloudSessionAvailabilityRequest = UUID()
@@ -547,12 +548,17 @@ struct ContentView: View {
         }) {
             SelectiveRemoteCloudOnboardingSheet(model: model)
         }
-        .sheet(isPresented: $showsSyncCenter) {
+        .sheet(isPresented: $showsSyncCenter, onDismiss: {
+            guard opensCloudSettingsAfterSyncCenterDismissal else { return }
+            opensCloudSettingsAfterSyncCenterDismissal = false
+            // Opening Settings during sheet teardown can reenter AppKit focus layout.
+            UserDefaults.standard.set("cloud", forKey: "SelectiveRemote.settings.selected-tab.v1")
+            openSettings()
+        }) {
             SyncCenterView(
                 onOpenCloudSettings: {
+                    opensCloudSettingsAfterSyncCenterDismissal = true
                     showsSyncCenter = false
-                    UserDefaults.standard.set("cloud", forKey: "SelectiveRemote.settings.selected-tab.v1")
-                    openSettings()
                 },
                 onOpenCloudManagement: {
                     showsSyncCenter = false

@@ -692,6 +692,7 @@ struct SelectiveRemoteApp: App {
         )
         let syncGeneration = syncPresentation.generation
         let uploadGeneration = personalUploadGeneration
+        let setupCheck = syncPresentation.beginPersonalSetupCheck()
         if syncPresentation.personal.pendingLocalChanges != true,
            ![.setupRequired, .signedOut].contains(syncPresentation.personal.lifecycle) {
             syncPresentation.begin(.personal)
@@ -720,7 +721,7 @@ struct SelectiveRemoteApp: App {
                 syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
                 return
             case .setupRequired:
-                syncPresentation.setPrerequisite(.personal, lifecycle: .setupRequired)
+                syncPresentation.recordPersonalSetupRequired(check: setupCheck)
                 return
             case let .unconfirmedUpload(issue):
                 if let issue {
