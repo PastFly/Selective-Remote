@@ -1,88 +1,56 @@
-# Selective Remote
+<p align="center"><img src="docs/favicon.svg" width="56" height="56" alt=""></p>
 
-### Your infrastructure. One workspace.
+<h1 align="center">Selective Remote</h1>
 
-[Русский](README.md) · **English**
+<p align="center">SSH, RDP, SFTP, and tunnels in one app for Mac.</p>
 
-A native Mac app that keeps connections, files, and commands together. Work across SSH, RDP, SFTP, and tunnels without losing context between tools.
+<p align="center">
+  <strong><a href="https://github.com/PastFly/Selective-Remote/releases/latest">Download for Mac</a></strong> ·
+  <a href="https://pastfly.github.io/Selective-Remote/">Website</a> ·
+  <a href="https://cloud.pastfly.ru/">Cloud</a> ·
+  <a href="README.md">Русский</a>
+</p>
 
-**Community** · macOS 15+ · Apple Silicon · free and open source
+<p align="center"><sub>Community · Apple silicon · macOS 15+ · MIT license</sub></p>
 
-**[Download for Mac](https://github.com/PastFly/Selective-Remote/releases/latest)** · [Website](https://pastfly.github.io/Selective-Remote/) · [Cloud](https://cloud.pastfly.ru/) · [Guides](https://pastfly.github.io/Selective-Remote/#guides)
+![Demo hosts and SSH connection settings in Selective Remote](docs/images/demo-032-en-hosts-hero.webp)
 
-> Every image below is a real capture of the **0.32.0 (163) candidate** with synthetic demo data. Use the link above for the latest build.
+*Selective Remote 0.32.0 (163) with demo data.*
 
-![Hosts workspace in the Selective Remote 0.32 candidate with synthetic demo hosts](docs/images/demo-032-en-hosts-hero.webp)
+## Connections and tools
 
-## Connect. Organize. Work.
+- **Connections.** SSH, RDP, Telnet, and Serial. Profiles, groups, tags, and favorites help you find the right host.
+- **Terminal and commands.** Tabs, split panes, and reusable Snippets for SSH and local terminal sessions.
+- **Files and tunnels.** Dual-pane SFTP transfers between your Mac and a server or between two servers. Manage SSH tunnels and check connection diagnostics.
+- **RDP across displays.** Choose and arrange your Mac displays for each remote desktop profile.
 
-- **Connect:** SSH and RDP on your chosen Mac displays; Telnet and Serial when needed.
-- **Organize:** profiles, groups, favorites, and tags keep infrastructure easy to find.
-- **Work:** Terminal, dual-pane SFTP, SSH tunnels, and Snippets stay in one app.
+<details>
+<summary>Terminal, SFTP, and RDP display settings</summary>
 
-The app includes SSH Workspace, local Terminal, SFTP, Forwarding Manager, Connection Center, diagnostics, macOS Keychain, and encrypted local backups. [Explore the features and quick start](docs/FEATURES-EN.md).
+![Terminal tabs and the Snippets library](docs/images/demo-032-en-terminal.webp)
 
-### RDP across two or more displays
+![Dual-pane SFTP workspace with demo files](docs/images/demo-032-en-sftp.webp)
 
-Choose which Mac displays show the remote desktop for each RDP profile: one, two, or more. Set the primary Windows monitor and arrange the virtual displays automatically or by hand. Your selection is saved with the profile. [Multi-monitor RDP guide](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html).
+![Two displays selected in an RDP profile](docs/images/demo-032-en-rdp-displays.webp)
 
-![Real two-display RDP configuration in the Selective Remote 0.32 candidate with synthetic .example hosts](docs/images/demo-032-en-rdp-displays.webp)
+</details>
 
-### Terminal and commands
+[All features](docs/FEATURES-EN.md) · [Multi-monitor RDP](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html) · [Server-to-server SFTP](https://pastfly.github.io/Selective-Remote/guides/server-to-server-sftp-macos.html)
 
-Tabs and panes keep sessions close; Snippets store reusable commands. The local demo shell in this capture is intentionally stopped.
+## Cloud sync
 
-![Selective Remote 0.32 candidate Terminal with a stopped demo shell](docs/images/demo-032-en-terminal.webp)
+**Personal Vault** syncs hosts, credentials, and Snippets across trusted Mac and browser devices. **Team Vaults** support shared data, invitations, and roles. Sync Center shows Vault status and helps you review conflicts and device access. Sync availability depends on your Cloud configuration and account permissions.
 
-### Files across Mac and servers
+Vault data is encrypted on the device. Selective Remote uses macOS Keychain, verifies SSH host keys, and encrypts full local backups. You can work locally without a Cloud account.
 
-Dual-pane SFTP supports Mac ↔ Server and Server ↔ Server transfers. The capture shows only local test files; no server is connected.
-
-![Selective Remote 0.32 candidate SFTP with local demo files and no server connection](docs/images/demo-032-en-sftp.webp)
-
-### Snippets for repeatable work
-
-The command library is shared by SSH and the local terminal. The capture contains three synthetic demo commands.
-
-![Selective Remote 0.32 candidate Snippets library with synthetic demo commands](docs/images/demo-032-en-snippets.webp)
-
-## Selective Remote Cloud
-
-Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are supported in the 0.32 app for eligible Cloud accounts. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. Local work remains available without an account.
-
-**Sync Center** separates Personal and Team Vault state. Notifications lead to device, invitation, or error review; reading a notification does not resolve its source. Copying a Personal Host to a Team Vault preserves the original.
-
-The first public Cloud release is being prepared with V1 Vaults: approved members share access to a Team Vault. Individual-record permissions and V2 migration are excluded from this release. Access to a specific Team Vault depends on the account’s invitation and permissions.
-
-Account password changes are temporarily unavailable to preserve access to encrypted Personal Vault data. Trust-root recovery is planned **after 0.32**.
-
-[0.32 candidate notes in Russian and English](releases/0.32.0-notes.md). Community builds use ad-hoc signing. The app can download an update and verify its SHA-256 digest. Install the app manually from the DMG.
-
-[Cloud architecture and trust model](docs/cloud-v0.32-architecture.md) · [Open Cloud](https://cloud.pastfly.ru/)
-
-## Security and open source
-
-SSH secrets are stored in macOS Keychain; new SSH host keys are not accepted automatically. Profiles do not export saved passwords, and full backups are encrypted. The source is available under the [MIT license](LICENSE). [Security details](docs/FEATURES-EN.md#security) · [Report a vulnerability](SECURITY.md).
+[Open Cloud](https://cloud.pastfly.ru/) · [Cloud architecture](docs/cloud-v0.32-architecture.md) · [Security policy](SECURITY.md)
 
 ## Installation
 
-1. Download the DMG from the [latest release](https://github.com/PastFly/Selective-Remote/releases/latest).
-2. Open the image and drag **Selective Remote** into Applications.
-3. Launch the app. If macOS blocks it as an unidentified developer app and you trust the download, use **System Settings → Privacy & Security → Open Anyway**. Follow [Apple’s instructions](https://support.apple.com/en-gb/102445); a managed Mac may restrict this action.
+1. Download the Apple silicon DMG from the [latest release](https://github.com/PastFly/Selective-Remote/releases/latest). Requires macOS 15 or later.
+2. Check its SHA-256 digest against the checksum file next to the DMG.
+3. Open the DMG and drag **Selective Remote** into Applications.
 
-The ready-made DMG targets **Apple Silicon** and **macOS 15 or later**. Server access and permissions for redirected devices depend on your workflow.
+Community builds use ad-hoc signing. The app can download updates and verify their SHA-256 digest. Install manually from the DMG. If macOS prompts you to confirm the launch, follow Apple’s instructions. [Opening apps on macOS](https://support.apple.com/en-gb/102445)
 
-For development: `swift test`, `swift build -c release`, then optionally `bash scripts/build_and_install.sh`. [Build instructions](BUILD-RU.md) · [Publishing](docs/PUBLISHING-RU.md) · [Release preparation](docs/RELEASING-RU.md).
-
-## Guides
-
-- [Multi-monitor RDP on macOS](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html)
-- [Server-to-Server SFTP on Mac](https://pastfly.github.io/Selective-Remote/guides/server-to-server-sftp-macos.html)
-- [Features and quick start](docs/FEATURES-EN.md)
-- [Changelog](CHANGELOG_EN.md)
-
-## Community and support
-
-[Website](https://pastfly.github.io/Selective-Remote/) · [GitHub](https://github.com/PastFly/Selective-Remote) · [Telegram](https://t.me/SelectiveRemoteApp) · [Support the project](SUPPORT.md#english) · [Русский](README.md)
-
-Support is optional and does not unlock features. Release news is shared on [Telegram](https://t.me/SelectiveRemoteApp).
+[Changelog](CHANGELOG_EN.md) · [Build from source](BUILD-RU.md) · [Telegram](https://t.me/SelectiveRemoteApp) · [Support the project](SUPPORT.md#english)
