@@ -19,6 +19,7 @@ const tables = [
   ['shared_vault_revisions', 'INSERT OR UPDATE OR DELETE'],
   ['shared_vault_key_wrappers', 'INSERT OR UPDATE OR DELETE'],
 ];
+const guardedTables = tables.map(([table]) => 'public.' + table).join(', ');
 
 export async function installV1CommitFence(pool) {
   const client = await pool.connect();
@@ -26,7 +27,7 @@ export async function installV1CommitFence(pool) {
     await client.query('BEGIN');
     // DDL waits for transactions that already modified any protected table.
     // Once it commits, later old writers cannot cross this boundary.
-    await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ACCESS EXCLUSIVE MODE');
+    await client.query(`LOCK TABLE ${guardedTables} IN ACCESS EXCLUSIVE MODE`);
     await client.query(`CREATE OR REPLACE FUNCTION public.selective_remote_require_framed_v1_writer()
       RETURNS trigger LANGUAGE plpgsql AS $$${functionBody}$$`);
     for (const [table, events] of tables) {
@@ -57,9 +58,14 @@ export async function holdV1CommitFence(client, fence) {
   requireIndependentV1Anchor(fence);
   // Hold the table locks through COMMIT/ROLLBACK: a concurrent restore or DDL
   // cannot invalidate the verified triggers after the check and before write.
-  await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ROW EXCLUSIVE MODE');
+  await client.query(`LOCK TABLE ${guardedTables} IN ROW EXCLUSIVE MODE`);
   await assertV1CommitFence((sql, values) => client.query(sql, values));
   await useFramedV1Writer(client);
+}
+
+export async function holdV1CommitReadback(query) {
+  await query(`LOCK TABLE ${guardedTables} IN SHARE MODE`);
+  await assertV1CommitFence(query);
 }
 
 // Test-only candidate. Closing ingress and draining connections are necessary;
@@ -85,7 +91,7 @@ export async function armV1CommitFence({ pool, fence }) {
   const snapshotClient=await pool.connect();
   try {
     await snapshotClient.query('BEGIN');
-    await snapshotClient.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN SHARE MODE');
+    await snapshotClient.query(`LOCK TABLE ${guardedTables} IN SHARE MODE`);
     let state=await fence.snapshot();
     if(state.v1BaselineID)await assertV1DataFloor((sql,values)=>snapshotClient.query(sql,values),state);
     else {

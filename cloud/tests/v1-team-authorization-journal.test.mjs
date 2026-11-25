@@ -57,6 +57,34 @@ test("a proven abort retains the previous authorization digest and closes the pe
     assert.throws(() => reduceFenceEvents([...events, baseline, stage, abort, confirm]), /deployment_fence_conflict/u);
 });
 
+test("paired Team terminal evidence requires the exact retained Vault outcome", () => {
+    const vault = {
+        version: 2, type: "V1_PENDING_INTENT",
+        intentID: "44444444-4444-4444-8444-444444444444",
+        operationID: "55555555-5555-4555-8555-555555555555",
+        vaultKind: "TEAM", ownerID: "66666666-6666-4666-8666-666666666666",
+        vaultID: "77777777-7777-4777-8777-777777777777",
+        baseRevision: 0, revision: 1, ciphertextHash: original, envelopeHash: updated,
+    };
+    const vaultIntentDigest = fenceIntentDigest(vault);
+    const paired = { ...stage, vaultIntentID: vault.intentID, vaultIntentDigest };
+    const confirmed = { ...confirmation(), intentDigest: fenceIntentDigest(paired) };
+    const aborted = { ...confirmed, type: "V1_TEAM_AUTHORIZATION_ABORTED" };
+    const vaultConfirmed = {
+        version: 2, type: "V1_CONFIRMED_COMMIT", intentID: vault.intentID, intentDigest: vaultIntentDigest,
+    };
+    const vaultAborted = { ...vaultConfirmed, type: "V1_PROVEN_ABORT" };
+    const prefix = [...events, baseline];
+    const retained = [...prefix, vault, paired];
+    assert.throws(() => reduceFenceEvents([...prefix, paired]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...prefix, vault, { ...paired, vaultIntentDigest: original }]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...retained, confirmed]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...retained, vaultAborted, confirmed]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...retained, vaultConfirmed, aborted]), /deployment_fence_conflict/u);
+    assert.equal(reduceFenceEvents([...retained, vaultConfirmed, confirmed]).v1TeamAuthorization.digest, updated);
+    assert.equal(reduceFenceEvents([...retained, vaultAborted, aborted]).v1TeamAuthorization.digest, original);
+});
+
 test("the journal requires an independent anchor and an unresolved Team write blocks readiness", async () => {
     const directory = await mkdtemp(join(tmpdir(), "sr-team-authorization-"));
     try {

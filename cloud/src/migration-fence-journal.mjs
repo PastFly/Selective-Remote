@@ -50,9 +50,13 @@ export function validateFenceEvent(value){
   return {version:2,type:value.type,authorizationProtocol:1,digest:value.digest};
  }
  if(value.type==='V1_TEAM_AUTHORIZATION_PENDING'){
-  if(!keys(value,['version','type','intentID','previousDigest','nextDigest'])||!isUUID(value.intentID)||
-    !isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest)invalid();
-  return {version:2,type:value.type,intentID:value.intentID,previousDigest:value.previousDigest,nextDigest:value.nextDigest};
+  const fields=['version','type','intentID','previousDigest','nextDigest'];
+  const paired=Object.hasOwn(value,'vaultIntentID')||Object.hasOwn(value,'vaultIntentDigest');
+  if(!keys(value,paired?[...fields,'vaultIntentID','vaultIntentDigest']:fields)||!isUUID(value.intentID)||
+    !isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest||
+    (paired&&(!isUUID(value.vaultIntentID)||value.vaultIntentID===value.intentID||!isHash(value.vaultIntentDigest))))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,previousDigest:value.previousDigest,nextDigest:value.nextDigest,
+   ...(paired?{vaultIntentID:value.vaultIntentID,vaultIntentDigest:value.vaultIntentDigest}:{})};
  }
  if(value.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'||value.type==='V1_TEAM_AUTHORIZATION_ABORTED'){
   if(!keys(value,['version','type','intentID','intentDigest'])||!isUUID(value.intentID)||!isHash(value.intentDigest))invalid();
@@ -172,6 +176,7 @@ export function reduceFenceEvents(events){
    const intent={...event,intentDigest:fenceIntentDigest(event)},prior=teamAuthorizationIntents.get(event.intentID);
    if(prior){if(!same(prior,intent))conflict();continue;}
    if(!teamAuthorizationBaseline||teamAuthorizationPending||pending.size||event.previousDigest!==teamAuthorizationDigest)conflict();
+   if(event.vaultIntentID&&v1Pending.get(event.vaultIntentID)?.intentDigest!==event.vaultIntentDigest)conflict();
    teamAuthorizationIntents.set(event.intentID,intent);
    teamAuthorizationPending=intent;
    continue;
@@ -181,6 +186,11 @@ export function reduceFenceEvents(events){
    if(prior){if(!same(prior,event))conflict();continue;}
    if(teamAuthorizationPending?.intentID!==event.intentID||
      teamAuthorizationPending.intentDigest!==event.intentDigest)conflict();
+   if(teamAuthorizationPending.vaultIntentID){
+    const resolution=v1Outcomes.get(teamAuthorizationPending.vaultIntentID);
+    const expected=event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'?'V1_CONFIRMED_COMMIT':'V1_PROVEN_ABORT';
+    if(resolution?.type!==expected||resolution.intentDigest!==teamAuthorizationPending.vaultIntentDigest)conflict();
+   }
    if(event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED')teamAuthorizationDigest=teamAuthorizationPending.nextDigest;
    teamAuthorizationOutcomes.set(event.intentID,event);
    teamAuthorizationPending=null;

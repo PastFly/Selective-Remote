@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import { currentCapabilities, verifyDeploymentCompatibility } from "../src/deployment-compatibility.mjs";
 import { PostgresStore } from "../src/postgres-store.mjs";
 import {
-    PublicationFenceCoordinator, readCommittedV1Outcome, reconcileV1TeamAuthorization,
+    reconcileV1TeamAuthorization,
 } from "../src/publication-fence-coordinator.mjs";
 import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 import { readV1VaultState } from "../src/v1-data-fence.mjs";
@@ -22,13 +23,13 @@ import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-h
 
 const exec = promisify(execFile);
 
-test("the retained Team authorization state refuses a PostgreSQL restore from before a role reduction", {
+test("protected Team recovery checks both intents across PostgreSQL restores with the TLS anchor retained", {
     skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
     timeout: 60000,
 }, async () => {
     const db = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
-    const directory = await mkdtemp(join(tmpdir(), "sr-team-authorization-restore-"));
-    let runtime, anchor, restored;
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "sr-team-authorization-restore-")));
+    let runtime, anchor, restored, beforePair, committedCopy;
     try {
         const owner = randomUUID(), member = randomUUID(), team = randomUUID(), device = randomUUID();
         await db.pool.query(`INSERT INTO users(id,email,username,email_verified_at)
@@ -125,6 +126,12 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         assert.equal(await store.session(sessionHash), null);
         assert.ok((await fence.snapshot()).revokedDeviceIDs.includes(newDevice.id));
 
+        const precedingArchive = join(directory, "before-paired-commit.dump");
+        await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", precedingArchive, db.databaseURL]);
+        beforePair = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", beforePair.databaseURL, precedingArchive]);
+
         let loseCommitBeforeWrite = false;
         const lostReplyStore = new PostgresStore(db.databaseURL, {
             async connect() {
@@ -152,28 +159,114 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         assert.ok(authorizationIntent);
         await assert.rejects(store.createSharedVault(createVault), /deployment_fence_pending/u);
 
-        const recovery = new PublicationFenceCoordinator({ fence });
-        assert.deepEqual(await recovery.reconcile({
-            intentID: vaultIntent.intentID, readCommittedOutcome: intent => readCommittedV1Outcome({ query, intent }),
-        }), { status: "confirmed", intentID: vaultIntent.intentID });
-        await assert.rejects(verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate }), /deployment_fence_pending/u);
+        assert.equal(authorizationIntent.vaultIntentID, vaultIntent.intentID);
+        assert.equal(authorizationIntent.vaultIntentDigest, vaultIntent.intentDigest);
         const recoveryInput = { pool: db.pool, fence, intentID: authorizationIntent.intentID };
         const priorHistory = await fence.readRecords();
+        const priorAnchor = await fence.anchor.read();
         await assert.rejects(reconcileV1TeamAuthorization({
-            ...recoveryInput, fence: { snapshot: () => assert.fail("unanchored history read") },
+            ...recoveryInput, fence: { readRecords: () => assert.fail("unanchored history read") },
         }), /deployment_anchor_required/u);
         await assert.rejects(reconcileV1TeamAuthorization({
             ...recoveryInput, intentID: vaultIntent.intentID,
         }), /deployment_fence_intent_not_found/u);
-        await assert.rejects(reconcileV1TeamAuthorization({
-            ...recoveryInput, pool: restored.pool,
-        }), /deployment_fence_mismatch/u);
+
+        const identity = { sourceSHA: "a".repeat(40), imageDigest: "sha256:" + "b".repeat(64), controllerDigest: "c".repeat(64) };
+        const identityPath = join(directory, "controller-identity.json");
+        await writeFile(identityPath, JSON.stringify(identity), { mode: 0o600 });
+        const options = { identity, identityPath, anchorDeploymentID: anchor.env.PUBLICATION_FENCE_ANCHOR_ID, fencePath: runtime.path };
+        const recoveryScript = fileURLToPath(new URL("../scripts/staging-team-authorization-recovery.mjs", import.meta.url));
+        const request = { operation: "reconcile-team-authorization", intentID: authorizationIntent.intentID };
+        const recover = async (databaseURL, overrides = {}, requestBody = request, environment = "staging") => {
+            const command = exec(process.execPath, [recoveryScript, JSON.stringify({ ...options, ...overrides })], {
+                env: {
+                    ...anchor.env, DATABASE_URL: databaseURL,
+                    PUBLICATION_ENVIRONMENT: environment, PUBLICATION_FENCE_PATH: runtime.path,
+                },
+            });
+            command.child.stdin.on("error", () => {});
+            command.child.stdin.end(JSON.stringify(requestBody));
+            try { return JSON.parse((await command).stdout); }
+            catch(error) { throw new Error(error.stderr?.trim() || "synthetic_recovery_failed"); }
+        };
+        await assert.rejects(recover(db.databaseURL, { anchorDeploymentID: randomUUID() }), /staging_team_recovery_anchor/u);
+        await assert.rejects(recover(db.databaseURL, { identity: { ...identity, sourceSHA: "d".repeat(40) } }), /staging_team_recovery_identity/u);
+        await assert.rejects(recover(db.databaseURL, {}, { ...request, committed: true }), /staging_team_recovery_scope/u);
+        await assert.rejects(recover(db.databaseURL, {}, request, "production"), /staging_team_recovery_scope/u);
+        const journalLock = runtime.path + ".lock";
+        await mkdir(journalLock, { mode: 0o700 });
+        try {
+            await assert.rejects(recover(db.databaseURL), /deployment_fence_locked/u);
+        } finally {
+            await rmdir(journalLock);
+        }
+        await assert.rejects(recover(restored.databaseURL), /deployment_fence_mismatch/u);
+        assert.deepEqual(await recover(beforePair.databaseURL), { status: "pending", intentID: authorizationIntent.intentID });
+        const incompleteReadback = {
+            async connect() {
+                const client = await db.pool.connect();
+                return {
+                    query: async (sql, values) => sql.includes("AS current_envelope_hash")
+                        ? { rows: [] } : client.query(sql, values),
+                    release: error => client.release(error),
+                };
+            },
+        };
+        assert.equal(await readV1TeamAuthorizationDigest(query), authorizationIntent.nextDigest);
+        await assert.rejects(reconcileV1TeamAuthorization({ ...recoveryInput, pool: incompleteReadback }), /deployment_fence_mismatch/u);
         assert.deepEqual(await fence.readRecords(), priorHistory);
+        assert.deepEqual(await fence.anchor.read(), priorAnchor);
+        const beforePairQuery = (sql, params) => beforePair.pool.query(sql, params);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: beforePairQuery, candidate: verifiedCandidate }), /deployment_fence_pending/u);
+
+        const committedArchive = join(directory, "after-paired-commit.dump");
+        await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", committedArchive, db.databaseURL]);
+        committedCopy = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+        await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",
+            "--dbname", committedCopy.databaseURL, committedArchive]);
         const confirmed = { status: "confirmed", intentID: authorizationIntent.intentID };
-        assert.deepEqual(await reconcileV1TeamAuthorization(recoveryInput), confirmed);
-        assert.deepEqual(await reconcileV1TeamAuthorization(recoveryInput), confirmed);
+        assert.deepEqual(await recover(committedCopy.databaseURL), confirmed);
+        const recovered = await fence.readRecords();
+        assert.deepEqual(recovered.slice(priorHistory.length).map(({ type, intentID }) => [type, intentID]), [
+            ["V1_CONFIRMED_COMMIT", vaultIntent.intentID],
+            ["V1_TEAM_AUTHORIZATION_CONFIRMED", authorizationIntent.intentID],
+        ]);
+        assert.equal((await fence.anchor.read()).position, priorAnchor.position + 2);
+        assert.deepEqual(await recover(committedCopy.databaseURL), confirmed);
+        assert.deepEqual(await fence.readRecords(), recovered);
+        const committedQuery = (sql, params) => committedCopy.pool.query(sql, params);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query: committedQuery, candidate: verifiedCandidate })).compatible, true);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: beforePairQuery, candidate: verifiedCandidate }), /deployment_v1_data_mismatch/u);
+
         assert.equal((await store.createSharedVault(createVault)).vault.id, vaultIntent.vaultID);
         assert.equal((await fence.snapshot()).v1TeamAuthorization.pending, null);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+
+        const secondVault = { ...createVault, name: "Synthetic restart recovery Vault", idempotencyKey: randomUUID() };
+        await assert.rejects(lostReplyStore.createSharedVault(secondVault), /synthetic_lost_commit_response/u);
+        const secondPending = await fence.snapshot();
+        const secondPair = secondPending.v1TeamAuthorization.pending;
+        const secondVaultIntent = secondPending.v1Pending[0];
+        assert.equal(secondPair.vaultIntentID, secondVaultIntent.intentID);
+        const interruptedFence = {
+            anchor: fence.anchor, readRecords: () => fence.readRecords(), snapshot: () => fence.snapshot(),
+            append(event) {
+                if (event.type === "V1_TEAM_AUTHORIZATION_CONFIRMED") throw new Error("synthetic_controller_interruption");
+                return fence.append(event);
+            },
+        };
+        await assert.rejects(reconcileV1TeamAuthorization({
+            pool: db.pool, fence: interruptedFence, intentID: secondPair.intentID,
+        }), /synthetic_controller_interruption/u);
+        const interrupted = await fence.snapshot();
+        assert.equal(interrupted.v1Pending.length, 0);
+        assert.equal(interrupted.v1TeamAuthorization.pending.intentID, secondPair.intentID);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate }), /deployment_fence_pending/u);
+        const interruptedAnchor = await fence.anchor.read();
+        const secondRequest = { ...request, intentID: secondPair.intentID };
+        assert.deepEqual(await recover(db.databaseURL, {}, secondRequest), { status: "confirmed", intentID: secondPair.intentID });
+        assert.equal((await fence.anchor.read()).position, interruptedAnchor.position + 1);
+        assert.equal((await store.createSharedVault(secondVault)).vault.id, secondVaultIntent.vaultID);
         assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
 
         const vaultID = vaultIntent.vaultID, folder = randomUUID(), resource = randomUUID();
@@ -212,6 +305,8 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         assert.deepEqual(await fence.readRecords(), uncommittedHistory);
         await assert.rejects(verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate }), /deployment_fence_pending/u);
     } finally {
+        await committedCopy?.cleanup();
+        await beforePair?.cleanup();
         await restored?.cleanup();
         await anchor?.cleanup();
         await runtime?.cleanup();

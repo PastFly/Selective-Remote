@@ -1,9 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {canonicalMigrationJSON,migrationHash,verifyMigrationManifest} from './migration-policy.mjs';
 import {publicationHash,verifyReaderHeader} from '../public/vault-publication-v1.js';
-import {validateFenceEvent,fenceIntentDigest} from './migration-fence-journal.mjs';
+import {validateFenceEvent,fenceIntentDigest,reduceFenceEvents} from './migration-fence-journal.mjs';
 import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL,readV1VaultState} from './v1-data-fence.mjs';
-import {requireIndependentV1Anchor} from './v1-commit-fence.mjs';
+import {holdV1CommitReadback,requireIndependentV1Anchor} from './v1-commit-fence.mjs';
 import {
   holdV1TeamAuthorizationFence,holdV1TeamAuthorizationReadback,lockV1TeamAuthorizationWriter,
   readCommittedV1TeamAuthorizationOutcome,readV1TeamAuthorizationDigest,
@@ -94,8 +94,8 @@ export class PublicationFenceCoordinator{
   }
 }
 
-// For a protected maintenance caller with deployment-wide authority. A
-// recorded terminal result reports history; traffic still needs compatibility.
+// A recorded terminal result reports history. Only a separate compatibility
+// check can declare the deployed database ready.
 export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
   requireIndependentV1Anchor(fence);
   const client = await pool.connect();
@@ -103,7 +103,8 @@ export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
   let unlock, beginDispatched = false, releaseError;
   try {
     unlock = await lockV1TeamAuthorizationWriter(client);
-    const state = await fence.snapshot();
+    const records = await fence.readRecords();
+    const state = reduceFenceEvents(records);
     const terminal = state.v1TeamAuthorizationOutcomes?.find(outcome => outcome.intentID === intentID);
     if (terminal) {
       return { status: confirmedTypes.includes(terminal.type) ? 'confirmed' : 'aborted', intentID };
@@ -114,13 +115,38 @@ export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
     beginDispatched = true;
     await query('BEGIN');
     await holdV1TeamAuthorizationReadback(query);
-    return await new PublicationFenceCoordinator({fence}).reconcile({
-      intentID,
-      readCommittedOutcome: pending => {
-        if (pending.type !== 'V1_TEAM_AUTHORIZATION_PENDING') fail('deployment_fence_intent_not_found');
-        return readCommittedV1TeamAuthorizationOutcome({query,intent:pending});
+    const coordinator = new PublicationFenceCoordinator({fence});
+    const confirm = (pending, outcome) => coordinator.reconcile({
+      intentID:pending.intentID,
+      readCommittedOutcome: current => {
+        if(current.intentDigest!==pending.intentDigest)fail('deployment_fence_mismatch');
+        return outcome;
       },
     });
+    if(!intent.vaultIntentID){
+      // Older unlinked journal records can certify an authorization-only
+      // change. They cannot attest which concurrently pending Vault is paired.
+      if(state.v1Pending?.length)fail('deployment_fence_mismatch');
+      return await confirm(intent,await readCommittedV1TeamAuthorizationOutcome({query,intent}));
+    }
+
+    const peer = records.find(event => event.intentID===intent.vaultIntentID
+      && ['V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(event.type));
+    const settled = state.v1Outcomes?.find(outcome => outcome.intentID===intent.vaultIntentID);
+    if(!peer||fenceIntentDigest(peer)!==intent.vaultIntentDigest||
+      (settled&&settled.type!=='V1_CONFIRMED_COMMIT'))fail('deployment_fence_mismatch');
+    await holdV1CommitReadback(query);
+    // Read both outcomes before appending either. These locks keep both
+    // projections stable through the final independently anchored receipt.
+    const vaultOutcome = await committedOutcomeReaders[peer.type]({query,intent:peer});
+    const authorizationOutcome = await readCommittedV1TeamAuthorizationOutcome({query,intent});
+    if(!vaultOutcome&&!authorizationOutcome&&!settled)return {status:'pending',intentID};
+    if(!vaultOutcome||!authorizationOutcome)fail('deployment_fence_mismatch');
+    if(!settled){
+      const result = await confirm({...peer,intentDigest:intent.vaultIntentDigest},vaultOutcome);
+      if(result.status!=='confirmed')fail('deployment_fence_pending');
+    }
+    return await confirm(intent,authorizationOutcome);
   } catch (error) {
     // A lost advisory-lock reply can leave the session owning that lock.
     if (!unlock) releaseError = error;
@@ -153,12 +179,15 @@ export function createPublicationFenceTransaction({query,fence,coordinator:provi
     async beforeCommit(fields){
       // A Team transaction can stage its authorization outcome after staging
       // a Vault or wrapper outcome. Both must survive a single SQL COMMIT.
-      if(commitDispatched||rolledBack||(intents.length>0&&
+      if(commitDispatched||rolledBack||Object.hasOwn(fields,'vaultIntentID')||Object.hasOwn(fields,'vaultIntentDigest')||(intents.length>0&&
         (intents.length!==1||fields.kind!=='V1_TEAM_AUTHORIZATION'||
           !['V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(intents[0].type))))
         fail('deployment_fence_transaction_state');
       coordinator??=providedCoordinator??new PublicationFenceCoordinator({fence});
-      const intent=await coordinator.beforeCommit(fields);
+      const previous=intents[0];
+      const intent=await coordinator.beforeCommit(previous?{
+        ...fields,vaultIntentID:previous.intentID,vaultIntentDigest:fenceIntentDigest(previous),
+      }:fields);
       intents.push(intent);
       return structuredClone(intent);
     },
