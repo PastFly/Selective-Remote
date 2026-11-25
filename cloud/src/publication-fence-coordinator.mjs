@@ -3,8 +3,9 @@ import {canonicalMigrationJSON,migrationHash,verifyMigrationManifest} from './mi
 import {publicationHash,verifyReaderHeader} from '../public/vault-publication-v1.js';
 import {validateFenceEvent,fenceIntentDigest} from './migration-fence-journal.mjs';
 import {v1CiphertextHashSQL,v1EnvelopeHashSQL,v1EnvelopeSQL,readV1VaultState} from './v1-data-fence.mjs';
+import {requireIndependentV1Anchor} from './v1-commit-fence.mjs';
 import {
-  holdV1TeamAuthorizationFence,lockV1TeamAuthorizationWriter,
+  holdV1TeamAuthorizationFence,holdV1TeamAuthorizationReadback,lockV1TeamAuthorizationWriter,
   readCommittedV1TeamAuthorizationOutcome,readV1TeamAuthorizationDigest,
 } from './v1-team-authorization.mjs';
 
@@ -90,6 +91,48 @@ export class PublicationFenceCoordinator{
     this.#intents.set(intentID,structuredClone(intent));
     try{return await this.confirmCommit({intentID,readCommittedOutcome});}
     catch(error){if(error.message==='deployment_fence_pending')return {status:'pending',intentID};throw error;}
+  }
+}
+
+// For a protected maintenance caller with deployment-wide authority. A
+// recorded terminal result reports history; traffic still needs compatibility.
+export async function reconcileV1TeamAuthorization({pool,fence,intentID}) {
+  requireIndependentV1Anchor(fence);
+  const client = await pool.connect();
+  const query = (sql, values) => client.query(sql, values);
+  let unlock, beginDispatched = false, releaseError;
+  try {
+    unlock = await lockV1TeamAuthorizationWriter(client);
+    const state = await fence.snapshot();
+    const terminal = state.v1TeamAuthorizationOutcomes?.find(outcome => outcome.intentID === intentID);
+    if (terminal) {
+      return { status: confirmedTypes.includes(terminal.type) ? 'confirmed' : 'aborted', intentID };
+    }
+    const intent = state.v1TeamAuthorization?.pending;
+    if (!intent || intent.intentID !== intentID) fail('deployment_fence_intent_not_found');
+
+    beginDispatched = true;
+    await query('BEGIN');
+    await holdV1TeamAuthorizationReadback(query);
+    return await new PublicationFenceCoordinator({fence}).reconcile({
+      intentID,
+      readCommittedOutcome: pending => {
+        if (pending.type !== 'V1_TEAM_AUTHORIZATION_PENDING') fail('deployment_fence_intent_not_found');
+        return readCommittedV1TeamAuthorizationOutcome({query,intent:pending});
+      },
+    });
+  } catch (error) {
+    // A lost advisory-lock reply can leave the session owning that lock.
+    if (!unlock) releaseError = error;
+    throw error;
+  } finally {
+    try {
+      if (beginDispatched) await query('ROLLBACK');
+      await unlock?.();
+    } catch (error) {
+      releaseError = error;
+    }
+    client.release(releaseError);
   }
 }
 

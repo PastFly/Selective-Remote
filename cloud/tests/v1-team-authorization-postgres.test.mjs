@@ -8,12 +8,14 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { currentCapabilities, verifyDeploymentCompatibility } from "../src/deployment-compatibility.mjs";
 import { PostgresStore } from "../src/postgres-store.mjs";
-import { PublicationFenceCoordinator, readCommittedV1Outcome } from "../src/publication-fence-coordinator.mjs";
+import {
+    PublicationFenceCoordinator, readCommittedV1Outcome, reconcileV1TeamAuthorization,
+} from "../src/publication-fence-coordinator.mjs";
 import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 import { readV1VaultState } from "../src/v1-data-fence.mjs";
 import {
     holdV1TeamAuthorizationFence, installV1TeamAuthorizationFence,
-    readCommittedV1TeamAuthorizationOutcome, readV1TeamAuthorizationDigest,
+    readV1TeamAuthorizationDigest,
 } from "../src/v1-team-authorization.mjs";
 import { isolatedPublicationDatabase, publicationRuntimeFixture } from "./publication-runtime-fixture.mjs";
 import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-http-anchor-fixture.mjs";
@@ -123,11 +125,16 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
         assert.equal(await store.session(sessionHash), null);
         assert.ok((await fence.snapshot()).revokedDeviceIDs.includes(newDevice.id));
 
+        let loseCommitBeforeWrite = false;
         const lostReplyStore = new PostgresStore(db.databaseURL, {
             async connect() {
                 const client = await db.pool.connect();
                 return {
                     async query(sql, params) {
+                        if (sql === "COMMIT" && loseCommitBeforeWrite) {
+                            await client.query("ROLLBACK");
+                            throw new Error("synthetic_lost_commit_response");
+                        }
                         const result = await client.query(sql, params);
                         if (sql === "COMMIT") throw new Error("synthetic_lost_commit_response");
                         return result;
@@ -150,9 +157,21 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
             intentID: vaultIntent.intentID, readCommittedOutcome: intent => readCommittedV1Outcome({ query, intent }),
         }), { status: "confirmed", intentID: vaultIntent.intentID });
         await assert.rejects(verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate }), /deployment_fence_pending/u);
-        assert.deepEqual(await recovery.reconcile({
-            intentID: authorizationIntent.intentID, readCommittedOutcome: intent => readCommittedV1TeamAuthorizationOutcome({ query, intent }),
-        }), { status: "confirmed", intentID: authorizationIntent.intentID });
+        const recoveryInput = { pool: db.pool, fence, intentID: authorizationIntent.intentID };
+        const priorHistory = await fence.readRecords();
+        await assert.rejects(reconcileV1TeamAuthorization({
+            ...recoveryInput, fence: { snapshot: () => assert.fail("unanchored history read") },
+        }), /deployment_anchor_required/u);
+        await assert.rejects(reconcileV1TeamAuthorization({
+            ...recoveryInput, intentID: vaultIntent.intentID,
+        }), /deployment_fence_intent_not_found/u);
+        await assert.rejects(reconcileV1TeamAuthorization({
+            ...recoveryInput, pool: restored.pool,
+        }), /deployment_fence_mismatch/u);
+        assert.deepEqual(await fence.readRecords(), priorHistory);
+        const confirmed = { status: "confirmed", intentID: authorizationIntent.intentID };
+        assert.deepEqual(await reconcileV1TeamAuthorization(recoveryInput), confirmed);
+        assert.deepEqual(await reconcileV1TeamAuthorization(recoveryInput), confirmed);
         assert.equal((await store.createSharedVault(createVault)).vault.id, vaultIntent.vaultID);
         assert.equal((await fence.snapshot()).v1TeamAuthorization.pending, null);
         assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
@@ -179,6 +198,19 @@ test("the retained Team authorization state refuses a PostgreSQL restore from be
             try { await client.query("ROLLBACK"); } finally { client.release(); }
         }
         assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+
+        loseCommitBeforeWrite = true;
+        await assert.rejects(lostReplyStore.updateTeamMembershipRole({
+            ...change, idempotencyKey: randomUUID(),
+        }), /synthetic_lost_commit_response/u);
+        const uncommitted = (await fence.snapshot()).v1TeamAuthorization.pending;
+        const uncommittedHistory = await fence.readRecords();
+        assert.equal(await readV1TeamAuthorizationDigest(query), uncommitted.previousDigest);
+        assert.deepEqual(await reconcileV1TeamAuthorization({
+            ...recoveryInput, intentID: uncommitted.intentID,
+        }), { status: "pending", intentID: uncommitted.intentID });
+        assert.deepEqual(await fence.readRecords(), uncommittedHistory);
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate }), /deployment_fence_pending/u);
     } finally {
         await restored?.cleanup();
         await anchor?.cleanup();

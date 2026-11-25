@@ -119,6 +119,11 @@ export async function lockV1TeamAuthorizationWriter(client) {
     };
 }
 
+export async function holdV1TeamAuthorizationReadback(query) {
+    await query(`LOCK TABLE ${guardedTables} IN SHARE MODE`);
+    await assertV1TeamAuthorizationFence(query);
+}
+
 export async function holdV1TeamAuthorizationFence(client, fence) {
     requireIndependentV1Anchor(fence);
     await fence.assertWritable();
