@@ -1,3 +1,8 @@
+## 0.32.9
+
+- On macOS, Sync Center reports Personal Vault differences when the saved key is available and the import needs review.
+- After an app restart, the existing session automatically checks for differences. Cloud Settings shows the details, and both copies are preserved while the differences need review.
+
 ## 0.32.8
 
 - On macOS, Cloud Settings shows account sign-in and Personal Vault connection separately. Sync Center clears an outdated setup prompt after checking the Vault state.
