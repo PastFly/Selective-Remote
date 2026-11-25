@@ -68,7 +68,10 @@ test("unmodified legacy writers cannot overwrite Personal or Team Vault snapshot
     console.log(`legacy_status=${stale.status}; before_revision=${previous.rows[0].revision}; after_revision=${after.rows[0].revision}; before_ciphertext_sha256=${digest(previous.rows[0].ciphertext)}; after_ciphertext_sha256=${digest(after.rows[0].ciphertext)}`);
     assert.ok([403, 409, 426].includes(stale.status), "unmodified legacy writer must be rejected");
     assert.deepEqual(after.rows, previous.rows, "legacy request must not change the newer ciphertext, revision or Vault ID");
-    const markedHeaders = { ...headers, "X-Selective-V1-Write-Fence": "1" };
+    const markedHeaders = {
+      ...headers, "X-Selective-V1-Write-Fence": "1",
+      "X-Selective-Personal-Vault-Writer": "migration-checkpoint-v1",
+    };
     const unarmedMeta = await fetch(`${origin}/v1/meta`);
     assert.equal(unarmedMeta.headers.get('x-selective-v1-write-fence'), null, 'unsafe writes must not be advertised without a retained floor');
     const unarmed = await fetch(`${origin}/v1/vault`, { method: 'PUT', headers: markedHeaders,

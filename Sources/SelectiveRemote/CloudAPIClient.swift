@@ -341,7 +341,14 @@ enum SelectiveRemoteCloudEndpoint {
 }
 
 enum SelectiveRemoteCloudPortalURL {
-    static let login = URL(string: "https://cloud.pastfly.ru/?auth=login")!
+    static func login(endpoint: String) -> URL? {
+        guard let base = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
+              var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.path = "/"
+        components.queryItems = [URLQueryItem(name: "auth", value: "login")]
+        return components.url
+    }
 
     static func devices(endpoint: URL) -> URL? {
         guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
@@ -401,6 +408,7 @@ actor SelectiveRemoteCloudAPIClient {
     private let sessionLost: @Sendable (SelectiveRemoteCloudSessionLoss) async -> Void
     let tokenStore: any SelectiveRemoteCloudTokenStore
     let publicationStore: @Sendable () throws -> SelectiveRemoteVaultPublicationStore
+    let checkLocalPersonalVaultWrite: @Sendable () throws -> Void
     var publicationRetirementSessions: [String: SelectiveRemotePublicationSession] = [:]
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -416,13 +424,17 @@ actor SelectiveRemoteCloudAPIClient {
         sessionLost: @escaping @Sendable (SelectiveRemoteCloudSessionLoss) async -> Void = { loss in
             await MainActor.run { NotificationCenter.default.post(name: .selectiveRemoteCloudSessionLost, object: loss) }
         },
-        publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try SelectiveRemoteVaultPublicationStore() }
+        publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try SelectiveRemoteVaultPublicationStore() },
+        checkLocalPersonalVaultWrite: @escaping @Sendable () throws -> Void = {
+            try LegacyProfileChangeDetector.requireUnchangedPersonalVaultSources(UserDefaults.standard)
+        }
     ) {
         self.tokenStore = tokenStore
         self.boundPublicationSession = boundPublicationSession
         self.cleanupWarning = cleanupWarning
         self.sessionLost = sessionLost
         self.publicationStore = publicationStore
+        self.checkLocalPersonalVaultWrite = checkLocalPersonalVaultWrite
         self.dataLoader = dataLoader ?? { request in
             try await session.data(for: request)
         }
@@ -432,7 +444,8 @@ actor SelectiveRemoteCloudAPIClient {
         .init(tokenStore: tokenStore, dataLoader: dataLoader, boundPublicationSession: session,
               cleanupWarning: cleanupWarning,
               sessionLost: sessionLost,
-              publicationStore: publicationStore)
+              publicationStore: publicationStore,
+              checkLocalPersonalVaultWrite: checkLocalPersonalVaultWrite)
     }
 
     func metadata(endpoint: URL) async throws -> SelectiveRemoteCloudMetadata {
@@ -461,7 +474,7 @@ actor SelectiveRemoteCloudAPIClient {
         return metadata
     }
 
-    func requireV1WriteFence(endpoint: URL, session: SelectiveRemoteCloudSessionBinding) async throws {
+    func requireV1WriteFence(endpoint: URL, session: SelectiveRemoteCloudSessionBinding, personal: Bool = false) async throws {
         guard session.endpoint == endpoint else { throw CancellationError() }
         try checkSession(session)
         try boundPublicationSession?.check()
@@ -473,14 +486,25 @@ actor SelectiveRemoteCloudAPIClient {
         let (_, response) = try await dataLoader(request)
         try checkSession(session)
         try boundPublicationSession?.check()
-        if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required") }
+        let personalPilot = personal && http.value(forHTTPHeaderField: "X-Selective-Personal-Vault-Write-Status") == "pilot"
+        if !personalPilot,
            http.value(forHTTPHeaderField: "X-Selective-V1-Write-Status") == "vault_write_temporarily_unavailable" {
             throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
         }
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode),
-              http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"
+        guard http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"
         else { throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required") }
+        if personalPilot {
+            let (_, availability) = try await authorizedResponse(
+                endpoint: endpoint, path: "v1/vault/write-availability",
+                headers: ["Cache-Control": "no-store"], session: session
+            )
+            try boundPublicationSession?.check()
+            guard availability.statusCode == 204 else {
+                throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
+            }
+        }
     }
 
     func hasStoredSession(endpoint: URL) -> Bool {

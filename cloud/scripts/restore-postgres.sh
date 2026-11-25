@@ -7,10 +7,12 @@ cloud_dir="$(cd -- "${script_dir}/.." && pwd -P)"
 usage() {
     cat <<'USAGE'
 Usage: restore-postgres.sh --confirm-restore /absolute/path/backup.dump
+       restore-postgres.sh --confirm-finalize-recovery
 
 Restores a validated custom-format backup into the Compose PostgreSQL service.
 The Cloud service must already be stopped. This operation replaces database
-objects and is intentionally blocked without the exact confirmation flag.
+objects and expires restored sessions. It requires the exact confirmation flag.
+Finalize recovery expires restored sessions after an external database restore.
 USAGE
 }
 
@@ -30,9 +32,61 @@ if [[ $# -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
     exit 0
 fi
 
-if [[ $# -ne 2 || "$1" != "--confirm-restore" ]]; then
+finalize_recovery=false
+if [[ $# -eq 1 && "$1" == "--confirm-finalize-recovery" ]]; then
+    finalize_recovery=true
+elif [[ $# -ne 2 || "$1" != "--confirm-restore" ]]; then
     usage >&2
     exit 64
+fi
+
+verify_compose_state() {
+    local service_states service state postgres_running=false
+    if ! service_states="$(compose ps --all --format '{{.Service}} {{.State}}' 2>/dev/null)"; then
+        echo "Could not verify the state of the Cloud and PostgreSQL services." >&2
+        return 69
+    fi
+    while read -r service state; do
+        case "${service}:${state}" in
+            cloud:created|cloud:exited|cloud:dead) ;;
+            cloud:*)
+                echo "Stop the Cloud service before restoring the database." >&2
+                return 75
+                ;;
+            postgres:running) postgres_running=true ;;
+        esac
+    done <<< "${service_states}"
+    if [[ "${postgres_running}" != true ]]; then
+        echo "The PostgreSQL service must be running for restore." >&2
+        return 69
+    fi
+}
+
+compose() {
+    docker compose --project-directory "${cloud_dir}" -f "${cloud_dir}/compose.yaml" "$@"
+}
+
+apply_recovery_sql() {
+    compose exec -T postgres sh -ceu \
+        'exec psql --no-psqlrc --no-password --quiet --set=ON_ERROR_STOP=1 --file=- --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"'
+}
+
+commit_recovery_with_session_revocation() {
+    printf '\n'
+    cat -- "${script_dir}/revoke-restored-sessions.sql" || return "$?"
+    # Withhold COMMIT if Cloud came back while recovery was in progress.
+    verify_compose_state || return "$?"
+    printf '\nCOMMIT;\n'
+}
+
+if [[ "$finalize_recovery" == true ]]; then
+    verify_compose_state
+    {
+        printf 'BEGIN;\n'
+        commit_recovery_with_session_revocation
+    } | apply_recovery_sql
+    echo "Restored sessions revoked. Verify recovery before reopening Cloud traffic."
+    exit 0
 fi
 
 backup_path="$2"
@@ -73,36 +127,19 @@ if [[ "${actual_hash}" != "${recorded_hash}" ]]; then
     exit 65
 fi
 
-compose=(docker compose --project-directory "${cloud_dir}" -f "${cloud_dir}/compose.yaml")
-verify_compose_state() {
-    local service_states service state postgres_running=false
-    if ! service_states="$("${compose[@]}" ps --all --format '{{.Service}} {{.State}}' 2>/dev/null)"; then
-        echo "Could not verify the state of the Cloud and PostgreSQL services." >&2
-        return 69
-    fi
-    while read -r service state; do
-        case "${service}:${state}" in
-            cloud:created|cloud:exited|cloud:dead) ;;
-            cloud:*)
-                echo "Stop the Cloud service before restoring the database." >&2
-                return 75
-                ;;
-            postgres:running) postgres_running=true ;;
-        esac
-    done <<< "${service_states}"
-    if [[ "${postgres_running}" != true ]]; then
-        echo "The PostgreSQL service must be running for restore." >&2
-        return 69
-    fi
-}
-
 verify_compose_state
-"${compose[@]}" exec -T postgres pg_restore --list < "${backup_path}" >/dev/null
+compose exec -T postgres pg_restore --list < "${backup_path}" >/dev/null
 verify_compose_state
 
 echo "Checksum and archive format verified; restoring database objects."
-"${compose[@]}" exec -T postgres sh -ceu \
-    'exec pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error --single-transaction --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
-    < "${backup_path}"
+# Send COMMIT only after pg_restore has produced the complete SQL stream.
+# psql rolls back on disconnect if the archive reader fails partway through.
+{
+    printf 'BEGIN;\n'
+    compose exec -T postgres \
+        pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error --file=- \
+        < "${backup_path}" || exit "$?"
+    commit_recovery_with_session_revocation
+} | apply_recovery_sql
 
-echo "Restore completed. Start Cloud, verify migrations, health and application data."
+echo "Restore completed and restored sessions revoked. Verify recovery before reopening Cloud traffic."

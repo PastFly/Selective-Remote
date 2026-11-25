@@ -112,6 +112,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const afterWriterFloor = requireWriterFloor(after, candidate);
   if (afterWriterFloor) requireIndependentV1Anchor(fence);
   if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
+  let personalWritePilot;
   if (afterWriterFloor) {
     await assertV1CommitFence(query);
     await assertV1DataFloor(query,after);
@@ -120,6 +121,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
     if(requireWriterFloor(final,candidate)!==afterWriterFloor
       ||JSON.stringify([final.v1BaselineID,final.v1Committed,final.v1Outcomes])
         !==JSON.stringify([after.v1BaselineID,after.v1Committed,after.v1Outcomes]))throw Error('deployment_v1_history_changed');
+    personalWritePilot = final.personalWritePilot;
   }
   if (!Number.isSafeInteger(after.schemaFloor) || version < after.schemaFloor
       || after.committed.some(record => version < record.schemaFloor)) throw Error('deployment_schema_floor');
@@ -135,5 +137,6 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (publications.length !== after.committed.length
       || after.committed.some(record => !samePublication(record, byScope.get(`${record.teamID}\0${record.vaultID}`))))
     throw Error('deployment_fence_mismatch');
-  return { compatible: true, schemaVersion: version, ...(afterWriterFloor ? { writerFloor: afterWriterFloor } : {}) };
+  return { compatible: true, schemaVersion: version, ...(afterWriterFloor ? { writerFloor: afterWriterFloor } : {}),
+    ...(personalWritePilot ? { personalWritePilot } : {}) };
 }

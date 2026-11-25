@@ -60,7 +60,8 @@ struct PersonalVaultEnrollmentSafetyTests {
         let client = SelectiveRemoteCloudAPIClient(
             tokenStore: SelectiveRemoteCloudMemoryTokenStore(),
             dataLoader: { request in try await http.data(for: request) },
-            publicationStore: { throw PasswordResetReproError.forbiddenPersistentStore }
+            publicationStore: { throw PasswordResetReproError.forbiddenPersistentStore },
+            checkLocalPersonalVaultWrite: {}
         )
         // Model a successful authentication after a server password reset. The server auth
         // transaction itself is separately covered by cloud/tests/service.test.mjs:416.
@@ -83,7 +84,7 @@ struct PersonalVaultEnrollmentSafetyTests {
             var rejected = false
             do {
                 _ = try await f.enrollment.enrollOrCreate(
-                    endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.newPassword,
+                    endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.newPassword,
                     profiles: [], snippets: hasLocalData ? [f.local] : [], forwarding: []
                 )
             } catch {
@@ -103,12 +104,25 @@ struct PersonalVaultEnrollmentSafetyTests {
     func unchangedPasswordDoesNotReplace() async throws {
         let f = try await Self.fixture(password: Self.oldPassword)
         let revision = try await f.enrollment.enrollOrCreate(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
+            endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.oldPassword,
             profiles: [], snippets: [f.local], forwarding: []
         )
         let uploads = await f.http.uploadedEnvelopes()
         #expect(revision == 5)
         #expect(uploads.isEmpty)
+        #expect(f.keys.savedMaterial?.requiresInitialDownload == true)
+    }
+
+    @Test("An existing Personal Vault opens even when the local export contains duplicates")
+    func existingVaultDoesNotNeedLocalExport() async throws {
+        let f = try await Self.fixture(password: Self.oldPassword)
+        let revision = try await f.enrollment.enrollOrCreate(
+            endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.oldPassword,
+            profiles: [], snippets: [f.local, f.local], forwarding: [],
+            collectUploadSecrets: { throw PasswordResetReproError.unexpectedSecretCollection }
+        )
+        #expect(revision == 5)
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
         #expect(f.keys.savedMaterial?.requiresInitialDownload == true)
     }
 
@@ -119,7 +133,7 @@ struct PersonalVaultEnrollmentSafetyTests {
         )
         let previousMaterial = try #require(f.keys.savedMaterial)
         let revision = try await f.enrollment.enrollOrCreate(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
+            endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.oldPassword,
             profiles: [], snippets: [f.local], forwarding: []
         )
         #expect(revision == appliedRevision)
@@ -137,7 +151,7 @@ struct PersonalVaultEnrollmentSafetyTests {
         var rejected = false
         do {
             _ = try await f.enrollment.enrollOrCreate(
-                endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
+                endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.oldPassword,
                 profiles: [], snippets: [f.local], forwarding: []
             )
         } catch {
@@ -280,7 +294,7 @@ struct PersonalVaultEnrollmentSafetyTests {
     func emptyRemoteEnrollment() async throws {
         let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
         let revision = try await f.enrollment.enrollOrCreate(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.newPassword,
+            endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.newPassword,
             profiles: [], snippets: [f.local], forwarding: []
         )
         let uploads = await f.http.uploadedEnvelopes()
@@ -296,10 +310,73 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(document.records.contains { $0.id == Self.localSnippetID })
         #expect(f.keys.savedMaterial?.vaultKey == key)
     }
+
+    @Test("A signed-in Mac resumes first enrollment without another password", arguments: [false, true])
+    func enrollmentRetriesInTheSameSession(otherDeviceWon: Bool) async throws {
+        let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
+        await f.http.setPersonalPilotOpen(false)
+        let pending: SelectiveRemotePersonalVaultAccountEnrollment.DeferredEnrollment
+        do {
+            _ = try await f.enrollment.enrollOrCreate(
+                endpoint: Self.endpoint, deviceID: Self.deviceID, accountID: Self.accountID, session: f.session, password: Self.newPassword,
+                profiles: [], snippets: [f.local], forwarding: [],
+                collectUploadSecrets: { throw PasswordResetReproError.unexpectedSecretCollection },
+                deferIfUnavailable: true
+            )
+            Issue.record("The closed writer unexpectedly enrolled")
+            return
+        } catch let deferred as SelectiveRemotePersonalVaultAccountEnrollment.DeferredEnrollment {
+            pending = deferred
+        }
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
+        #expect(f.keys.saveCount == 0)
+
+        await f.http.setPersonalPilotOpen(true, allowsSession: false)
+        do {
+            _ = try await f.enrollment.resumeInitialEnrollment(
+                pending, profiles: [], snippets: [f.local], forwarding: [],
+                collectUploadSecrets: { throw PasswordResetReproError.unexpectedSecretCollection }
+            )
+            Issue.record("An account outside the pilot unexpectedly enrolled")
+        } catch SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable") {}
+        #expect(await f.http.uploadedEnvelopes().isEmpty)
+        #expect(f.keys.saveCount == 0)
+
+        if otherDeviceWon {
+            let first = try SelectiveRemotePersonalVaultCrypto.InitialWrappingKey(
+                accountID: Self.accountID, vaultID: Self.vaultID, passphrase: SelectiveRemotePersonalVaultCrypto.accountPassphrase(Self.newPassword)
+            ).createSetup(f.original)
+            await f.http.initializeVaultFromAnotherDevice(first.envelope)
+        }
+        await f.http.setPersonalPilotOpen(true)
+        let revision = try await f.enrollment.resumeInitialEnrollment(
+            pending, profiles: [], snippets: [f.local], forwarding: []
+        )
+        let uploads = await f.http.uploadedEnvelopes()
+        let paths = await f.http.requestPaths()
+        #expect(revision == 1)
+        #expect(uploads.count == (otherDeviceWon ? 0 : 1))
+        #expect(paths.filter { $0 == "POST /v1/auth/login" }.count == 1)
+        #expect(f.keys.savedMaterial?.revision == 1)
+        #expect(f.keys.savedMaterial?.requiresInitialDownload == otherDeviceWon)
+    }
+
+    @Test("The initial wrapping key opens the browser test vector and is scoped to one Vault")
+    func initialWrapperInteroperates() throws {
+        let wrapped = try SelectiveRemotePersonalVaultWrappedKey(
+            salt: try #require(Data(selectiveRemoteBase64URL: "z96KfucB07R7twc6692yRg", expectedLength: 16)),
+            value: try #require(Data(selectiveRemoteBase64URL: "19HcZr5m-zHtWYm9iqxulIHB65TDQyPX_v0V2I6Vn9KpznhH3ptKtA", expectedLength: 40))
+        )
+        let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase("synthetic test fixture password")
+        let initial = try SelectiveRemotePersonalVaultCrypto.InitialWrappingKey(accountID: Self.accountID, vaultID: Self.vaultID, passphrase: passphrase)
+        #expect(try initial.unwrap(wrapped) == Data(repeating: 42, count: 32))
+        let other = try SelectiveRemotePersonalVaultCrypto.InitialWrappingKey(accountID: Self.accountID, vaultID: UUID(), passphrase: passphrase)
+        #expect(throws: SelectiveRemotePersonalVaultError.invalidRecoveryPhrase) { try other.unwrap(wrapped) }
+    }
 }
 
 private enum PasswordResetReproError: Error {
-    case forbiddenPersistentStore, unexpectedRequest, invalidSyntheticLogin
+    case forbiddenPersistentStore, unexpectedRequest, invalidSyntheticLogin, unexpectedSecretCollection
 }
 
 private final class PasswordResetMemoryKeys: SelectiveRemotePersonalVaultKeyStore, @unchecked Sendable {
@@ -321,14 +398,16 @@ private final class PasswordResetMemoryKeys: SelectiveRemotePersonalVaultKeyStor
 }
 
 private actor PasswordResetMemoryHTTP {
-    private let envelope: SelectiveRemotePersonalVaultEnvelope
+    private var envelope: SelectiveRemotePersonalVaultEnvelope
     private let vaultID: UUID
     private let accountID: UUID
     private let deviceID: UUID
     private let acceptedPassword: String
-    private let revision: Int
+    private var revision: Int
     private var uploads: [SelectiveRemotePersonalVaultEnvelope] = []
     private var paths: [String] = []
+    private var personalPilotOpen: Bool?
+    private var personalPilotAllowsSession = true
     static let secondDeviceID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
     private var token = String(repeating: "s", count: 43)
 
@@ -342,6 +421,14 @@ private actor PasswordResetMemoryHTTP {
     }
     func uploadedEnvelopes() -> [SelectiveRemotePersonalVaultEnvelope] { uploads }
     func requestPaths() -> [String] { paths }
+    func setPersonalPilotOpen(_ open: Bool, allowsSession: Bool = true) {
+        personalPilotOpen = open
+        personalPilotAllowsSession = allowsSession
+    }
+    func initializeVaultFromAnotherDevice(_ envelope: SelectiveRemotePersonalVaultEnvelope) {
+        self.envelope = envelope
+        revision = 1
+    }
     func data(for request: URLRequest) throws -> (Data, URLResponse) {
         guard request.url?.host == "password-reset-repro.example.invalid" else {
             throw PasswordResetReproError.unexpectedRequest
@@ -349,7 +436,22 @@ private actor PasswordResetMemoryHTTP {
         paths.append("\(request.httpMethod ?? "") \(request.url?.path ?? "")")
         switch (request.httpMethod, request.url?.path) {
         case ("GET", "/v1/meta"):
-            return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+            var headers = ["X-Selective-V1-Write-Fence": "1"]
+            if let personalPilotOpen {
+                headers["X-Selective-V1-Write-Status"] = "vault_write_temporarily_unavailable"
+                if personalPilotOpen { headers["X-Selective-Personal-Vault-Write-Status"] = "pilot" }
+            }
+            let url = try #require(request.url)
+            let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers))
+            return (Data("{}".utf8), response)
+        case ("GET", "/v1/vault/write-availability"):
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+            let url = try #require(request.url)
+            let response = try #require(HTTPURLResponse(
+                url: url, statusCode: personalPilotAllowsSession ? 204 : 503,
+                httpVersion: nil, headerFields: nil
+            ))
+            return (Data(), response)
         case ("POST", "/v1/auth/login"):
             let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
             guard body?["password"] as? String == acceptedPassword else {

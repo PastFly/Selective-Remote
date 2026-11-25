@@ -294,6 +294,16 @@ final class AppModel: NSObject, ObservableObject {
     let sftpWorkspace = SFTPWorkspaceModel()
     let connectionActivity = ConnectionActivityStore()
     let terminalSessionLogs = TerminalSessionLogStore()
+    @Published var pendingPersonalVaultEnrollmentEpoch: UUID?
+    var personalVaultEnrollmentTask: Task<Void, Never>?
+    var personalVaultEnrollmentAllowed = true
+
+    func cancelPersonalVaultEnrollment() {
+        personalVaultEnrollmentTask?.cancel()
+        personalVaultEnrollmentTask = nil
+        pendingPersonalVaultEnrollmentEpoch = nil
+    }
+
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -544,6 +554,8 @@ final class AppModel: NSObject, ObservableObject {
     private var sshTunnelReconnectAttempts: [UUID: Int] = [:]
     private var sessionTimer: Timer?
     private var sshTunnelTimer: Timer?
+    // A stable value for non-optional editor bindings during teardown after sync.
+    private lazy var emptyProfileEditorValue = ConnectionProfile()
     private var profileSaveTask: Task<Void, Never>?
     private var displayRefreshTask: Task<Void, Never>?
     private var updateCheckTask: Task<Void, Never>?
@@ -555,7 +567,7 @@ final class AppModel: NSObject, ObservableObject {
         let savedProfiles: [ConnectionProfile]
         if let data = UserDefaults.standard.data(forKey: profilesKey),
            let decoded = try? JSONDecoder().decode([ConnectionProfile].self, from: data) {
-            savedProfiles = decoded.isEmpty ? [ConnectionProfile()] : decoded
+            savedProfiles = decoded
         } else {
             savedProfiles = [ConnectionProfile()]
         }
@@ -646,8 +658,18 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    var selectedProfileOrNil: ConnectionProfile? {
+        profiles.first(where: { $0.id == selectedProfileID }) ?? profiles.first
+    }
+
     var selectedProfile: ConnectionProfile {
-        profiles.first(where: { $0.id == selectedProfileID }) ?? profiles[0]
+        selectedProfileOrNil ?? emptyProfileEditorValue
+    }
+
+    func replaceSyncedProfiles(_ updated: [ConnectionProfile]) {
+        if profiles != updated { profiles = updated }
+        let selection = selectedProfileOrNil?.id
+        if selectedProfileID != selection { selectedProfileID = selection }
     }
 
     var placements: [DisplayPlacement] {
@@ -2226,7 +2248,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func duplicateSelectedProfile() {
-        var copy = selectedProfile
+        guard var copy = selectedProfileOrNil else { return }
         copy.id = UUID()
         copy.friendlyName += " — копия"
         copy.isFavorite = false
@@ -2446,8 +2468,9 @@ final class AppModel: NSObject, ObservableObject {
 
     @MainActor
     func revealSelectedCredential(kind: KeychainCredentialKind) async -> String? {
-        let profileID = selectedProfile.id
-        let profileName = selectedProfile.friendlyName
+        guard let profile = selectedProfileOrNil else { return nil }
+        let profileID = profile.id
+        let profileName = profile.friendlyName
         do {
             let value = try await KeychainService.revealPassword(
                 profileID: profileID,
@@ -2457,7 +2480,7 @@ final class AppModel: NSObject, ObservableObject {
                     en: "Reveal the saved password for “\(profileName)”"
                 )
             )
-            guard selectedProfile.id == profileID else { return nil }
+            guard selectedProfileOrNil?.id == profileID else { return nil }
             guard let value, !value.isEmpty else {
                 errorMessage = UpdateLocalization.text(
                     ru: "Сохранённый пароль не найден в Keychain.",
@@ -2472,7 +2495,7 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = nil
             return value
         } catch {
-            guard selectedProfile.id == profileID else { return nil }
+            guard selectedProfileOrNil?.id == profileID else { return nil }
             errorMessage = error.localizedDescription
             return nil
         }
@@ -2487,7 +2510,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func saveProxyPassword() {
-        guard !proxyPassword.isEmpty else { return }
+        guard let selectedProfile = selectedProfileOrNil, !proxyPassword.isEmpty else { return }
         do {
             try KeychainService.savePassword(proxyPassword, profileID: selectedProfile.id, kind: .proxy)
             proxyPassword = ""
@@ -2498,6 +2521,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func deleteSavedProxyPassword() {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         do {
             try KeychainService.deletePassword(profileID: selectedProfile.id, kind: .proxy)
             proxyPassword = ""
@@ -2508,10 +2532,12 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func setSelectedSSHPasswordUserPresence(_ enabled: Bool) {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         setSSHPasswordUserPresence(enabled, profileID: selectedProfile.id)
     }
 
     func setSelectedSSHKeyUserPresence(_ enabled: Bool) {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         setSSHKeyUserPresenceForProfile(enabled, profileID: selectedProfile.id)
     }
 
@@ -2573,6 +2599,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func repairSelectedSSHCredentialAccess() {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         repairSSHCredentialAccess(profileID: selectedProfile.id)
     }
 
@@ -3585,6 +3612,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func exportSelectedRDP() {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         guard selectedProfile.connectionType == .rdp else {
             errorMessage = UpdateLocalization.text(ru: "Формат .rdp доступен только для RDP-профилей", en: "The .rdp format is available for RDP profiles only")
             return
@@ -3603,6 +3631,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func connect() {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         switch selectedProfile.connectionType {
         case .rdp:
             connectProfile(
@@ -6339,6 +6368,7 @@ final class AppModel: NSObject, ObservableObject {
         kind: KeychainCredentialKind,
         requiresUserPresence: Bool = false
     ) {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         guard !value.isEmpty else {
             switch kind {
             case .rdp: statusMessage = UpdateLocalization.text(ru: "Введите новый RDP-пароль перед сохранением", en: "Enter a new RDP password before saving")
@@ -6376,6 +6406,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func deleteCredential(kind: KeychainCredentialKind) {
+        guard let selectedProfile = selectedProfileOrNil else { return }
         do {
             try KeychainService.deletePassword(profileID: selectedProfile.id, kind: kind)
             setPasswordStored(false, profileID: selectedProfile.id, kind: kind)

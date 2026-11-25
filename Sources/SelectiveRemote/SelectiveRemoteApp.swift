@@ -136,8 +136,11 @@ private struct SFTPMenuBarTransferControls: View {
 private struct SelectiveRemoteCloudCommands: Commands {
     @ObservedObject var appLock: AppLockStore
     @Environment(\.openSettings) private var openSettings
+    @AppStorage("SelectiveRemote.cloud.endpoint.v1")
+    private var endpoint = SelectiveRemoteCloudEndpoint.production
 
     var body: some Commands {
+        let loginURL = SelectiveRemoteCloudPortalURL.login(endpoint: endpoint)
         CommandMenu("Cloud") {
             Button(
                 UpdateLocalization.key("menu.cloud.settings"),
@@ -152,8 +155,11 @@ private struct SelectiveRemoteCloudCommands: Commands {
                 UpdateLocalization.key("menu.cloud.browser"),
                 systemImage: "safari"
             ) {
-                NSWorkspace.shared.open(SelectiveRemoteCloudPortalURL.login)
+                if let loginURL {
+                    NSWorkspace.shared.open(loginURL)
+                }
             }
+            .disabled(loginURL == nil)
         }
     }
 }
@@ -277,8 +283,10 @@ struct SelectiveRemoteApp: App {
                         }
                     }
             }
-            .onChange(of: appLock.isLocked) { _, _ in
-                updateTeamVaultAutoSync()
+            .onChange(of: appLock.isLocked, initial: true) { previous, locked in
+                model.personalVaultEnrollmentAllowed = !locked
+                if locked { model.cancelPersonalVaultEnrollment() }
+                if previous != locked { updateTeamVaultAutoSync() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 syncPresentation.setAccount(
@@ -748,7 +756,7 @@ struct SelectiveRemoteApp: App {
                     try KeychainService.applySyncedPasswords(
                         snapshot.credentials, tombstones: snapshot.tombstoneIDs, sourceIDs: sources
                     )
-                    if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
+                    model.replaceSyncedProfiles(snapshot.profiles)
                     if model.independentPortForwards != snapshot.forwarding {
                         model.independentPortForwards = snapshot.forwarding
                     }

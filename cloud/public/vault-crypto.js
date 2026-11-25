@@ -135,6 +135,10 @@ export async function wrapVaultKey(vaultKey, passphrase, cryptoValue = globalThi
   const crypto = webCrypto(cryptoValue);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const recoveryKey = await deriveRecoveryKey(passphrase, salt, crypto);
+  return wrapWithRecoveryKey(vaultKey, salt, recoveryKey, crypto);
+}
+
+async function wrapWithRecoveryKey(vaultKey, salt, recoveryKey, crypto) {
   let wrapped;
   try {
     wrapped = await crypto.subtle.wrapKey("raw", vaultKey, recoveryKey, "AES-KW");
@@ -153,6 +157,10 @@ export async function unwrapVaultKey(wrappedKey, passphrase, cryptoValue = globa
   const crypto = webCrypto(cryptoValue);
   const { salt, wrapped } = validatedWrappedKey(wrappedKey);
   const recoveryKey = await deriveRecoveryKey(passphrase, salt, crypto);
+  return unwrapWithRecoveryKey(wrapped, recoveryKey, crypto);
+}
+
+async function unwrapWithRecoveryKey(wrapped, recoveryKey, crypto) {
   try {
     return await crypto.subtle.unwrapKey(
       "raw",
@@ -166,6 +174,34 @@ export async function unwrapVaultKey(wrappedKey, passphrase, cryptoValue = globa
   } catch {
     throw new Error("invalid_recovery_passphrase");
   }
+}
+
+function initialVaultWrappingKey(salt, recoveryKey, crypto) {
+  const encodedSalt = bytesToBase64URL(salt);
+  return {
+    wrap: (vaultKey) => wrapWithRecoveryKey(vaultKey, salt, recoveryKey, crypto),
+    unwrap(value) {
+      const { wrapped, normalized } = validatedWrappedKey(value);
+      if (normalized.salt !== encodedSalt) throw new Error("initial_vault_reauthentication_required");
+      return unwrapWithRecoveryKey(wrapped, recoveryKey, crypto);
+    },
+  };
+}
+
+export async function deriveInitialVaultWrappingKey({ accountID, vaultID, passphrase }, cryptoValue = globalThis.crypto) {
+  const uuid = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
+  const owner = String(accountID).toLowerCase();
+  const id = String(vaultID).toLowerCase();
+  if (!uuid.test(owner) || !uuid.test(id)) {
+    throw new Error("invalid_remote_vault");
+  }
+  const crypto = webCrypto(cryptoValue);
+  // The independently random account and Vault UUIDs give first clients the
+  // same public salt without any client storing the password.
+  const label = new TextEncoder().encode(`selective-remote:personal-vault:initial-wrap:v1:${owner}:${id}`);
+  const salt = new Uint8Array(await crypto.subtle.digest("SHA-256", label)).slice(0, 16);
+  const recoveryKey = await deriveRecoveryKey(passphrase, salt, crypto);
+  return initialVaultWrappingKey(salt, recoveryKey, crypto);
 }
 
 export async function encryptVaultPayload({

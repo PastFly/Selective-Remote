@@ -39,10 +39,14 @@ test("mobile workspace keeps the sync status readable and its panel usable", {
         document.body.dataset.portalView = "workspace";
         document.querySelector("#cloud-workspace").hidden = false;
       });
-      for (const width of [320, 390, 560]) for (const theme of ["graphite", "light"]) {
+      for (const width of [320, 390, 560, 650, 880]) for (const theme of ["graphite", "light"]) {
         await page.setViewportSize({ width, height: 844 });
         await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-        for (const text of ["Статус неизвестен", "Status unknown", "Наблюдаемые Vaults подтверждены", "Observed Vaults confirmed"]) {
+        for (const text of [
+          "Статус неизвестен", "Status unknown",
+          "Личный Vault синхронизирован", "Personal Vault synced",
+          "Наблюдаемые Vaults подтверждены", "Observed Vaults confirmed",
+        ]) {
           await page.locator("#workspace-sync-state span").evaluate((element, value) => { element.textContent = value; }, text);
           const label = page.locator("#workspace-sync-state span");
           assert.equal(await label.isVisible(), true);

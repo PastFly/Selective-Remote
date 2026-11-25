@@ -63,7 +63,7 @@ enum SyncIssue: Equatable, Sendable {
         if case .conflicts = error as? SelectiveRemotePersonalVaultImportError { return .conflict }
         if let error = error as? SelectiveRemotePersonalVaultError {
             switch error {
-            case .uploadConflict, .remoteVaultNotEmpty: return .conflict
+            case .uploadConflict, .remoteVaultNotEmpty, .legacyStorageNeedsReview: return .conflict
             case .invalidEnvelope, .cryptoFailure, .invalidRecoveryPhrase, .emptyLocalVault,
                  .legacyMigrationRequiresLocalData: return .unknownFailure
             }

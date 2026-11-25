@@ -1,5 +1,7 @@
 import { createAccessClient } from "./access-client.js";
 import { createWholePublicationTransport } from "./whole-publication-api.js";
+import { deriveInitialVaultWrappingKey, encryptVaultPayload, generateVaultKey, unwrapVaultKey } from "./vault-crypto.js";
+import { createEmptyVaultDocument } from "./vault-model.js";
 import {
   normalizeTeamDevicePublicKey,
   normalizeTeamVaultScope,
@@ -556,7 +558,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
   const identityListeners = new Set();
   function invalidateIdentity(cause = undefined) { sessionEpoch++; for (const listener of identityListeners) listener(cause); }
 
-  async function requireV1WriteFence() {
+  async function requireV1WriteFence({ personal = false } = {}) {
     const epoch = sessionEpoch, account = user?.id, device = currentDeviceID;
     if (!account) throw new Error("authentication_required");
     const requireCurrent = () => {
@@ -565,11 +567,17 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
     const response = await fetchValue("/v1/meta", { headers: { Accept: "application/json" },
       cache: "no-store", credentials: "same-origin", referrerPolicy: "no-referrer" });
     requireCurrent();
-    if (response.ok && response.headers?.get("x-selective-v1-write-status") === "vault_write_temporarily_unavailable") {
+    const personalPilot = personal && response.headers?.get("x-selective-personal-vault-write-status") === "pilot";
+    if (response.ok && !personalPilot && response.headers?.get("x-selective-v1-write-status") === "vault_write_temporarily_unavailable") {
       throw new Error("vault_write_temporarily_unavailable");
     }
     if (!response.ok || response.headers?.get("x-selective-v1-write-fence") !== "1") {
       throw new Error("vault_client_upgrade_required");
+    }
+    if (personalPilot) {
+      const availability = await authorizedRequest("/v1/vault/write-availability");
+      requireCurrent();
+      if (availability.status !== 204) throw new Error("vault_write_temporarily_unavailable");
     }
     return requireCurrent;
   }
@@ -1408,14 +1416,22 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch, 
       return normalizedRemoteVault(await responseJSON(response, "vault_download_failed"));
     },
 
+    async preflightPersonalVaultWrite() {
+      const requireCurrent = await requireV1WriteFence({ personal: true });
+      requireCurrent();
+    },
+
     async putVault(scope = personalVaultScope, envelope) {
       normalizedScope(scope);
       const normalized = normalizedEnvelope(envelope);
-      const requireCurrent = await requireV1WriteFence();
+      const requireCurrent = await requireV1WriteFence({ personal: true });
       requireCurrent();
       const response = await authorizedRequest("/v1/vault", {
         method: "PUT",
-        headers: { "X-Selective-V1-Write-Fence": "1" },
+        headers: {
+          "X-Selective-V1-Write-Fence": "1",
+          "X-Selective-Personal-Vault-Writer": "migration-checkpoint-v1",
+        },
         body: JSON.stringify({ protocol: "framed-v1", envelope: normalized }),
       });
       const result = await responseJSON(response, "vault_upload_failed");
@@ -1579,6 +1595,77 @@ export function capturePersonalVaultSession(client) {
   };
 }
 
+export async function prepareInitialPersonalVaultEnrollment({ client, vault, vaultID, passphrase }) {
+  const session = capturePersonalVaultSession(client);
+  const wrappingKey = await deriveInitialVaultWrappingKey({ accountID: session.accountID, vaultID, passphrase });
+  session.requireCurrent();
+  return initialPersonalVaultEnrollment({ client, vault, vaultID, session, wrappingKey });
+}
+
+function initialPersonalVaultEnrollment({ client, vault, vaultID, session, wrappingKey }) {
+  let running = false;
+  let cancelled = false;
+  const requireCurrent = () => {
+    if (cancelled) throw new Error("authentication_required");
+    session.requireCurrent();
+  };
+  return {
+    cancel() { cancelled = true; },
+    async resume(interactivePassphrase = null) {
+      requireCurrent();
+      if (running) return { status: "enrollment_pending" };
+      running = true;
+      try {
+        let remote = await client.getVault(personalVaultScope);
+        requireCurrent();
+        if (remote.id !== vaultID) throw new Error("initial_vault_reauthentication_required");
+        let status = "downloaded";
+        if (remote.revision === 0) {
+          await client.preflightPersonalVaultWrite();
+          requireCurrent();
+          const key = await generateVaultKey();
+          const envelope = await encryptVaultPayload({
+            vaultKey: key,
+            payload: createEmptyVaultDocument(),
+            baseRevision: 0,
+            wrappedKey: await wrappingKey.wrap(key),
+          });
+          requireCurrent();
+          const result = await client.putVault(personalVaultScope, envelope);
+          requireCurrent();
+          if (!result.conflict && result.revision === 1) {
+            remote = { id: vaultID, revision: 1, envelope };
+            status = "uploaded";
+          } else {
+            remote = await client.getVault(personalVaultScope);
+            requireCurrent();
+            if (remote.id !== vaultID) throw new Error("initial_vault_reauthentication_required");
+            if (remote.revision < 1) return { status: "enrollment_pending" };
+          }
+        }
+        // Persist only the committed envelope, including when another client won r1.
+        await vault.importRemote(remote, null, {
+          async unwrapKey(value) {
+            try { return await wrappingKey.unwrap(value); } catch (error) {
+              if (!interactivePassphrase || error?.message !== "initial_vault_reauthentication_required") throw error;
+              return unwrapVaultKey(value, interactivePassphrase);
+            }
+          },
+          requireCurrent,
+        });
+        requireCurrent();
+        return { status, revision: remote.revision };
+      } catch (error) {
+        if (error?.message !== "vault_write_temporarily_unavailable") throw error;
+        requireCurrent();
+        return { status: "enrollment_pending" };
+      } finally {
+        running = false;
+      }
+    },
+  };
+}
+
 async function uploadCurrent(client, vault, scope, baseRevision, requireCurrentSession) {
   const prepared = await vault.prepareUpload(baseRevision);
   requireCurrentSession();
@@ -1616,7 +1703,7 @@ export async function synchronizeVault({
   const localStatus = await vault.status();
   requireCurrentSession();
   if (localStatus === "empty") {
-    if (remote.revision === 0) return { status: "empty" };
+    if (remote.revision === 0) return { status: "empty", vaultID: remote.id };
     if (!recoveryPassphrase) throw new Error("recovery_passphrase_required");
     await vault.importRemote(remote, recoveryPassphrase);
     requireCurrentSession();

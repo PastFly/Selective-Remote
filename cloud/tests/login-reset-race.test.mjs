@@ -21,12 +21,14 @@ const newPassword = 'new synthetic password';
 const resetToken = 'z'.repeat(43);
 const config = { sessionPepper: 's'.repeat(32), passwordResetTokenPepper: 'p'.repeat(32), sessionTTLDays: 30 };
 
-async function seed(pool) {
+async function seed(pool, { seedResetToken = true } = {}) {
   const userID = randomUUID(), deviceID = randomUUID(), email = 'race@example.test';
   const passwordHash = await hashPassword(oldPassword);
   await pool.query("INSERT INTO users(id,email,username,email_verified_at) VALUES($1,$2,'race_user',now())", [userID, email]);
   await pool.query("INSERT INTO account_identities(user_id,provider,subject,password_hash) VALUES($1,'password',$2,$3)", [userID, email, passwordHash]);
-  await pool.query("INSERT INTO password_reset_tokens(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '1 hour')", [userID, hashPasswordResetToken(resetToken, config.passwordResetTokenPepper)]);
+  if (seedResetToken) {
+    await pool.query("INSERT INTO password_reset_tokens(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '1 hour')", [userID, hashPasswordResetToken(resetToken, config.passwordResetTokenPepper)]);
+  }
   return { userID, passwordHash, login: { email, password: oldPassword, device: { id: deviceID, name: 'Synthetic', platform: 'test' } } };
 }
 
@@ -203,12 +205,17 @@ test('HTTP rejects a reset-raced login without logging password hashes', { skip:
   const directory = await mkdtemp(join(tmpdir(), 'sr-login-reset-http-'));
   let fixture, anchor, runtime, output = '';
   try {
-    const { userID, passwordHash, login } = await seed(db.pool);
+    const { userID, passwordHash, login } = await seed(db.pool, { seedResetToken: false });
     fixture = await publicationRuntimeFixture(db.databaseURL);
     anchor = await syntheticHttpAnchor(fixture.path);
     await installV1CommitFence(db.pool);
     await anchor.fence.append({ version: 2, type: 'V1_BASELINE', baselineID: randomUUID(), vaults: await readV1VaultState((sql, values) => db.pool.query(sql, values)) });
     await anchor.fence.append({ version: 2, type: 'V1_WRITER_FLOOR', writerProtocol: 1 });
+    const anchoredStore = new PostgresStore(null, db.pool, { v1Fence: anchor.fence });
+    assert.equal(await anchoredStore.replacePasswordResetToken({
+      userID, tokenHash: hashPasswordResetToken(resetToken, config.passwordResetTokenPepper),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    }), true);
     // Test-only barrier immediately before the real createSession call: the
     // server, password verifier, reset endpoint, PostgreSQL and anchor are real.
     const hook = join(directory, 'hook.mjs');

@@ -15,11 +15,30 @@ test("sync presentation starts unknown and never infers success from silence", (
   assert.equal(state.team.status, "unknown");
 });
 
+test("a confirmed Personal Vault gets a scoped summary when Team status is unknown", () => {
+  const state = reduceSyncPresentationState(createSyncPresentationState(), {
+    scope: "personal", type: "result", result: { status: "up_to_date", revision: 4 },
+  });
+  const summary = summarizeSyncPresentationState(state);
+  assert.equal(summary.status, "current");
+  assert.equal(summary.team.status, "unknown");
+  for (const [locale, title, team, note] of [
+    ["en", "Personal Vault synced", "Status unknown", "Team Vault status is unconfirmed in this tab."],
+    ["ru", "Личный Vault синхронизирован", "Статус неизвестен", "Статус Team Vault в этой вкладке не подтверждён."],
+  ]) {
+    const labels = syncPresentationLabels(summary, locale);
+    assert.equal(labels.summary, title);
+    assert.match(labels.personal, /· r4/u);
+    assert.equal(labels.team, team);
+    assert.equal(labels.note, note);
+  }
+  assert.equal(summarizeSyncPresentationState(state, { online: false }).status, "offline");
+});
+
 test("typed Personal and Team outcomes preserve conflict, attention and confirmed revision", () => {
   let state = createSyncPresentationState();
   state = reduceSyncPresentationState(state, { scope: "personal", type: "result", result: { status: "uploaded", revision: 4 } });
   assert.deepEqual({ status: state.personal.status, revision: state.personal.revision }, { status: "current", revision: 4 });
-  assert.equal(summarizeSyncPresentationState(state).status, "unknown");
 
   state = reduceSyncPresentationState(state, { scope: "team", type: "result", result: { status: "conflict", revision: 7, conflicts: [{}] } });
   assert.equal(summarizeSyncPresentationState(state).status, "conflict");

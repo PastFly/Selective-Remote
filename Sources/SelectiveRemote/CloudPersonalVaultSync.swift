@@ -10,6 +10,7 @@ enum SelectiveRemotePersonalVaultError: LocalizedError, Equatable {
     case emptyLocalVault
     case remoteVaultNotEmpty(Int)
     case legacyMigrationRequiresLocalData
+    case legacyStorageNeedsReview
     case uploadConflict(Int)
 
     var errorDescription: String? {
@@ -38,6 +39,11 @@ enum SelectiveRemotePersonalVaultError: LocalizedError, Equatable {
             UpdateLocalization.text(
                 ru: "Legacy Personal Vault ожидает автоматической миграции с Mac, на котором сохранены локальные данные.",
                 en: "The legacy Personal Vault is waiting for automatic migration from a Mac that has local data."
+            )
+        case .legacyStorageNeedsReview:
+            UpdateLocalization.text(
+                ru: "Запись в Personal Vault приостановлена: нужно проверить данные предыдущей версии на этом Mac. Локальные копии сохранены.",
+                en: "Personal Vault upload is paused while this Mac’s previous-version data needs review. Local copies are preserved."
             )
         case let .uploadConflict(revision):
             UpdateLocalization.text(
@@ -297,6 +303,43 @@ enum SelectiveRemotePersonalVaultCrypto {
     static let recoveryIterations: UInt32 = 600_000
     private static let additionalData = Data("selective-remote:vault-envelope:v1".utf8)
 
+    struct InitialWrappingKey: Sendable {
+        let vaultID: UUID
+        private let salt: Data
+        private let key: Data
+
+        var encodedSalt: String { salt.selectiveRemoteBase64URL }
+
+        init(accountID: UUID, vaultID: UUID, passphrase: String) throws {
+            self.vaultID = vaultID
+            // Matches the browser's domain-separated salt for the two random UUIDs.
+            let label = "selective-remote:personal-vault:initial-wrap:v1:\(accountID.canonicalCloudString):\(vaultID.canonicalCloudString)"
+            salt = Data(SHA256.hash(data: Data(label.utf8)).prefix(16))
+            key = try deriveKey(password: Data(passphrase.precomposedStringWithCanonicalMapping.utf8), salt: salt)
+        }
+
+        func createSetup(_ document: SelectiveRemoteVaultDocument) throws -> SelectiveRemotePersonalVaultSetup {
+            let vaultKey = try randomData(count: 32)
+            let wrapped = try SelectiveRemotePersonalVaultWrappedKey(
+                salt: salt, value: wrapRFC3394(vaultKey, keyEncryptionKey: key)
+            )
+            let envelope = try seal(
+                document, vaultKey: vaultKey, wrappedKey: wrapped, baseRevision: 0,
+                nonce: randomData(count: 12)
+            )
+            return .init(envelope: envelope, vaultKey: vaultKey)
+        }
+
+        func unwrap(_ wrapped: SelectiveRemotePersonalVaultWrappedKey) throws -> Data {
+            guard wrapped.algorithm == "PBKDF2-SHA256+A256KW",
+                  wrapped.iterations == Int(recoveryIterations),
+                  wrapped.salt == encodedSalt,
+                  let value = Data(selectiveRemoteBase64URL: wrapped.value, expectedLength: 40)
+            else { throw SelectiveRemotePersonalVaultError.invalidRecoveryPhrase }
+            return try unwrapRFC3394(value, keyEncryptionKey: key)
+        }
+    }
+
     static func accountPassphrase(_ password: String) throws -> String {
         let normalized = password.precomposedStringWithCanonicalMapping
         guard (12...1_024).contains(normalized.utf8.count) else {
@@ -340,25 +383,10 @@ enum SelectiveRemotePersonalVaultCrypto {
         }
         let recoveryKey = try deriveKey(password: phrase, salt: rawSalt)
         let wrapped = try wrapRFC3394(rawVaultKey, keyEncryptionKey: recoveryKey)
-        do {
-            let sealed = try AES.GCM.seal(
-                document.encoded(),
-                using: SymmetricKey(data: rawVaultKey),
-                nonce: AES.GCM.Nonce(data: rawNonce),
-                authenticating: additionalData
-            )
-            return try .init(
-                baseRevision: baseRevision,
-                wrappedKey: .init(salt: rawSalt, value: wrapped),
-                ciphertext: sealed.ciphertext,
-                nonce: rawNonce,
-                authTag: sealed.tag
-            )
-        } catch let error as SelectiveRemotePersonalVaultError {
-            throw error
-        } catch {
-            throw SelectiveRemotePersonalVaultError.cryptoFailure
-        }
+        return try seal(
+            document, vaultKey: rawVaultKey, wrappedKey: .init(salt: rawSalt, value: wrapped),
+            baseRevision: baseRevision, nonce: rawNonce
+        )
     }
 
     static func createSetup(
@@ -389,18 +417,28 @@ enum SelectiveRemotePersonalVaultCrypto {
         guard vaultKey.count == 32, rawNonce.count == 12, baseRevision > 0 else {
             throw SelectiveRemotePersonalVaultError.invalidEnvelope
         }
+        return try seal(document, vaultKey: vaultKey, wrappedKey: wrappedKey, baseRevision: baseRevision, nonce: rawNonce)
+    }
+
+    private static func seal(
+        _ document: SelectiveRemoteVaultDocument,
+        vaultKey: Data,
+        wrappedKey: SelectiveRemotePersonalVaultWrappedKey,
+        baseRevision: Int,
+        nonce: Data
+    ) throws -> SelectiveRemotePersonalVaultEnvelope {
         do {
             let sealed = try AES.GCM.seal(
                 document.encoded(),
                 using: SymmetricKey(data: vaultKey),
-                nonce: AES.GCM.Nonce(data: rawNonce),
+                nonce: AES.GCM.Nonce(data: nonce),
                 authenticating: additionalData
             )
             return try .init(
                 baseRevision: baseRevision,
                 wrappedKey: wrappedKey,
                 ciphertext: sealed.ciphertext,
-                nonce: rawNonce,
+                nonce: nonce,
                 authTag: sealed.tag
             )
         } catch let error as SelectiveRemotePersonalVaultError {
@@ -671,14 +709,18 @@ extension SelectiveRemoteCloudAPIClient {
         envelope: SelectiveRemotePersonalVaultEnvelope,
         session: SelectiveRemoteCloudSessionBinding
     ) async throws -> SelectiveRemoteCloudPersonalVaultWriteResult {
-        try await requireV1WriteFence(endpoint: endpoint, session: session)
+        try await requireV1WriteFence(endpoint: endpoint, session: session, personal: true)
         let body = try JSONEncoder().encode(SelectiveRemoteV1WriteFrame(envelope: envelope))
+        try checkLocalPersonalVaultWrite()
         let (data, response) = try await authorizedResponse(
             endpoint: endpoint,
             path: "v1/vault",
             method: "PUT",
             body: body,
-            headers: ["X-Selective-V1-Write-Fence": "1"],
+            headers: [
+                "X-Selective-V1-Write-Fence": "1",
+                "X-Selective-Personal-Vault-Writer": "migration-checkpoint-v1"
+            ],
             session: session
         )
         if response.statusCode == 426 || (response.statusCode == 400 &&

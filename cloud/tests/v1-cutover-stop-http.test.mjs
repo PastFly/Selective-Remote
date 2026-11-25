@@ -53,8 +53,12 @@ test('Personal and Team V1 writes fail closed while current data remains readabl
     assert.equal(metadata.headers.get('x-selective-v1-write-status'),'vault_write_temporarily_unavailable');
     const headers={Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Selective-V1-Write-Fence':'1','Idempotency-Key':'synthetic-cutover-test'};
     const read=await fetch(`${origin}/v1/vault`,{headers});assert.equal(read.status,200);
+    const frame=JSON.stringify({protocol:'framed-v1',envelope:{}});
+    const previous=await fetch(`${origin}/v1/vault`,{method:'PUT',headers,body:frame});
+    assert.equal(previous.status,426,'framing alone does not establish the Personal cutover contract');
+    const current={...headers,'X-Selective-Personal-Vault-Writer':'migration-checkpoint-v1'};
     for(const path of ['/v1/vault',`/v1/teams/${team}/vaults/${vault}`]){
-      const response=await fetch(origin+path,{method:'PUT',headers,body:JSON.stringify({protocol:'framed-v1',envelope:{}})});
+      const response=await fetch(origin+path,{method:'PUT',headers:path==='/v1/vault'?current:headers,body:frame});
       assert.equal(response.status,503,`${path} must stop before processing a current writer`);
       assert.deepEqual(await response.json(),{error:'vault_write_temporarily_unavailable'});
       const legacy=await fetch(origin+path,{method:'PUT',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:'{}'});

@@ -335,9 +335,10 @@ export class CloudService {
   }
 
   async getVaultRevision(session, revision, writtenByThisDevice) {
-    const vault = await this.store.getVaultRevision(
-      session.user_id, revision, writtenByThisDevice ? session.device_id : null,
-    );
+    // Account-owned history alone is insufficient for device-specific recovery.
+    // Keep that mode unavailable until independent writer provenance is verified.
+    if (writtenByThisDevice) return null;
+    const vault = await this.store.getVaultRevision(session.user_id, revision);
     return vault ? this.vaultResponse(vault) : null;
   }
 
@@ -355,8 +356,8 @@ export class CloudService {
     };
   }
 
-  async putVault(session, input) {
-    return this.store.putVault(session.user_id, session.device_id, validateVaultEnvelope(input));
+  async putVault(session, input, options) {
+    return this.store.putVault(session, validateVaultEnvelope(input), options);
   }
 
   async listTeams(session) {

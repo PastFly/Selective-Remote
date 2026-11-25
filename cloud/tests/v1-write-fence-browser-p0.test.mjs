@@ -60,20 +60,34 @@ test("the server's write stop prevents both Personal and Team uploads at preflig
   assert.equal(writes, 0);
 });
 
-test("current browser sends a framed Personal write only to capable Cloud", async () => {
-  let body, marker;
+test("current browser sends a framed Personal write during a scoped pilot and keeps Team paused", async () => {
+  let body, marker, personalWriter;
   const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
     if (path === "/v1/auth/login") return login();
-    if (path === "/v1/meta") return Response.json({}, { headers: { "X-Selective-V1-Write-Fence": "1" } });
+    if (path === "/v1/meta") return Response.json({}, { headers: {
+      "X-Selective-V1-Write-Fence": "1",
+      "X-Selective-V1-Write-Status": "vault_write_temporarily_unavailable",
+      "X-Selective-Personal-Vault-Write-Status": "pilot",
+    } });
+    if (path === "/v1/vault/write-availability") {
+      assert.equal(options.headers.Authorization, `Bearer ${"a".repeat(43)}`);
+      return new Response(null, { status: 204 });
+    }
     if (path === "/v1/vault" && options.method === "PUT") {
       body = JSON.parse(options.body); marker = options.headers["X-Selective-V1-Write-Fence"];
+      personalWriter = options.headers["X-Selective-Personal-Vault-Writer"];
       return Response.json({ conflict: false, revision: 1 });
     }
     throw Error("unexpected_request");
   } });
   await client.login({ email: "test@example.invalid", password: "synthetic", deviceID: device });
+  await client.preflightPersonalVaultWrite();
   assert.deepEqual(await client.putVault(personalVaultScope, envelope), { conflict: false, revision: 1 });
+  const { wrappedKey: _, ...teamEnvelope } = envelope;
+  await assert.rejects(client.putTeamVault({ type: "team", teamID: user, vaultID: device },
+    { ...teamEnvelope, keyGeneration: 1 }, "synthetic-idempotency-key"), /vault_write_temporarily_unavailable/u);
   assert.equal(marker, "1");
+  assert.equal(personalWriter, "migration-checkpoint-v1");
   assert.deepEqual(body, { protocol: "framed-v1", envelope });
 });
 
