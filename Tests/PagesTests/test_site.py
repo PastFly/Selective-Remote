@@ -40,8 +40,10 @@ class SiteTests(unittest.TestCase):
                 downloads=[a for t,a in tags if t=='a' and 'download' in a.get('class','').split()]
                 self.assertGreaterEqual(len(downloads),2)
                 self.assertTrue(all(a.get('href')==RELEASE for a in downloads))
-                self.assertNotIn('v0.31.0', page.read_text())
-                self.assertNotIn('releases/download/v0.32',page.read_text())
+                content = page.read_text()
+                for stale in ('v0.31.0', 'coming in 0.32', 'скоро в 0.32'):
+                    self.assertNotIn(stale, content.lower())
+                self.assertNotIn('releases/download/v0.32', content)
                 self.assertFalse(any(a.get('http-equiv','').lower()=='refresh' for t,a in tags))
 
     def test_local_links_images_and_alt_text(self):
