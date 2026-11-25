@@ -770,6 +770,7 @@ struct CloudSettingsView: View {
                     do {
                         try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID, session: signedIn.session)
                         guard isCurrentPresentation(generation, session: signedIn.session) else { return }
+                        NotificationCenter.default.post(name: .selectiveRemotePersonalVaultSyncNow, object: nil)
                         await loadInventory(endpoint: url)
                     } catch {
                         enrollmentError = error.localizedDescription

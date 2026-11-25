@@ -1,7 +1,7 @@
 ## 0.32.8
 
 - On macOS, Cloud Settings shows account sign-in and Personal Vault connection separately. Sync Center clears an outdated setup prompt after checking the Vault state.
-- Cloud Settings picks up the session after sign-in through the connection window.
+- Cloud Settings picks up the session after sign-in through the connection window. The first Personal Vault check runs automatically after enrollment.
 - Fixed a Sync Center freeze when a background Vault check ran with the Retry button focused. Cloud Settings opens after Sync Center closes.
 
 ## 0.32.7
