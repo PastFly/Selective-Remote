@@ -707,7 +707,8 @@ struct SelectiveRemoteApp: App {
         do {
             let result = try await personalVaultAutoSync.checkForChanges(
                 endpoint: endpoint,
-                deviceID: deviceID
+                deviceID: deviceID,
+                compareInitialImport: syncPresentation.personalImportDifferences.isEmpty
             )
             guard syncPresentation.matchesAccount(
                 endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
@@ -724,7 +725,22 @@ struct SelectiveRemoteApp: App {
             case .setupRequired:
                 syncPresentation.recordPersonalSetupRequired(check: setupCheck)
                 return
-            case .initialDownloadRequired:
+            case let .initialDownloadRequired(initialDownload):
+                if let initialDownload {
+                    let snapshot = try SelectiveRemotePersonalVaultImporter.decode(initialDownload.document)
+                    let (_, differences) = await SelectiveRemotePersonalVaultImporter.compare(snapshot, with: model)
+                    guard !appLock.isLocked,
+                          UserDefaults.standard.object(
+                              forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
+                          ) as? Bool ?? true,
+                          personalUploadGeneration == uploadGeneration else { return }
+                    try personalVaultAutoSync.reportInitialImport(initialDownload, deviceID: deviceID) {
+                        syncPresentation.recordPersonalImportConflict(
+                            differences, endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString,
+                            generation: syncGeneration, check: setupCheck
+                        )
+                    }
+                }
                 syncPresentation.recordPersonalSetupRequired(check: setupCheck, initialDownload: true)
                 return
             case let .unconfirmedUpload(issue):
@@ -779,6 +795,8 @@ struct SelectiveRemoteApp: App {
             syncPresentation.recordPersonalSuccess(
                 revision: download.revision, generation: syncGeneration
             )
+        } catch is CancellationError {
+            return
         } catch {
             guard personalUploadGeneration == uploadGeneration,
                   syncPresentation.matchesAccount(

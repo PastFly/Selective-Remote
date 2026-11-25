@@ -237,10 +237,15 @@ final class SyncPresentationStore: ObservableObject {
     }
 
     func recordPersonalImportConflict(
-        _ differences: [PersonalVaultImportDifference], endpoint: String, deviceID: String, generation: UUID
+        _ differences: [PersonalVaultImportDifference], endpoint: String, deviceID: String, generation: UUID,
+        check: UUID? = nil
     ) {
         guard generation == self.generation, matchesAccount(endpoint: endpoint, deviceID: deviceID),
               !differences.isEmpty else { return }
+        if let check {
+            guard let active = activePersonalSetupCheck, active.token == check, !active.connectionVerified
+            else { return }
+        }
         activePersonalSetupCheck?.connectionVerified = true
         personalImportDifferences = differences
         recordPersonalFailure(.conflict)

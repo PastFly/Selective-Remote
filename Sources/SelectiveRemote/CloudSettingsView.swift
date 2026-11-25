@@ -1126,60 +1126,19 @@ struct CloudSettingsView: View {
         let generation = accountPresentationGeneration
         let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
         let snapshot = try SelectiveRemotePersonalVaultImporter.decode(document)
-        let credentialSources = Set(model.profiles.map(\.id) + model.independentPortForwards.map(\.id))
-        var existingSecrets: [String: String]? = [:]
-        if snapshot.credentials.contains(where: { credentialSources.contains($0.sourceID) }) {
-            // Read the unified Vault once. An unavailable password remains a conflict.
-            existingSecrets = await Task.detached {
-                try? UnifiedCredentialVault.shared.exportedSecrets()
-            }.value
-        }
-        try await client.checkSession(session)
+        let (plan, differences) = await SelectiveRemotePersonalVaultImporter.compare(snapshot, with: model)
         guard checkPresentation
                 ? isCurrentPresentation(generation, session: session)
                 : (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == session.endpoint
         else { throw CancellationError() }
-        let history = TerminalCommandHistoryStore.shared
-        let localSnippets = history.templates()
-        let plan = SelectiveRemotePersonalVaultImporter.plan(
-            snapshot: snapshot,
-            localProfiles: model.profiles,
-            localSnippets: localSnippets,
-            localForwarding: model.independentPortForwards,
-            localSSHKeys: model.sshKeys,
-            existingPasswordsReadable: existingSecrets != nil,
-            existingPassword: { id, kind in
-                let reference = KeychainService.credentialReference(profileID: id, kind: kind)
-                return existingSecrets?[UnifiedCredentialVault.entryKey(for: reference)]
-            }
-        )
         guard plan.canApply else {
-            let labels = Dictionary(
-                model.profiles.map { ($0.id, $0.friendlyName) }
-                    + localSnippets.map { ($0.id, $0.title) }
-                    + model.independentPortForwards.map { ($0.id, $0.rule.displayName) }
-                    + model.sshKeys.map { ($0.id, $0.name) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let differences = plan.conflictIDs.map { id in
-                let title = labels[id] ?? UpdateLocalization.text(ru: "Запись \(id.uuidString)", en: "Record \(id.uuidString)")
-                let profileFields: [String]
-                if let local = model.profiles.first(where: { $0.id == id }),
-                   let cloud = snapshot.profiles.first(where: { $0.id == id }) {
-                    profileFields = SelectiveRemotePersonalVaultImporter.differingProfileFields(local: local, cloud: cloud)
-                } else {
-                    profileFields = []
-                }
-                return PersonalVaultImportDifference(
-                    id: id, title: title,
-                    profileFields: profileFields,
-                    credentials: plan.credentialDifferences[id] ?? [:],
-                    deletedInCloud: snapshot.tombstoneIDs.contains(id)
+            try session.withCurrentPersonalVault(
+                tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID, expected: material
+            ) {
+                syncPresentation.recordPersonalImportConflict(
+                    differences, endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
                 )
             }
-            syncPresentation.recordPersonalImportConflict(
-                differences, endpoint: url.absoluteString, deviceID: deviceID.uuidString, generation: syncGeneration
-            )
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
         let applied = try SelectiveRemotePersonalVaultKeyMaterial(
@@ -1195,7 +1154,7 @@ struct CloudSettingsView: View {
             model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
             model.profiles.append(contentsOf: plan.profiles)
             model.independentPortForwards.append(contentsOf: plan.forwarding)
-            history.importTemplates(plan.snippets)
+            TerminalCommandHistoryStore.shared.importTemplates(plan.snippets)
             return true
         }
         guard committed else { throw CancellationError() }
