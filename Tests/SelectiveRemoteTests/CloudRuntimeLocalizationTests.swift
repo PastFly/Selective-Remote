@@ -31,6 +31,13 @@ struct CloudRuntimeLocalizationTests {
         #expect(defaults.string(forKey: SelectiveRemotePersonalVaultSyncStatus.errorKey) == "personalVault.uploadConflict:7")
         defaults.set("russian", forKey: languageKey)
         #expect(SelectiveRemotePersonalVaultSyncStatus.message(for: defaults.string(forKey: SelectiveRemotePersonalVaultSyncStatus.errorKey) ?? "") == "Cloud Vault изменился до ревизии 7. Локальные данные не перезаписаны.")
+
+        SelectiveRemotePersonalVaultSyncStatus.recordError(SelectiveRemoteCloudError.personalVaultWriteUnsupported)
+        let stored = defaults.string(forKey: SelectiveRemotePersonalVaultSyncStatus.errorKey) ?? ""
+        #expect(stored == AppCopy.personalVaultWriteUnsupported)
+        #expect(SelectiveRemotePersonalVaultSyncStatus.message(for: stored) == SyncIssue.personalVaultWriteUnsupported.message(english: false))
+        defaults.set("english", forKey: languageKey)
+        #expect(SelectiveRemotePersonalVaultSyncStatus.message(for: stored) == SyncIssue.personalVaultWriteUnsupported.message(english: true))
     }
 
     @Test("Team status re-renders after RU to EN switch")

@@ -95,9 +95,9 @@ struct CloudV1WriteFenceTests {
         let session = try await client.sessionBinding(endpoint: endpoint)
         let wrapped = try SelectiveRemotePersonalVaultWrappedKey(salt: Data(repeating: 1, count: 16), value: Data(repeating: 2, count: 40))
         let envelope = try SelectiveRemotePersonalVaultEnvelope(baseRevision: 0, wrappedKey: wrapped, ciphertext: Data([1]), nonce: Data(repeating: 3, count: 12), authTag: Data(repeating: 4, count: 16))
-        var rejected = false
-        do { _ = try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session) } catch { rejected = true }
-        #expect(rejected)
+        await #expect(throws: SelectiveRemoteCloudError.personalVaultWriteUnsupported) {
+            try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session)
+        }
         #expect(await calls.count == 0)
     }
 

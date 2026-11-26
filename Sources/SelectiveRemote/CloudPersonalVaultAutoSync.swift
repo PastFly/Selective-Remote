@@ -28,6 +28,8 @@ enum SelectiveRemotePersonalVaultSyncStatus {
             case .legacyStorageNeedsReview: value = "personalVault.legacyStorageNeedsReview"
             case let .uploadConflict(revision): value = "personalVault.uploadConflict:\(revision)"
             }
+        } else if error as? SelectiveRemoteCloudError == .personalVaultWriteUnsupported {
+            value = AppCopy.personalVaultWriteUnsupported
         } else {
             value = error.localizedDescription
         }
@@ -35,6 +37,9 @@ enum SelectiveRemotePersonalVaultSyncStatus {
     }
 
     static func message(for storedValue: String) -> String {
+        if storedValue == AppCopy.personalVaultWriteUnsupported {
+            return UpdateLocalization.key(storedValue)
+        }
         let pieces = storedValue.split(separator: ":", maxSplits: 1).map(String.init)
         let revision = pieces.count == 2 ? Int(pieces[1]) : nil
         let error: SelectiveRemotePersonalVaultError?
