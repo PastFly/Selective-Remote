@@ -1,3 +1,7 @@
+## 0.32.11
+
+- Cloud Settings and Sync Center now explain when the server has not confirmed support for protected Personal Vault writes. The message tells you that changes from this Mac are still waiting to be sent.
+
 ## 0.32.10
 
 - In Cloud Settings, choose the Mac or Cloud version of each conflicting Personal Vault record. The comparison shows differences in addresses and SSH key references.
