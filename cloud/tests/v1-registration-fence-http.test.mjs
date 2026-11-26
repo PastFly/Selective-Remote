@@ -1,3 +1,4 @@
+import {verifyProductionPersonalPilot} from './production-personal-pilot-flow.mjs';
 import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http-anchor-fixture.mjs';
 // Synthetic TLS SMTP endpoint: bind only loopback, accept only two synthetic test mailboxes,
 // trust only the ephemeral self-signed certificate and never log its messages.
@@ -238,6 +239,8 @@ async function exerciseRegistration(environment) {
         assert.equal((await call(tokens[0], teamPath + '/members')).status, 200);
         await startServer(env);
         assert.equal((await call(tokens[0], teamPath + '/members')).status, 503);
+        await verifyProductionPersonalPilot({cwd, production, startServer, fetchValue, call, tokens, fence, db,
+          ownerID:committed.ownerID, vaultID:id, teamPath});
       }
       if (environment === 'staging') {
         const privateEnv = { ...env, ALLOW_REGISTRATION:'false' };

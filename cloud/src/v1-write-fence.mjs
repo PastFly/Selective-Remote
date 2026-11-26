@@ -1,3 +1,5 @@
+import { productionPilotOpened } from './migration-fence-journal.mjs';
+
 // Whole-Vault writers must use an explicit protocol frame. This is only one
 // part of the cutover: old server processes must be drained and rollback fenced.
 export const v1WriteFenceHeader = "x-selective-v1-write-fence";
@@ -26,6 +28,16 @@ export function isPrivatePersonalPilotEnvironment(config) {
 
 export function personalWritePilotIsCurrent(pilot, now = Date.now()) {
   return Boolean(pilot && pilot.issuedAt <= now && now < pilot.expiresAt);
+}
+
+export function currentPersonalWritePilot(config, evidence, capabilities, now = Date.now()) {
+  const pilot = evidence?.personalWritePilot;
+  if (evidence?.writerFloor !== 1 || !personalWritePilotIsCurrent(pilot, now)) return null;
+  if (pilot.type === 'V1_PERSONAL_PILOT_OPENED') return isPrivatePersonalPilotEnvironment(config) ? pilot : null;
+  return pilot.type === productionPilotOpened && config.productionPersonalPilotEnabled === true
+    && config.productionTeamEnabled === true && evidence.productionTeamEnabled === true
+    && capabilities.v1ProductionPersonalPilotVersion === 1 && capabilities.v1ProductionTeamVersion === 1
+    && evidence.teamAuthorizationProtocol === 2 ? pilot : null;
 }
 
 export function unwrapV1Write(value) {

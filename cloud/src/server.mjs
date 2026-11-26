@@ -19,11 +19,10 @@ import { browserSessionBinding } from './browser-session-binding.mjs';
 import { isolatedTeamAcceptance, isolatedTeamWindowOpen, isolatedTeamRouteAllowed, verifyIsolatedTeamAccounts } from './isolated-team-acceptance.mjs';
 import { v1TeamRouteAllowed } from './v1-team-routes.mjs';
 import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write,
-  personalVaultPilotHeader, personalVaultPilotValue, isPrivatePersonalPilotEnvironment, personalWritePilotIsCurrent } from './v1-write-fence.mjs';
+  personalVaultPilotHeader, personalVaultPilotValue, currentPersonalWritePilot } from './v1-write-fence.mjs';
 
 const config = loadConfig();
 const teamAcceptance = isolatedTeamAcceptance(config, process.argv.slice(2), process.env);
-const privatePersonalPilotEnvironment = isPrivatePersonalPilotEnvironment(config);
 const configuredFence = createConfiguredMigrationFence(config.deployment);
 const deploymentFence = configuredFence.fence;
 const retainTeamAuthorization = Boolean(deploymentFence?.anchor)
@@ -73,9 +72,7 @@ async function route(request, response) {
   let deploymentEvidence;
   try { deploymentEvidence = await checkDeployment(); }
   catch { return sendError(response, 503, "publication_guard_unavailable"); }
-  const pilot = privatePersonalPilotEnvironment && deploymentEvidence.personalWritePilot?.type === 'V1_PERSONAL_PILOT_OPENED'
-    && personalWritePilotIsCurrent(deploymentEvidence.personalWritePilot)
-    ? deploymentEvidence.personalWritePilot : null;
+  const pilot = currentPersonalWritePilot(config, deploymentEvidence, currentCapabilities);
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
     return sendJSON(response, 200, { status: "ready" });
@@ -315,7 +312,7 @@ async function route(request, response) {
       return sendJSON(response, 200, await service.getVault(session));
     }
     if (method === "GET" && url.pathname === "/v1/vault/write-availability") {
-      return personalPilotAllowed && deploymentEvidence?.writerFloor === 1
+      return personalPilotAllowed && await store.personalPilotMatchesVault(session.user_id, pilot.vaultID)
         ? empty(response, 204) : sendError(response, 503, v1WriteStopReason);
     }
     const vaultRevision = /^\/v1\/vault\/revisions\/([1-9][0-9]*)$/u.exec(url.pathname);
@@ -327,7 +324,7 @@ async function route(request, response) {
     }
     if (method === "PUT" && url.pathname === "/v1/vault") {
       try {
-        const result = await service.putVault(session, unwrapV1Write(await readJSON(request)), { pilotID: pilot.pilotID });
+        const result = await service.putVault(session, unwrapV1Write(await readJSON(request)), { pilotID: pilot.pilotID, pilotType: pilot.type });
         return result.conflict ? sendJSON(response, 409, result) : sendJSON(response, 200, result);
       } catch (error) {
         return handleOperationError(response, error);
