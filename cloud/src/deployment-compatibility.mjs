@@ -181,5 +181,6 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
       || after.committed.some(record => !samePublication(record, byScope.get(`${record.teamID}\0${record.vaultID}`))))
     throw Error('deployment_fence_mismatch');
   return { compatible: true, schemaVersion: version, ...(afterWriterFloor ? { writerFloor: afterWriterFloor } : {}),
+    ...(after.v1TeamAuthorization ? { teamAuthorizationProtocol: after.v1TeamAuthorization.protocol } : {}),
     ...(personalWritePilot ? { personalWritePilot } : {}) };
 }

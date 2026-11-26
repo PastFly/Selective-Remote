@@ -83,9 +83,18 @@ async function exerciseRegistration(environment) {
       PUBLICATION_FENCE_PATH:fixture.path,...anchorFixture.env,ALLOW_REGISTRATION:'true',SMTP_HOST:'localhost',SMTP_PORT:String(smtp.port),SMTP_SECURE:'true',
       SMTP_USER:'synthetic',SMTP_PASSWORD:'test-only-password',SMTP_FROM:'sender@example.test',NODE_EXTRA_CA_CERTS:smtp.cert,NODE_OPTIONS:'--dns-result-order=ipv4first',
     };
-    const child = spawn(process.execPath, ['src/server.mjs'], {cwd, stdio:'ignore', env});
-    runtime={child};
-    let ready=false;for(let i=0;i<200;i++){if(child.exitCode!==null)throw Error('test_cloud_start_failed');try{if((await fetchValue('/readyz')).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(ready,true);
+    async function startServer(serverEnv, args = []) {
+      await stopPublicationRuntime(runtime);
+      const child = spawn(process.execPath, ['src/server.mjs', ...args], {cwd, stdio:'ignore', env:serverEnv});
+      runtime = {child};
+      for (let i = 0; i < 200; i++) {
+        if (child.exitCode !== null) throw Error('test_cloud_start_failed');
+        try { if ((await fetchValue('/readyz')).ok) return; } catch {}
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.fail('Cloud did not become ready');
+    }
+    await startServer(env);
     const post=(path,body)=>fetchValue(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const tokens=[];
     if (environment) {
@@ -163,6 +172,31 @@ async function exerciseRegistration(environment) {
       assert.equal(teams.status, 503);
       assert.deepEqual(await teams.json(), {error:'team_security_temporarily_unavailable'});
       assert.deepEqual(await fence.anchor.read(), before);
+      if (environment === 'staging') {
+        const privateEnv = { ...env, ALLOW_REGISTRATION:'false' };
+        delete privateEnv.STAGING_REGISTRATION_EMAIL_ALLOWLIST;
+        await startServer({ ...privateEnv, STAGING_TEAM_ACCOUNT_IDS:snapshot.v1Committed.map(row => row.ownerID).join(','),
+          STAGING_TEAM_EXPIRES_AT:new Date(Date.now() + 60000).toISOString() }, ['--isolated-team-acceptance']);
+        const metadata = await fetchValue('/v1/meta');
+        assert.equal(metadata.headers.get('x-selective-v1-write-status'), null);
+        assert.equal(metadata.headers.get('x-selective-personal-vault-write-status'), null);
+        assert.equal((await metadata.json()).registrationEnabled, false);
+        assert.equal((await fetchValue('/v1/teams')).status, 401);
+        const publication = '/v1/teams/' + randomUUID() + '/vaults/' + randomUUID() + '/publication/header';
+        for (const token of tokens) {
+          const auth = {headers:{Authorization:'Bearer ' + token}};
+          assert.equal((await fetchValue('/v1/teams', auth)).status, 200);
+          assert.equal((await fetchValue('/v1/vault/write-availability', auth)).status, 503);
+          assert.equal((await fetchValue(publication, auth)).status, 503);
+        }
+        await startServer(privateEnv);
+        for (const token of tokens) {
+          const auth = {headers:{Authorization:'Bearer ' + token}};
+          assert.equal((await fetchValue('/v1/me', auth)).status, 200);
+          assert.equal((await fetchValue('/v1/teams', auth)).status, 503);
+        }
+        assert.deepEqual(await fence.anchor.read(), before);
+      }
     }
   }finally{await stopPublicationRuntime(runtime);await proxy?.close();await anchorFixture?.cleanup();await fixture?.cleanup();await smtp?.close();await db.cleanup();}
 }
