@@ -127,6 +127,8 @@ export function loadConfig(env = process.env) {
   const anchor = loadFenceAnchorConfig(env,databaseURL);
   if (anchor && !fencePath) throw Error('invalid_deployment_anchor_configuration');
   const productionTeamEnabled = boolean(env, 'CLOUD_PRODUCTION_TEAM_ENABLED', false);
+  const productionPersonalPilotEnabled = boolean(env, 'CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED', false);
+  if (productionPersonalPilotEnabled && !productionTeamEnabled) throw Error('invalid_production_personal_pilot_configuration');
   if (productionTeamEnabled && (!anchor || publicationEnvironment !== 'production' || origin.protocol !== 'https:'
       || !allowRegistration || registrationEmailAllowlist !== null || publicationEnabled || wholePublicationEnabled
       || publicationVaultIDs.length)) throw Error('invalid_production_team_configuration');
@@ -134,6 +136,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     deployment: Object.freeze({ fencePath, anchor }),
     productionTeamEnabled,
+    productionPersonalPilotEnabled,
     host: env.CLOUD_HOST ?? "0.0.0.0",
     port: integer(env, "CLOUD_PORT", 8080, 1, 65535),
     publicOrigin: origin.origin,

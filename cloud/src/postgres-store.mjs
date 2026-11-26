@@ -4,6 +4,8 @@ import { WholePublicationStore } from './whole-publication-store.mjs';
 import { holdV1CommitFence } from './v1-commit-fence.mjs';
 import { createPublicationFenceTransaction, createTeamAuthorizationTransaction } from './publication-fence-coordinator.mjs';
 import { assertV1DataFloor, readV1VaultState, v1CiphertextHash } from './v1-data-fence.mjs';
+import { productionPilotOpened } from './migration-fence-journal.mjs';
+import { assertV1TeamAuthorization, holdV1TeamAuthorizationReadback, lockV1TeamAuthorizationWriter } from './v1-team-authorization.mjs';
 import { personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 import pg from "pg";
 import { AccessSurfaceStore } from "./access-surface-store.mjs";
@@ -1457,14 +1459,27 @@ export class PostgresStore {
     return result.rows[0] ?? null;
   }
 
-  async putVault(session, envelope, { pilotID = null } = {}) {
+  async personalPilotMatchesVault(userID, vaultID) {
+    const result = await this.pool.query('SELECT 1 FROM personal_vaults WHERE user_id = $1 AND id = $2', [userID, vaultID]);
+    return result.rowCount === 1;
+  }
+
+  async putVault(session, envelope, { pilotID = null, pilotType = 'V1_PERSONAL_PILOT_OPENED' } = {}) {
     const { session_id: sessionID, user_id: userID, device_id: deviceID } = session ?? {};
     if (![sessionID, userID, deviceID].every(isUUID)) throw new Error("unauthorized");
     const client = await this.pool.connect();
     const fenced=this.v1Fence?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
-    let pilot;
+    let pilot, unlock, releaseError;
+    const production = pilotType === productionPilotOpened;
+    const query = (sql, values) => client.query(sql, values);
     try {
+      if (production) {
+        if (!fenced || !pilotID) throw Error('vault_write_temporarily_unavailable');
+        try { unlock = await lockV1TeamAuthorizationWriter(client); }
+        catch (error) { releaseError = error; throw error; }
+      }
       await client.query("BEGIN");
+      if (production) await holdV1TeamAuthorizationReadback(query);
       await this.writerFence(client, this.v1Fence);
       // Check history after acquiring the session lock. A concurrent logout
       // can retain its denial even when the primary database update fails.
@@ -1474,12 +1489,17 @@ export class PostgresStore {
         if(snapshot.writerFloor!==1)throw Error('deployment_v1_history_unavailable');
         if(!sessionIsCurrent(snapshot,userID,deviceID,sessionID,active.password_identity_id))throw new Error("unauthorized");
         pilot = snapshot.personalWritePilot;
+        if (production) {
+          if (snapshot.v1TeamAuthorization?.protocol !== 2) throw Error('vault_write_temporarily_unavailable');
+          await assertV1TeamAuthorization(query, snapshot.v1TeamAuthorization);
+        }
+        if (pilot?.type === productionPilotOpened && !production) throw Error('vault_write_temporarily_unavailable');
         await assertV1DataFloor((sql,values)=>client.query(sql,values),snapshot);
       }
       const locked = await client.query("SELECT id, revision FROM personal_vaults WHERE user_id = $1 FOR UPDATE", [userID]);
       const vault = locked.rows[0];
       if (!vault) throw new Error("vault_missing");
-      if (pilotID !== null && (!personalWritePilotIsCurrent(pilot) || pilot.pilotID !== pilotID
+      if (pilotID !== null && (!personalWritePilotIsCurrent(pilot) || pilot.type !== pilotType || pilot.pilotID !== pilotID
           || pilot.ownerID !== userID || pilot.vaultID !== vault.id)) {
         throw new Error("vault_write_temporarily_unavailable");
       }
@@ -1519,10 +1539,12 @@ export class PostgresStore {
       }else await client.query("COMMIT");
       return { conflict: false, revision };
     } catch (error) {
-      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
+      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); }
+      catch (rollbackError) { releaseError = rollbackError; }
       throw error;
     } finally {
-      client.release();
+      try { await unlock?.(); } catch (error) { releaseError = error; }
+      client.release(releaseError);
     }
   }
 

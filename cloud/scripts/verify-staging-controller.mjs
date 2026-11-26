@@ -43,7 +43,8 @@ function activeRelease(settings) {
   const pair = settings.productionReleasePair;
   if (pair === undefined) return null;
   const valid = value => value && Object.keys(value).sort().join(',') === 'imageDigest,sourceSHA' &&
-    sourcePin.test(value.sourceSHA) && imagePin.test(value.imageDigest);
+    typeof value.sourceSHA === 'string' && sourcePin.test(value.sourceSHA) &&
+    typeof value.imageDigest === 'string' && imagePin.test(value.imageDigest);
   if (settings.registrationMode !== 'production-v1' || settings.anchorProtocol !== 1 ||
       !pair || Object.keys(pair).sort().join(',') !== 'forward,rollback' ||
       !valid(pair.rollback) || !valid(pair.forward) || pair.rollback.sourceSHA === pair.forward.sourceSHA ||
@@ -71,7 +72,9 @@ export function validateControllerSettings(s){
     if(!isAbsolute(path)||resolve(path)!==path||contains(path,controllerRoot)||contains(controllerRoot,path)
       ||contains(path,controllerState)||contains(controllerState,path))fail('deployment_fence_not_independent');
   }
-  activeRelease(s);
+  const role = activeRelease(s);
+  if (Object.hasOwn(s,'productionBootstrapDigest') && (!role || !validHash(s.productionBootstrapDigest)))
+    fail('deployment_production_baseline_unavailable');
   return s;
 }
 export function validateCandidateIdentity(settings,image){
@@ -152,7 +155,7 @@ function effectiveEnvironment(cloud,{imageEnvironment,dockerEnvironment}={},sett
   if (role) {
     let origin;
     try { origin = new URL(actual.CLOUD_PUBLIC_ORIGIN); } catch { fail('deployment_production_scope'); }
-    if (origin.protocol !== 'https:' || origin.origin !== actual.CLOUD_PUBLIC_ORIGIN ||
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash ||
         actual.ALLOW_REGISTRATION !== 'true' || actual[team] !== 'true' ||
         ![undefined, 'false', ...(role === 'forward' ? ['true'] : [])].includes(actual[personal]) ||
         base[team] === 'true' || base[personal] === 'true') fail('deployment_production_scope');
@@ -214,10 +217,11 @@ export async function readControllerComposeEnvironment(docker,compose,settings,e
 
 // Production uses this exact orchestration. Tests substitute command transport,
 // then run the retained compatibility checker against a real disposable DB.
-export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false,authorizationUpgrade=false,verifyProductionPair=false,pilotOperation=null}){
+export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false,authorizationUpgrade=false,verifyProductionPair=false,pilotOperation=null,bootstrap=null}){
   const step=async(stage,extra={})=>{report({stage});return runCommand({stage,candidate,...extra});};
   const role = activeRelease(candidate);
-  if ((verifyProductionPair || pilotOperation) && !role ||
+  if ((verifyProductionPair || pilotOperation || bootstrap) && !role ||
+      bootstrap && (!['inspect','apply'].includes(bootstrap) || bootstrap === 'apply' && !validHash(candidate.productionBootstrapDigest)) ||
       pilotOperation?.[0] === 'open' && role !== 'forward' || role && (maintenance || authorizationUpgrade))
     fail('deployment_production_scope');
   await step('attest');
@@ -235,6 +239,22 @@ export async function verifyControllerFixture({candidate,runCommand,report=()=>{
     if (role) await step('check', {mode, peer:true, requireClosedPilot:pilotOperation?.[0] !== 'close'});
     await step('check', {metadata, mode, ...(role ? {requireClosedPilot:pilotOperation?.[0] !== 'close'} : {})});
   };
+  if (bootstrap) {
+    if (bootstrap === 'inspect') {
+      const evidence = await step('inspect-baseline');
+      report({stage:'complete',...evidence});
+      return evidence;
+    }
+    await step('check-baseline');
+    await step('close-traffic');
+    await step('assert-closed');
+    await step('attest');
+    await step('apply-baseline');
+    await check('traffic');
+    const result = {baselineVerified:true, trafficOpened:false};
+    report({stage:'complete',...result});
+    return result;
+  }
   if (verifyProductionPair || pilotOperation) {
     await check('traffic');
     if (pilotOperation) {
@@ -334,8 +354,8 @@ export async function runControllerTrafficStage(stage, { docker, compose, inspec
   fail('invalid_deployment_stage');
 }
 
-export async function runController({maintenance=false, verifyInstallation=false, authorizationUpgrade=false, verifyProductionPair=false, pilotOperation=null}={}){
-  if ([maintenance,verifyInstallation,authorizationUpgrade,verifyProductionPair,pilotOperation].filter(Boolean).length>1) fail('invalid_deployment_arguments');
+export async function runController({maintenance=false, verifyInstallation=false, authorizationUpgrade=false, verifyProductionPair=false, pilotOperation=null, bootstrap=null}={}){
+  if ([maintenance,verifyInstallation,authorizationUpgrade,verifyProductionPair,pilotOperation,bootstrap].filter(Boolean).length>1) fail('invalid_deployment_arguments');
   if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==controllerRoot)fail('deployment_controller_owner');
   await protectedPath(join(controllerRoot,'settings.json'));
   const settings=validateControllerSettings(JSON.parse(await readFile(join(controllerRoot,'settings.json'),'utf8')));
@@ -383,7 +403,7 @@ export async function runController({maintenance=false, verifyInstallation=false
       const containers=ids.length?JSON.parse((await docker(['inspect',...ids])).stdout):[];
       validateControllerProject(network,containers);
     };
-    return await verifyControllerFixture({candidate:settings,maintenance,authorizationUpgrade,verifyProductionPair,pilotOperation,report:event=>process.stdout.write(JSON.stringify(event)+'\n'),runCommand:async({stage,mode,peer=false,requireClosedPilot=false})=>{
+    return await verifyControllerFixture({candidate:settings,maintenance,authorizationUpgrade,verifyProductionPair,pilotOperation,bootstrap,report:event=>process.stdout.write(JSON.stringify(event)+'\n'),runCommand:async({stage,mode,peer=false,requireClosedPilot=false})=>{
       if(stage==='attest')return attest();
       if(stage==='candidate-metadata' || stage==='peer-metadata'){
         const isPeer = stage === 'peer-metadata';
@@ -416,13 +436,14 @@ export async function runController({maintenance=false, verifyInstallation=false
             Object.keys({...effective,...values}).some(k => values[k] !== effective[k])) fail('deployment_environment_mismatch');
         return runControllerTrafficStage('verify-cloud-ready', {docker, compose, inspectProject});
       }
-      if(['check','check-authorization-upgrade','upgrade-authorization','production-pilot'].includes(stage)){
+      if(['check','check-authorization-upgrade','upgrade-authorization','production-pilot','inspect-baseline','check-baseline','apply-baseline'].includes(stage)){
         // A fresh process reads the independently retained checker + journal.
         // Candidate code is never used to decide whether it is safe to start.
-        const writable = stage==='upgrade-authorization' || stage==='production-pilot';
+        const writable = stage==='upgrade-authorization' || stage==='production-pilot' || stage==='apply-baseline';
         const journalMode=writable?'':',readonly';
         const command=stage==='check'
           ? ['check-deployment-compatibility.mjs','--candidate','/candidate.json',...(mode==='maintenance-upgrade'?['--maintenance-upgrade']:[]),...(requireClosedPilot?['--require-closed-pilot']:[])]
+          : stage.endsWith('-baseline') ? ['bootstrap-production-fence.mjs',stage.split('-')[0],...(stage === 'inspect-baseline'?[]:[settings.productionBootstrapDigest])]
           : stage==='production-pilot' ? ['production-personal-vault-pilot.mjs',...pilotOperation]
           : ['staging-upgrade-team-authorization.mjs',...(stage==='check-authorization-upgrade'?['--preflight']:[])];
         const [script,...args]=command;
@@ -432,9 +453,15 @@ export async function runController({maintenance=false, verifyInstallation=false
           '--mount',`type=bind,src=${dirname(settings.fencePath)},dst=/publication-fence${journalMode}`,
           '--mount',`type=bind,src=${join(temp,peer?'peer.json':'candidate.json')},dst=/candidate.json,readonly`,
           nodeImage,'node',`/controller/scripts/${script}`,...args];
-        return writable
-          ? runAuthorizationUpgradeContainer(docker,checkerArgs)
-          : docker(['run','--rm',...checkerArgs]);
+        const result = writable
+          ? await runAuthorizationUpgradeContainer(docker,checkerArgs)
+          : await docker(['run','--rm',...checkerArgs]);
+        if (stage === 'inspect-baseline') {
+          const {schemaVersion,baselineDigest} = JSON.parse(result.stdout);
+          if (![22,23].includes(schemaVersion) || !validHash(baselineDigest)) fail('deployment_production_baseline_unavailable');
+          return {schemaVersion,baselineDigest};
+        }
+        return;
       }
       if(stage==='migrate')return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
         '--env-file',join(temp,'effective.env'),'--entrypoint','node',settings.imageDigest,'scripts/migrate.mjs']);
@@ -462,9 +489,10 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
             action === 'open' && values.length === 4 && values.slice(0,3).every(v => uuid.test(v)) && /^(?:[1-9]|[1-5][0-9]|60)$/.test(values[3])))
         fail('invalid_deployment_arguments');
       pilotOperation = args.slice(1);
-    } else if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation', '--upgrade-team-authorization','--verify-production-pair'].includes(mode))
+    } else if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation', '--upgrade-team-authorization','--verify-production-pair','--inspect-production-baseline','--bootstrap-production-pair'].includes(mode))
       fail('invalid_deployment_arguments');
     await runController({ maintenance: mode === '--maintenance-upgrade', verifyInstallation: mode === '--verify-installation',
-      authorizationUpgrade: mode === '--upgrade-team-authorization', verifyProductionPair: mode === '--verify-production-pair', pilotOperation });
+      authorizationUpgrade: mode === '--upgrade-team-authorization', verifyProductionPair: mode === '--verify-production-pair', pilotOperation,
+      bootstrap: mode === '--inspect-production-baseline' ? 'inspect' : mode === '--bootstrap-production-pair' ? 'apply' : null });
   }catch(error){process.stderr.write(/^[a-z_]+$/.test(error?.message??'')?error.message+'\n':'deployment_controller_failed\n');process.exitCode=1;}
 }
