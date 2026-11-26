@@ -56,7 +56,7 @@ test("mobile workspace keeps the sync status readable and its panel usable", {
           await summary.hover();
           await summary.click();
           const panel = await page.locator(".workspace-sync-panel").boundingBox();
-          assert.ok(panel && panel.x >= 0 && panel.x + panel.width <= width + 1, "sync panel must fit the viewport");
+          assert.ok(panel && panel.x >= 0 && panel.x + panel.width <= width + 1, `sync panel must fit the viewport at ${width}px (${theme}): ${JSON.stringify(panel)}`);
           assert.equal(await summary.evaluate(element => getComputedStyle(element, "::after").display), "none",
             "the tooltip must not cover the open sync panel");
           await summary.click();
