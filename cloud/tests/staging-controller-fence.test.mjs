@@ -45,6 +45,9 @@ async function fixtureController({query,fence,metadata=currentCapabilities,maint
   if(event.stage==='check')return verifyDeploymentCompatibility({candidate:event.metadata,mode:event.mode,fence,query:(sql,values)=>{queries.push(sql);return query(sql,values);}});
  }});return {promise,stages,queries,reports};
 }
+const originalCapabilities = {
+  version: 1, fenceVersion: 2, readerProjectionVersion: 1, wholePublicationVersion: 1, maxSchemaVersion: 22,
+};
 const emptyFence={snapshot:async()=>({schemaFloor:19,pending:[],committed:[],outcomes:[]}),verifySchemaFloor:async()=>true,verify:async()=>true};
 const emptyDB=async sql=>({rows:sql.includes('schema_migrations')?[{version:'22'}]:[]});
 test('protected identity/settings and rendered mounts reject alternate images, independent-history loss and startup overrides',()=>{
@@ -286,10 +289,28 @@ test('additional env-file dependencies are rejected even when their present valu
 
 test('controller validates writer capability metadata without accepting unknown versions', () => {
   assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
-  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, teamSafetyStopVersion: _____, v1TeamAuthorizationProtocol: ______, ...oldCandidate}=currentCapabilities;
-  assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
+  assert.doesNotThrow(() => validateCandidateCapabilities(originalCapabilities));
   for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
+});
+
+test('controller checks the registered Team manifest before touching the deployment', async () => {
+  const registered = { ...currentCapabilities, v1TeamAuthorizationRegistrationVersion: 1 };
+  const { v1TeamAuthorizationRegistrationVersion, ...earlier } = registered;
+  const { v1TeamAuthorizationProtocol, ...missingProtocol } = registered;
+  assert.doesNotThrow(() => validateCandidateCapabilities(registered));
+  assert.doesNotThrow(() => validateCandidateCapabilities(earlier));
+  for (const invalid of [
+    missingProtocol,
+    { ...registered, v1TeamAuthorizationRegistrationVersion: 2 },
+    { ...registered, v1TeamAuthorizationProtocol: 1 },
+    { ...registered, maxSchemaVersion: 22 },
+    { ...registered, unreviewed: true },
+  ]) {
+    const controller = await fixtureController({ metadata: invalid, query: emptyDB, fence: emptyFence });
+    await assert.rejects(controller.promise, /deployment_code_floor/);
+    assert.deepEqual(controller.stages, ['attest', 'candidate-metadata']);
+  }
 });
 
 test('authorization format maintenance verifies and upgrades only after ingress closes', async () => {
@@ -321,9 +342,8 @@ test('authorization upgrade removes its exact writable child after a failed star
 
 
 test('retained writer floor prevents old image startup before migration or traffic',async()=>{
- const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,wrapperEnvelopeVersion:____,teamSafetyStopVersion:_____,v1TeamAuthorizationProtocol:______,...oldMetadata}=currentCapabilities;
  const fence={snapshot:async()=>({schemaFloor:19,writerFloor:1,pending:[],committed:[],outcomes:[]})};
- const f=await fixtureController({query:emptyDB,fence,metadata:oldMetadata});
+ const f=await fixtureController({query:emptyDB,fence,metadata:originalCapabilities});
  await assert.rejects(f.promise,/deployment_code_floor/);
  assert.ok(!f.stages.includes('migrate'));
  assert.ok(!f.stages.includes('open-traffic'));

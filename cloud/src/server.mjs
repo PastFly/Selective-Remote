@@ -14,7 +14,7 @@ import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
 import { createConfiguredMigrationFence } from './configured-migration-fence.mjs';
-import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
+import { createDeploymentGuard, currentCapabilities, supportsTeamAuthorizationRuntime, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 import { browserSessionBinding } from './browser-session-binding.mjs';
 import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write,
   personalVaultPilotHeader, personalVaultPilotValue, isPrivatePersonalPilotEnvironment, personalWritePilotIsCurrent } from './v1-write-fence.mjs';
@@ -23,9 +23,9 @@ const config = loadConfig();
 const privatePersonalPilotEnvironment = isPrivatePersonalPilotEnvironment(config);
 const configuredFence = createConfiguredMigrationFence(config.deployment);
 const deploymentFence = configuredFence.fence;
-const {v1TeamAuthorizationProtocol: _privateAuthorizationProtocol, ...publicCapabilities} = currentCapabilities;
-const retainTeamAuthorization = privatePersonalPilotEnvironment && Boolean(deploymentFence?.anchor)
-  && (await deploymentFence.snapshot()).v1TeamAuthorization?.protocol === _privateAuthorizationProtocol;
+const retainTeamAuthorization = Boolean(deploymentFence?.anchor)
+  && supportsTeamAuthorizationRuntime(config, currentCapabilities)
+  && (await deploymentFence.snapshot()).v1TeamAuthorization?.protocol === currentCapabilities.v1TeamAuthorizationProtocol;
 const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence, retainTeamAuthorization });
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
@@ -35,7 +35,7 @@ const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
 const service = new CloudService(store, runtimeConfig, mailer);
 const checkDeployment = deploymentFence
   ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
-    fence: deploymentFence, candidate: retainTeamAuthorization ? currentCapabilities : publicCapabilities }))
+    fence: deploymentFence, candidate: currentCapabilities, teamAuthorizationEnabled: retainTeamAuthorization }))
   : async () => { throw Error('deployment_fence_required'); };
 const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool, { v1Fence: deploymentFence, retainTeamAuthorization }),
   (session, password) => service.requirePasswordReauthentication(session, password));

@@ -162,7 +162,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         await db.pool.query("UPDATE devices SET last_seen_at=last_seen_at+interval '10 seconds' WHERE id=$1", [device]);
         assert.equal(await readV1TeamAuthorizationDigest(query), baseline);
         await fence.append({ version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: teamAuthorizationProtocol, digest: baseline });
-        const { v1TeamAuthorizationProtocol: _older, ...oldCandidate } = verifiedCandidate;
+        const { v1TeamAuthorizationProtocol: _older, v1TeamAuthorizationRegistrationVersion: _registered, ...oldCandidate } = verifiedCandidate;
         await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old candidate reached SQL"), candidate: oldCandidate }), /deployment_code_floor/u);
         await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old candidate reached SQL"),
             candidate: { ...verifiedCandidate, v1TeamAuthorizationProtocol: 1 } }), /deployment_code_floor/u);

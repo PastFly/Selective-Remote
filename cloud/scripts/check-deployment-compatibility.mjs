@@ -2,7 +2,7 @@ import pg from 'pg';
 import { readFile } from 'node:fs/promises';
 import { loadConfig } from '../src/config.mjs';
 import { createConfiguredMigrationFence } from '../src/configured-migration-fence.mjs';
-import { currentCapabilities, verifyDeploymentCompatibility } from '../src/deployment-compatibility.mjs';
+import { currentCapabilities, supportsTeamAuthorizationRuntime, verifyDeploymentCompatibility } from '../src/deployment-compatibility.mjs';
 
 let pool,configuredFence;
 try {
@@ -22,7 +22,7 @@ try {
     pool = new pg.Pool({ connectionString: config.databaseURL, max: 1 });
     configuredFence=createConfiguredMigrationFence(config.deployment);
     const { personalWritePilot: _pilot, ...result } = await verifyDeploymentCompatibility({ query: (text, values) => pool.query(text, values),
-      fence: configuredFence.fence, candidate, mode });
+      fence: configuredFence.fence, candidate, mode, teamAuthorizationEnabled: supportsTeamAuthorizationRuntime(config, candidate) });
     process.stdout.write(JSON.stringify(result) + '\n');
   }
 } catch (error) {

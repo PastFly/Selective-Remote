@@ -12,7 +12,10 @@ const hash=value=>createHash('sha256').update(value).digest('hex'),hex=(value,n)
 const fail=code=>{throw Error('staging_install_'+code);};
 export function validateInstallerCapabilities(capabilities){
  const hasTeamProtocol=Object.hasOwn(capabilities??{},'v1TeamAuthorizationProtocol');
- if(!capabilities||Object.keys(capabilities).length!==(hasTeamProtocol?11:10)
+ const hasRegistrationVersion=Object.hasOwn(capabilities??{},'v1TeamAuthorizationRegistrationVersion');
+ const expectedFieldCount=10+Number(hasTeamProtocol)+Number(hasRegistrationVersion);
+ if(!capabilities||Object.keys(capabilities).length!==expectedFieldCount
+  ||(hasRegistrationVersion&&(!hasTeamProtocol||capabilities.v1TeamAuthorizationRegistrationVersion!==1))
   ||(hasTeamProtocol&&(capabilities.v1TeamAuthorizationProtocol!==2||capabilities.maxSchemaVersion!==23))
   ||capabilities.teamSafetyStopVersion!==1||capabilities.emptyVaultCreationVersion!==1||capabilities.v1AnchorProtocol!==1||capabilities.wrapperEnvelopeVersion!==1||capabilities.version!==1||capabilities.fenceVersion!==2
   ||![22,23].includes(capabilities.maxSchemaVersion)||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1

@@ -4,17 +4,17 @@ import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {spawn,execFileSync} from 'node:child_process';
-import {createServer as createTcpServer} from 'node:net';
+import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createServer as createTlsServer} from 'node:tls';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {MigrationFence} from '../src/migration-fence.mjs';
+import {fenceHistoryHead} from '../src/fence-history-head.mjs';
+import {installV1TeamAuthorizationFence,readV1TeamAuthorizationDigest,teamAuthorizationProtocol} from '../src/v1-team-authorization.mjs';
 import {readV1VaultState,assertV1DataFloor} from '../src/v1-data-fence.mjs';
 import {installV1CommitFence} from '../src/v1-commit-fence.mjs';
-import {isolatedPublicationDatabase,publicationRuntimeFixture,stopPublicationRuntime} from './publication-runtime-fixture.mjs';
+import {isolatedPublicationDatabase,loopbackHTTPSProxy,publicationRuntimeFixture,stopPublicationRuntime} from './publication-runtime-fixture.mjs';
 
 async function testMailServer(){
   const dir=await mkdtemp(join(tmpdir(),'sr-test-only-smtp-'));
@@ -43,25 +43,59 @@ async function testMailServer(){
   return {port:server.address().port,cert,messages,async close(){for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}};
 }
 
-test('two real registrations, email verifications and logins preserve fenced Personal Vaults', {skip:!process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable,timeout:60000}, async()=>{
-  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let runtime,smtp,anchorFixture;
+const integrationOptions = {skip:!process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable, timeout:60000};
+
+test('two real registrations, email verifications and logins preserve fenced Personal Vaults',
+  integrationOptions, () => exerciseRegistration());
+
+for (const environment of ['staging', 'production']) {
+  test(`registered ${environment} with retained authorization serves new Personal accounts with writes closed`,
+    integrationOptions, () => exerciseRegistration(environment));
+}
+
+async function exerciseRegistration(environment) {
+  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);let runtime,smtp,anchorFixture,fixture,proxy;
   try{
-    const fixture=await publicationRuntimeFixture(db.databaseURL);anchorFixture=await syntheticHttpAnchor(fixture.path);const fence=anchorFixture.fence;
+    fixture=await publicationRuntimeFixture(db.databaseURL);anchorFixture=await syntheticHttpAnchor(fixture.path);const fence=anchorFixture.fence;
     await installV1CommitFence(db.pool);
     await fence.append({version:2,type:'V1_BASELINE',baselineID:randomUUID(),vaults:await readV1VaultState((sql,values)=>db.pool.query(sql,values))});
     await fence.append({version:2,type:'V1_WRITER_FLOOR',writerProtocol:1});
+    if (environment) {
+      await installV1TeamAuthorizationFence(db.pool);
+      const digest = await readV1TeamAuthorizationDigest((sql, values) => db.pool.query(sql, values));
+      await fence.append({version:2, type:'V1_TEAM_AUTHORIZATION_BASELINE', authorizationProtocol:teamAuthorizationProtocol, digest});
+    }
     smtp=await testMailServer();
-    const sock=createTcpServer();await new Promise(resolve=>sock.listen(0,'127.0.0.1',resolve));const port=sock.address().port;await new Promise(resolve=>sock.close(resolve));const origin=`http://127.0.0.1:${port}`;
-    const child=spawn(process.execPath,['src/server.mjs'],{cwd:fileURLToPath(new URL('../',import.meta.url)),stdio:'ignore',env:{
-      PATH:process.env.PATH,USER:process.env.USER,DATABASE_URL:db.databaseURL,CLOUD_HOST:'127.0.0.1',CLOUD_PORT:String(port),CLOUD_PUBLIC_ORIGIN:origin,
+    proxy = await loopbackHTTPSProxy(dirname(fixture.path));
+    const {cloudPort, origin, fetchValue} = proxy;
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const env = {
+      PATH:process.env.PATH,USER:process.env.USER,DATABASE_URL:db.databaseURL,CLOUD_HOST:'127.0.0.1',CLOUD_PORT:String(cloudPort),CLOUD_PUBLIC_ORIGIN:origin,
+      ...(environment && {
+        NODE_ENV:'production', PUBLICATION_ENVIRONMENT:environment,
+        PUBLICATION_READER_ENABLED:'false', WHOLE_PUBLICATION_ENABLED:'false',
+      }),
+      ...(environment === 'staging' && {
+        STAGING_REGISTRATION_EMAIL_ALLOWLIST:'synthetic-registration-a@example.test,synthetic-registration-b@example.test',
+      }),
       SESSION_TOKEN_PEPPER:'s'.repeat(32),EMAIL_VERIFICATION_TOKEN_PEPPER:'e'.repeat(32),PASSWORD_RESET_TOKEN_PEPPER:'p'.repeat(32),
       TEAM_INVITATION_TOKEN_PEPPER:'i'.repeat(32),TEAM_OUTBOX_ENCRYPTION_KEY:'o'.repeat(32),ABUSE_TOKEN_PEPPER:'a'.repeat(32),PROXY_SHARED_SECRET:'b'.repeat(64),
       PUBLICATION_FENCE_PATH:fixture.path,...anchorFixture.env,ALLOW_REGISTRATION:'true',SMTP_HOST:'localhost',SMTP_PORT:String(smtp.port),SMTP_SECURE:'true',
       SMTP_USER:'synthetic',SMTP_PASSWORD:'test-only-password',SMTP_FROM:'sender@example.test',NODE_EXTRA_CA_CERTS:smtp.cert,NODE_OPTIONS:'--dns-result-order=ipv4first',
-    }});runtime={child,cleanup:fixture.cleanup};
-    let ready=false;for(let i=0;i<200;i++){if(child.exitCode!==null)throw Error('test_cloud_start_failed');try{if((await fetch(`${origin}/readyz`)).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(ready,true);
-    const post=(path,body)=>fetch(origin+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    };
+    const child = spawn(process.execPath, ['src/server.mjs'], {cwd, stdio:'ignore', env});
+    runtime={child};
+    let ready=false;for(let i=0;i<200;i++){if(child.exitCode!==null)throw Error('test_cloud_start_failed');try{if((await fetchValue('/readyz')).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(ready,true);
+    const post=(path,body)=>fetchValue(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const tokens=[];
+    if (environment) {
+      const metadata = await fetchValue('/v1/meta');
+      assert.equal(metadata.status, 200);
+      assert.equal((await metadata.json()).registrationEnabled, true);
+      assert.equal(metadata.headers.get('x-selective-v1-write-fence'), '1');
+      assert.equal(metadata.headers.get('x-selective-v1-write-status'), 'vault_write_temporarily_unavailable');
+      assert.equal(metadata.headers.get('x-selective-personal-vault-write-status'), null);
+    }
     for (const [index,suffix] of ['a','b'].entries()) {
       const device={id:randomUUID(),name:`TEST-ONLY-CODEX-${suffix}`,platform:'web',appVersion:'test'};
       const registration={email:`synthetic-registration-${suffix}@example.test`,username:`synthetic_register_${suffix}`,displayName:`Synthetic ${suffix}`,password:`TEST-ONLY-PASSWORD-${suffix}-123`,device};
@@ -79,5 +113,56 @@ test('two real registrations, email verifications and logins preserve fenced Per
     const snapshot=await fence.snapshot();assert.equal(snapshot.v1Pending.length,0);assert.equal(snapshot.v1Committed.length,2);
     assert.ok(snapshot.v1Committed.every(item=>item.vaultKind==='PERSONAL'));
     await assertV1DataFloor((sql,values)=>db.pool.query(sql,values),snapshot);
-  }finally{await stopPublicationRuntime(runtime);await anchorFixture?.cleanup();await smtp?.close();await db.cleanup();}
-});
+    if (environment) {
+      const before = await fence.anchor.read();
+      const check = (script, ...args) => spawnSync(process.execPath, [script, ...args], {cwd, env, encoding:'utf8', timeout:10000});
+      // The candidate manifest from PR #263 at 3ee202a predates registered format-2 startup.
+      const oldManifest = join(dirname(fixture.path), 'closed-registration-image.json');
+      await writeFile(oldManifest, JSON.stringify({
+        version:1, fenceVersion:2, maxSchemaVersion:23, readerProjectionVersion:1, wholePublicationVersion:1,
+        v1WriterProtocol:1, emptyVaultCreationVersion:1, v1AnchorProtocol:1, wrapperEnvelopeVersion:1,
+        teamSafetyStopVersion:1, v1TeamAuthorizationProtocol:2,
+      }));
+      const rejected = check('scripts/check-deployment-compatibility.mjs', '--candidate', oldManifest);
+      assert.equal(rejected.status, 1);
+      assert.equal(rejected.stderr.trim(), 'deployment_code_floor');
+      const accepted = check('scripts/check-deployment-compatibility.mjs', '--candidate', 'deployment-compatibility.json');
+      assert.equal(accepted.status, 0, accepted.stderr);
+      assert.equal(JSON.parse(accepted.stdout).compatible, true);
+      const query = (sql, values) => db.pool.query(sql, values);
+      assert.equal(snapshot.v1TeamAuthorization.protocol, teamAuthorizationProtocol);
+      assert.equal(snapshot.v1TeamAuthorization.digest, await readV1TeamAuthorizationDigest(query));
+      assert.equal(snapshot.v1TeamAuthorization.pending, null);
+      assert.ok(snapshot.v1TeamAuthorizationOutcomes.length > 0);
+      assert.ok(snapshot.v1TeamAuthorizationOutcomes.every(outcome => outcome.type === 'V1_TEAM_AUTHORIZATION_CONFIRMED'));
+      assert.equal(snapshot.personalWritePilot, undefined);
+      assert.deepEqual(before, fenceHistoryHead(await fence.readRecords()));
+      const headers = {Authorization:`Bearer ${tokens[0]}`};
+      const vault = await fetchValue('/v1/vault', {headers});
+      assert.equal(vault.status, 200);
+      const {id, revision, ciphertext} = await vault.json();
+      const committed = snapshot.v1Committed.find(item => item.vaultID === id);
+      assert.ok(committed);
+      const operator = check('scripts/staging-personal-vault-pilot.mjs', 'open', randomUUID(), committed.ownerID, id, '1');
+      assert.equal(operator.status, 1);
+      assert.equal(operator.stderr.trim(), 'personal_pilot_environment_unavailable');
+      assert.equal(revision, 0);
+      assert.equal(ciphertext, null);
+      const availability = await fetchValue('/v1/vault/write-availability', {headers});
+      assert.equal(availability.status, 503);
+      assert.deepEqual(await availability.json(), {error:'vault_write_temporarily_unavailable'});
+      const write = await fetchValue('/v1/vault', {
+        method:'PUT',
+        headers:{...headers, 'Content-Type':'application/json', 'X-Selective-V1-Write-Fence':'1',
+          'X-Selective-Personal-Vault-Writer':'migration-checkpoint-v1', 'Idempotency-Key':randomUUID()},
+        body:JSON.stringify({protocol:'framed-v1', envelope:{}}),
+      });
+      assert.equal(write.status, 503);
+      assert.deepEqual(await write.json(), {error:'vault_write_temporarily_unavailable'});
+      const teams = await fetchValue('/v1/teams', {headers});
+      assert.equal(teams.status, 503);
+      assert.deepEqual(await teams.json(), {error:'team_security_temporarily_unavailable'});
+      assert.deepEqual(await fence.anchor.read(), before);
+    }
+  }finally{await stopPublicationRuntime(runtime);await proxy?.close();await anchorFixture?.cleanup();await fixture?.cleanup();await smtp?.close();await db.cleanup();}
+}
