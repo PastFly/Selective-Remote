@@ -48,6 +48,19 @@ test("Team authorization history rejects a stale baseline, overlapping transitio
     assert.throws(() => reduceFenceEvents([...retained, stage, confirm, { ...baseline, digest: updated }]), /deployment_fence_conflict/u);
 });
 
+test("authorization format upgrades once from the current settled format-1 digest", () => {
+    const upgrade = { version: 2, type: "V1_TEAM_AUTHORIZATION_FORMAT_UPGRADED",
+        previousDigest: updated, nextDigest: "3".repeat(64) };
+    const retained = [...events, baseline, stage, confirmation()];
+    const upgraded = reduceFenceEvents([...retained, upgrade, upgrade]);
+    assert.deepEqual(upgraded.v1TeamAuthorization, { protocol: 2, digest: upgrade.nextDigest, pending: null });
+    assert.equal(upgraded.schemaFloor, 23);
+    assert.equal(upgraded.v1TeamAuthorizationOutcomes.length, 1);
+    assert.throws(() => reduceFenceEvents([...events, baseline, stage, upgrade]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...events, baseline, upgrade]), /deployment_fence_conflict/u);
+    assert.throws(() => reduceFenceEvents([...events, { ...baseline, authorizationProtocol: 2 }, upgrade]), /deployment_fence_conflict/u);
+});
+
 test("a proven abort retains the previous authorization digest and closes the pending transition", () => {
     const confirm = confirmation();
     const abort = { ...confirm, type: "V1_TEAM_AUTHORIZATION_ABORTED" };

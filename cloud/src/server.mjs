@@ -23,7 +23,10 @@ const config = loadConfig();
 const privatePersonalPilotEnvironment = isPrivatePersonalPilotEnvironment(config);
 const configuredFence = createConfiguredMigrationFence(config.deployment);
 const deploymentFence = configuredFence.fence;
-const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence });
+const {v1TeamAuthorizationProtocol: _privateAuthorizationProtocol, ...publicCapabilities} = currentCapabilities;
+const retainTeamAuthorization = privatePersonalPilotEnvironment && Boolean(deploymentFence?.anchor)
+  && (await deploymentFence.snapshot()).v1TeamAuthorization?.protocol === _privateAuthorizationProtocol;
+const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence, retainTeamAuthorization });
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
   publication: Object.freeze({ ...config.publication, fence: deploymentFence }),
@@ -32,9 +35,9 @@ const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
 const service = new CloudService(store, runtimeConfig, mailer);
 const checkDeployment = deploymentFence
   ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
-    fence: deploymentFence, candidate: currentCapabilities }))
+    fence: deploymentFence, candidate: retainTeamAuthorization ? currentCapabilities : publicCapabilities }))
   : async () => { throw Error('deployment_fence_required'); };
-const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool, { v1Fence: deploymentFence }),
+const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool, { v1Fence: deploymentFence, retainTeamAuthorization }),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));

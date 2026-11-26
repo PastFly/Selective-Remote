@@ -63,7 +63,12 @@ export function validateCandidateIdentity(settings,image){
 export function validateCandidateCapabilities(candidate,settings={}){
   const expected={version:1,fenceVersion:2,readerProjectionVersion:1,wholePublicationVersion:1};
   const count=candidate&&Object.keys(candidate).length;
-  const validExtended=(count===9||count===10&&candidate.teamSafetyStopVersion===1)&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1&&candidate.wrapperEnvelopeVersion===1;
+  const baseFields=[...Object.keys(expected),'maxSchemaVersion','v1WriterProtocol','emptyVaultCreationVersion','v1AnchorProtocol','wrapperEnvelopeVersion'];
+  const fieldList=Object.keys(candidate??{}).sort().join(',');
+  const safeShape=fieldList===[...baseFields,'teamSafetyStopVersion'].sort().join(',')&&candidate.teamSafetyStopVersion===1;
+  const teamShape=fieldList===[...baseFields,'teamSafetyStopVersion','v1TeamAuthorizationProtocol'].sort().join(',')&&
+    candidate.teamSafetyStopVersion===1&&candidate.v1TeamAuthorizationProtocol===2&&candidate.maxSchemaVersion===23;
+  const validExtended=(count===9||safeShape||teamShape)&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1&&candidate.wrapperEnvelopeVersion===1;
   if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1)||(count===8&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&((candidate.v1AnchorProtocol===1)!==(candidate.wrapperEnvelopeVersion===1)))||validExtended)
     ||![22,23].includes(candidate.maxSchemaVersion)
     ||(settings.anchorProtocol===1&&candidate.v1AnchorProtocol!==1)

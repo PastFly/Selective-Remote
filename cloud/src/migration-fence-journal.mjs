@@ -50,6 +50,11 @@ export function validateFenceEvent(value){
     ![1,2].includes(value.authorizationProtocol)||!isHash(value.digest))invalid();
   return {version:2,type:value.type,authorizationProtocol:value.authorizationProtocol,digest:value.digest};
  }
+ if(value.type==='V1_TEAM_AUTHORIZATION_FORMAT_UPGRADED'){
+  if(!keys(value,['version','type','previousDigest','nextDigest'])||
+    !isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest)invalid();
+  return {version:2,type:value.type,previousDigest:value.previousDigest,nextDigest:value.nextDigest};
+ }
  if(value.type==='V1_TEAM_AUTHORIZATION_PENDING'){
   const fields=['version','type','intentID','previousDigest','nextDigest'];
   const paired=Object.hasOwn(value,'vaultIntentID')||Object.hasOwn(value,'vaultIntentDigest');
@@ -176,6 +181,7 @@ export function reduceFenceEvents(events){
  const teamAuthorizationIntents=new Map(),teamAuthorizationOutcomes=new Map();
  let writerFloor=0,v1Baseline=null,personalWritePilot=null;
  let teamAuthorizationBaseline=null,teamAuthorizationDigest=null,teamAuthorizationPending=null;
+ let teamAuthorizationProtocol=0,teamAuthorizationUpgrade=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
   if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
@@ -183,7 +189,17 @@ export function reduceFenceEvents(events){
    if(teamAuthorizationBaseline){if(!same(teamAuthorizationBaseline,event))conflict();continue;}
    if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||personalWritePilot)conflict();
    teamAuthorizationBaseline=event;
+   teamAuthorizationProtocol=event.authorizationProtocol;
    teamAuthorizationDigest=event.digest;
+   continue;
+  }
+  if(event.type==='V1_TEAM_AUTHORIZATION_FORMAT_UPGRADED'){
+   if(teamAuthorizationUpgrade){if(!same(teamAuthorizationUpgrade,event))conflict();continue;}
+   if(teamAuthorizationProtocol!==1||teamAuthorizationPending||personalWritePilot||
+     pending.size||v1Pending.size||committed.size||event.previousDigest!==teamAuthorizationDigest)conflict();
+   teamAuthorizationUpgrade=event;
+   teamAuthorizationProtocol=2;
+   teamAuthorizationDigest=event.nextDigest;
    continue;
   }
   if(event.type==='V1_TEAM_AUTHORIZATION_PENDING'){
@@ -274,7 +290,7 @@ export function reduceFenceEvents(events){
    if(old){if(!same(old,intent))conflict();continue;}
    const deletion=event.type===accountDeletionType;
    if(deletion){
-    if(teamAuthorizationBaseline?.authorizationProtocol!==2||teamAuthorizationPending||v1Pending.size||
+    if(teamAuthorizationProtocol!==2||teamAuthorizationPending||v1Pending.size||
       personalWritePilot||event.previousDigest!==teamAuthorizationDigest||teamAuthorizationIntents.has(event.authorizationIntentID))conflict();
     const previous=[...v1Committed.values()].find(item=>item.vaultKind==='PERSONAL'&&item.ownerID===event.userID);
     if(!same(previous??null,event.vault))conflict();
@@ -367,7 +383,7 @@ export function reduceFenceEvents(events){
  for(const intent of v1Pending.values())if(intent.type===accountDeletionType)deniedAccounts.add(intent.userID);
  return {...(writerFloor?{writerFloor}:{}),
   ...(teamAuthorizationBaseline?{
-    v1TeamAuthorization:{protocol:teamAuthorizationBaseline.authorizationProtocol,digest:teamAuthorizationDigest,pending:teamAuthorizationPending},
+    v1TeamAuthorization:{protocol:teamAuthorizationProtocol,digest:teamAuthorizationDigest,pending:teamAuthorizationPending},
     v1TeamAuthorizationOutcomes:[...teamAuthorizationOutcomes.values()],
   }:{}),
   ...(personalWritePilot?{personalWritePilot}:{}),
@@ -379,7 +395,7 @@ export function reduceFenceEvents(events){
   ...([...v1Intents.values()].some(item=>item.baseRevision===-1)?{emptyVaultCreationVersion:1}:{}),
   ...([...v1Intents.values()].some(item=>item.type==='V1_WRAPPER_BATCH_PENDING_INTENT')?{wrapperEnvelopeVersion:1}:{}),
   ...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),
-  schemaFloor:Math.max(teamAuthorizationBaseline?.authorizationProtocol===2?23:19,
+  schemaFloor:Math.max(teamAuthorizationProtocol===2?23:19,
     ...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }
