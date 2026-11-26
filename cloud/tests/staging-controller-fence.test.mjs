@@ -17,7 +17,7 @@ import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import pg from 'pg';
-import {verifyControllerFixture,validateControllerSettings,validateCandidateIdentity,validateCandidateCapabilities,validateControllerCompose,validateControllerProject} from '../scripts/verify-staging-controller.mjs';
+import {verifyControllerFixture,validateControllerSettings,validateCandidateIdentity,validateCandidateCapabilities,validateControllerCompose,validateControllerProject,runAuthorizationUpgradeContainer} from '../scripts/verify-staging-controller.mjs';
 import {verifyDeploymentCompatibility,currentCapabilities} from '../src/deployment-compatibility.mjs';
 import {MigrationFence} from '../src/migration-fence.mjs';
 import {applyMigrations,loadMigrations} from '../src/migrations.mjs';
@@ -290,6 +290,33 @@ test('controller validates writer capability metadata without accepting unknown 
   assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
   for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
+});
+
+test('authorization format maintenance verifies and upgrades only after ingress closes', async () => {
+ const stages=[];
+ const result=await verifyControllerFixture({
+  candidate:{...settings(),anchorProtocol:1},
+  authorizationUpgrade:true,
+  runCommand:async({stage})=>{
+   stages.push(stage);
+   if(stage==='candidate-metadata')return currentCapabilities;
+  },
+ });
+ assert.deepEqual(stages,['attest','candidate-metadata','storage','assert-project','close-traffic','assert-closed',
+  'check-authorization-upgrade','migrate','upgrade-authorization','check']);
+ assert.deepEqual(result,{compatible:true,trafficOpened:false});
+});
+
+test('authorization upgrade removes its exact writable child after a failed start', async () => {
+ const id='a'.repeat(64), calls=[];
+ const docker=async command=>{
+  calls.push(command);
+  if(command[0]==='create')return {stdout:id+'\n'};
+  if(command[0]==='start')throw Error('fixture_timeout');
+  throw Error('fixture_cleanup_unavailable');
+ };
+ await assert.rejects(runAuthorizationUpgradeContainer(docker,['pinned-image']),/deployment_authorization_upgrade_cleanup/);
+ assert.deepEqual(calls,[['create','pinned-image'],['start','--attach',id],['rm','--force',id]]);
 });
 
 

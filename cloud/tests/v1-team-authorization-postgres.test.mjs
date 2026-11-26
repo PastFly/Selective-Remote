@@ -25,6 +25,61 @@ import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-h
 
 const exec = promisify(execFile);
 
+test("authorization format upgrade keeps the TLS anchor and resumes after the new SQL guards commit", {
+    skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
+    timeout: 60000,
+}, async () => {
+    const db = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
+    let runtime, anchor;
+    try {
+        const { upgradeTeamAuthorizationFormat } = await import("../src/v1-team-authorization.mjs");
+        assert.equal(typeof upgradeTeamAuthorizationFormat, "function");
+        const q = (sql, params) => db.pool.query(sql, params);
+        const userID = randomUUID(), teamID = randomUUID(), vaultID = randomUUID();
+        await q("INSERT INTO users(id,email,username) VALUES($1,'upgrade@example.test','upgrade_fixture')", [userID]);
+        await q("INSERT INTO teams(id,name,created_by_user_id) VALUES($1,'Upgrade fixture',$2)", [teamID, userID]);
+        await q(`INSERT INTO shared_vaults(id,team_id,name,created_by_user_id,format_state,format_schema_version)
+            VALUES($1,$2,'Registry fixture',$3,'V2_PREPARING',2)`, [vaultID, teamID, userID]);
+        runtime = await publicationRuntimeFixture(db.databaseURL);
+        anchor = await syntheticHttpAnchor(runtime.path);
+        const { fence } = anchor;
+        await installV1CommitFence(db.pool);
+        await installV1TeamAuthorizationFence(db.pool, 1);
+        await fence.append({ version: 2, type:"V1_BASELINE", baselineID:randomUUID(), vaults:await readV1VaultState(q) });
+        await fence.append({ version: 2, type:"V1_WRITER_FLOOR", writerProtocol:1 });
+        const previousDigest = await readV1TeamAuthorizationDigest(q, 1);
+        await fence.append({ version: 2, type:"V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol:1, digest:previousDigest });
+        const initial = await fence.anchor.read();
+        const input = { pool:db.pool, fence };
+        const stage = () => upgradeTeamAuthorizationFormat({ ...input, preflight:true });
+        assert.equal((await stage()).authorizationProtocol, 1);
+        await q(`INSERT INTO vault_resource_mutation_receipts_v2(team_id,vault_id,idempotency_key,operation,request_sha256,result)
+            VALUES($1,$2,'synthetic','create_identity',repeat('0',64),'{}')`, [teamID,vaultID]);
+        await assert.rejects(stage(), /deployment_team_authorization_untracked_state/u);
+        await q("DELETE FROM vault_resource_mutation_receipts_v2");
+        assert.deepEqual(await fence.anchor.read(), initial);
+        const unavailableFence = {
+            anchor: fence.anchor, snapshot: () => fence.snapshot(), assertWritable: () => fence.assertWritable(),
+            append: async () => { throw new Error("synthetic_anchor_unavailable"); },
+        };
+        await assert.rejects(upgradeTeamAuthorizationFormat({ ...input, fence: unavailableFence }), /synthetic_anchor_unavailable/u);
+        assert.equal((await fence.snapshot()).v1TeamAuthorization.protocol, 1);
+        assert.deepEqual(await fence.anchor.read(), initial);
+        await assert.rejects(q("TRUNCATE vault_resource_mutation_receipts_v2"), /v1_team_authorization_writer_required/u);
+        await assert.rejects(verifyDeploymentCompatibility({ query:q, fence, candidate:currentCapabilities }), /deployment_code_floor/u);
+        assert.equal((await upgradeTeamAuthorizationFormat(input)).authorizationProtocol, 2);
+        const final = await fence.anchor.read();
+        assert.equal(final.position, initial.position + 1);
+        assert.equal((await upgradeTeamAuthorizationFormat(input)).authorizationProtocol, 2);
+        assert.deepEqual(await fence.anchor.read(), final);
+        assert.equal((await verifyDeploymentCompatibility({ query:q, fence, candidate:currentCapabilities })).compatible,true);
+    } finally {
+        await anchor?.cleanup();
+        await runtime?.cleanup();
+        await db.cleanup();
+    }
+});
+
 test("protected Team recovery checks Vaults, account deletion and resource rights across PostgreSQL restores with the TLS anchor retained", {
     skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
     timeout: 60000,

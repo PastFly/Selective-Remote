@@ -172,18 +172,28 @@ export async function readControllerComposeEnvironment(docker,compose,settings,e
 
 // Production uses this exact orchestration. Tests substitute command transport,
 // then run the retained compatibility checker against a real disposable DB.
-export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false}){
+export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false,authorizationUpgrade=false}){
   const step=async(stage,extra={})=>{report({stage});return runCommand({stage,candidate,...extra});};
   await step('attest');
   const metadata=await step('candidate-metadata');
   validateCandidateCapabilities(metadata,candidate);
+  if(authorizationUpgrade&&(!candidate.anchorProtocol||candidate.registrationMode||metadata.v1TeamAuthorizationProtocol!==2))
+    fail('deployment_code_floor');
   await step('storage');
   await step('assert-project');
   // Ordinary startup denies a restored old schema without even stopping the
   // current deployment. Explicit initial maintenance closes traffic FIRST.
-  if(!maintenance)await step('check',{metadata,mode:'traffic'});
+  if(!maintenance&&!authorizationUpgrade)await step('check',{metadata,mode:'traffic'});
   await step('close-traffic');
   await step('assert-closed');
+  if(authorizationUpgrade){
+    await step('check-authorization-upgrade');
+    await step('migrate');
+    await step('upgrade-authorization');
+    await step('check',{metadata,mode:'traffic'});
+    report({stage:'complete',trafficOpened:false});
+    return {compatible:true,trafficOpened:false};
+  }
   await step('check',{metadata,mode:'maintenance-upgrade'});
   await step('migrate');
   await step('check',{metadata,mode:'traffic'});
@@ -222,6 +232,21 @@ async function invoke(file,args,options={}){
     fail(/^[a-z_]+$/.test(diagnostic??'')?diagnostic:'deployment_controller_command_failed');
   }
 }
+const authorizationUpgradeCleanupError='deployment_authorization_upgrade_cleanup';
+
+export async function runAuthorizationUpgradeContainer(docker,args){
+  // A timed-out Docker client does not terminate a running container.
+  const created=await docker(['create',...args]);
+  const id=created.stdout.trim();
+  if(!/^[a-f0-9]{64}$/.test(id))fail('deployment_controller_command_failed');
+  try{
+    return await docker(['start','--attach',id]);
+  }finally{
+    try{await docker(['rm','--force',id]);}
+    catch{fail(authorizationUpgradeCleanupError);}
+  }
+}
+
 export async function runControllerTrafficStage(stage, { docker, compose, inspectProject }) {
   if (stage === 'close-traffic') {
     return docker([...compose, 'stop', 'cloud', 'caddy']);
@@ -242,8 +267,8 @@ export async function runControllerTrafficStage(stage, { docker, compose, inspec
   fail('invalid_deployment_stage');
 }
 
-export async function runController({maintenance=false, verifyInstallation=false}={}){
-  if (maintenance && verifyInstallation) fail('invalid_deployment_arguments');
+export async function runController({maintenance=false, verifyInstallation=false, authorizationUpgrade=false}={}){
+  if ([maintenance,verifyInstallation,authorizationUpgrade].filter(Boolean).length>1) fail('invalid_deployment_arguments');
   if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==controllerRoot)fail('deployment_controller_owner');
   await protectedPath(join(controllerRoot,'settings.json'));
   const settings=validateControllerSettings(JSON.parse(await readFile(join(controllerRoot,'settings.json'),'utf8')));
@@ -254,7 +279,7 @@ export async function runController({maintenance=false, verifyInstallation=false
   const fenceGroup=validateFenceDirectory(await lstat(fenceDirectory));
   const lock=join(controllerState,'controller.lock');
   try{await mkdir(lock,{mode:0o700});}catch{fail('deployment_controller_locked');}
-  let temp;
+  let temp,retainLock=false;
   try{
     const env={PATH:'/usr/bin:/bin',...settings.storage,PUBLICATION_IMAGE_DIGEST:settings.imageDigest,PUBLICATION_FENCE_DIRECTORY:dirname(settings.fencePath)};
     const compose=['compose','--project-name','cloud','--project-directory',settings.cloudDirectory,'--env-file',settings.envPath,...settings.composeFiles.flatMap(f=>['-f',f.path])];
@@ -284,7 +309,7 @@ export async function runController({maintenance=false, verifyInstallation=false
       const containers=ids.length?JSON.parse((await docker(['inspect',...ids])).stdout):[];
       validateControllerProject(network,containers);
     };
-    return await verifyControllerFixture({candidate:settings,maintenance,report:event=>process.stdout.write(JSON.stringify(event)+'\n'),runCommand:async({stage,metadata,mode})=>{
+    return await verifyControllerFixture({candidate:settings,maintenance,authorizationUpgrade,report:event=>process.stdout.write(JSON.stringify(event)+'\n'),runCommand:async({stage,mode})=>{
       if(stage==='attest')return attest();
       if(stage==='candidate-metadata'){
         const id=(await docker(['create','--network','none','--env-file',settings.envPath,'--entrypoint','/bin/true',settings.imageDigest])).stdout.trim();
@@ -304,28 +329,45 @@ export async function runController({maintenance=false, verifyInstallation=false
         await writeFile(join(temp,'effective.env'),Object.entries(effective).map(([key,value])=>key+'='+value).join('\n')+'\n',{mode:0o600,flag:'wx'});return;
       }
       if(stage==='assert-project')return inspectProject();
-      if(stage==='check'){
+      if(['check','check-authorization-upgrade','upgrade-authorization'].includes(stage)){
         // A fresh process reads the independently retained checker + journal.
         // Candidate code is never used to decide whether it is safe to start.
-        return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--group-add',String(fenceGroup),'--security-opt','no-new-privileges',
+        const journalMode=stage==='upgrade-authorization'?'':',readonly';
+        const command=stage==='check'
+          ? ['check-deployment-compatibility.mjs','--candidate','/candidate.json',...(mode==='maintenance-upgrade'?['--maintenance-upgrade']:[])]
+          : ['staging-upgrade-team-authorization.mjs',...(stage==='check-authorization-upgrade'?['--preflight']:[])];
+        const [script,...args]=command;
+        const checkerArgs=['--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--group-add',String(fenceGroup),'--security-opt','no-new-privileges',
           '--env-file',join(temp,'effective.env'),
           '--mount',`type=bind,src=${controllerRoot},dst=/controller,readonly`,
-          '--mount',`type=bind,src=${dirname(settings.fencePath)},dst=/publication-fence,readonly`,
+          '--mount',`type=bind,src=${dirname(settings.fencePath)},dst=/publication-fence${journalMode}`,
           '--mount',`type=bind,src=${join(temp,'candidate.json')},dst=/candidate.json,readonly`,
-          nodeImage,'node','/controller/scripts/check-deployment-compatibility.mjs','--candidate','/candidate.json',...(mode==='maintenance-upgrade'?['--maintenance-upgrade']:[])]);
+          nodeImage,'node',`/controller/scripts/${script}`,...args];
+        return stage==='upgrade-authorization'
+          ? runAuthorizationUpgradeContainer(docker,checkerArgs)
+          : docker(['run','--rm',...checkerArgs]);
       }
       if(stage==='migrate')return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
         '--env-file',join(temp,'effective.env'),'--entrypoint','node',settings.imageDigest,'scripts/migrate.mjs']);
       return runControllerTrafficStage(stage, { docker, compose, inspectProject });
     }});
-  }finally{if(temp)await rm(temp,{recursive:true,force:true});await rm(lock,{recursive:true});}
+  }catch(error){
+    retainLock=error.message===authorizationUpgradeCleanupError;
+    throw error;
+  }finally{
+    if(!retainLock){
+      if(temp)await rm(temp,{recursive:true,force:true});
+      await rm(lock,{recursive:true});
+    }
+  }
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
     const args=process.argv.slice(2);
     const [mode] = args;
-    if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation'].includes(mode))
+    if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation', '--upgrade-team-authorization'].includes(mode))
       fail('invalid_deployment_arguments');
-    await runController({ maintenance: mode === '--maintenance-upgrade', verifyInstallation: mode === '--verify-installation' });
+    await runController({ maintenance: mode === '--maintenance-upgrade', verifyInstallation: mode === '--verify-installation',
+      authorizationUpgrade: mode === '--upgrade-team-authorization' });
   }catch(error){process.stderr.write(/^[a-z_]+$/.test(error?.message??'')?error.message+'\n':'deployment_controller_failed\n');process.exitCode=1;}
 }
