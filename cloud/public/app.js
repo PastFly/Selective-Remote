@@ -6586,7 +6586,10 @@ export function initializePortalNavigation({
     setPath(requestedWorkspaceRoute);
     const create = documentValue.querySelector("#local-record-create");
     if (!create || create.disabled || create.closest("[hidden]")) {
-      documentValue.querySelector("#local-vault-state-title")?.focus();
+      const blockedHeading = documentValue.querySelector(
+        "#local-vault-waiting:not([hidden]) #local-vault-state-title, #local-vault-conflicts:not([hidden]) #local-vault-conflicts-title",
+      );
+      (blockedHeading ?? documentValue.querySelector("#local-vault-title"))?.focus();
       return;
     }
     create.focus();

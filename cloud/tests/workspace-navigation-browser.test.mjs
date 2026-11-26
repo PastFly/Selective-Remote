@@ -116,8 +116,15 @@ test("workspace navigation keeps the selected scope and record creation visible"
         await editor.locator("#local-record-save").click();
         await editor.waitFor({ state: "hidden" });
         await personal.getByText("TEST-ONLY-CODEX-UX", { exact: true }).first().waitFor();
-        await page.evaluate(() => window.syntheticVault.setConflictMode(true));
+        await page.evaluate(() => {
+          window.syntheticVault.setConflictMode(true);
+          document.querySelector("#local-vault-conflicts").hidden = false;
+        });
         assert.equal(await create.isDisabled(), true);
+        await page.locator(`${menu} [data-workspace-target="workspace-overview"]`).click();
+        await overviewCreate.click();
+        assert.equal(await page.locator("#local-vault-conflicts-title").evaluate(node => node === document.activeElement), true);
+        assert.equal(await editor.isHidden(), true);
         await page.evaluate(() => window.syntheticVault.clearConflictUI());
         assert.equal(await create.isEnabled(), true);
 
