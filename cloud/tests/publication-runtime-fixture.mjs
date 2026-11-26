@@ -1,6 +1,10 @@
 // Only synthetic HTTP test databases use this explicit positive evidence. Never
 // call this from startup/operator code: real activation writes its own journal.
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {request as forwardHTTP} from 'node:http';
+import {createServer as createHTTPS, request as requestHTTPS} from 'node:https';
+import {createServer} from 'node:net';
+import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
@@ -55,7 +59,7 @@ export async function dropDisposablePublicationDatabase(admin, name, {delay=ms=>
   }
 }
 
-export async function isolatedPublicationDatabase(databaseURL) {
+export async function isolatedPublicationDatabase(databaseURL, { migrationsDirectory } = {}) {
   const base=new URL(databaseURL);
   if(!['127.0.0.1','localhost','[::1]'].includes(base.hostname)||!base.pathname.endsWith('_test'))throw Error('disposable_test_database_required');
   const name=`prc_http_${process.pid}_${randomUUID().replaceAll('-','')}_test`;
@@ -66,7 +70,58 @@ export async function isolatedPublicationDatabase(databaseURL) {
     pool=new pg.Pool({connectionString:base.href});
     const {applyMigrations}=await import('../src/migrations.mjs');
     const {fileURLToPath}=await import('node:url');
-    await applyMigrations(pool,fileURLToPath(new URL('../migrations/',import.meta.url)),{info(){}});
+    await applyMigrations(pool,migrationsDirectory??fileURLToPath(new URL('../migrations/',import.meta.url)),{info(){}});
     return {pool,databaseURL:base.href,cleanup};
   }catch(error){await cleanup();throw error;}
+}
+
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return server.address().port;
+}
+
+async function close(server) {
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+}
+
+function localHTTPS(url, ca, request = {}) {
+  return new Promise((resolve, reject) => {
+    const outgoing = requestHTTPS(url, { method: request.method, headers: request.headers, ca, rejectUnauthorized:true }, incoming => {
+      const chunks = [];
+      incoming.on("data", chunk => chunks.push(chunk));
+      incoming.on("error", reject);
+      incoming.on("end", () => resolve(new Response(chunks.length ? Buffer.concat(chunks) : null, {
+        status: incoming.statusCode, headers: incoming.headers,
+      })));
+    });
+    outgoing.on("error", reject);
+    outgoing.setTimeout(5000, () => outgoing.destroy(new Error("pilot_fixture_https_timeout")));
+    outgoing.end(request.body);
+  });
+}
+
+export async function loopbackHTTPSProxy(directory) {
+  const keyPath = join(directory, "server.key"), certPath = join(directory, "server.crt");
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", keyPath, "-out", certPath],
+  { stdio: "ignore" });
+  const [key, cert] = await Promise.all([readFile(keyPath), readFile(certPath)]);
+  const socket = createServer();
+  const cloudPort = await listen(socket);
+  await close(socket);
+  const proxy = createHTTPS({ key, cert }, (incoming, response) => {
+    const internal = forwardHTTP({ hostname: "127.0.0.1", port: cloudPort, path: incoming.url,
+      method: incoming.method, headers: incoming.headers }, upstream => {
+      response.writeHead(upstream.statusCode, upstream.headers);
+      upstream.pipe(response);
+    });
+    internal.on("error", () => response.writeHead(502).end());
+    incoming.pipe(internal);
+  });
+  const origin = `https://127.0.0.1:${await listen(proxy)}`;
+  const fetchValue = (path, options) => localHTTPS(origin + path, cert, options);
+  return {origin, cloudPort, fetchValue, close: () => close(proxy)};
 }

@@ -2,7 +2,7 @@ import {open, mkdir, rmdir, lstat, rename} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {dirname, isAbsolute} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {FENCE_MAX_BYTES,validateFenceEvent,reduceFenceEvents} from './migration-fence-journal.mjs';
+import {FENCE_MAX_BYTES,validateFenceEvent,reduceFenceEvents,productionPilotOpened,productionPilotClosed} from './migration-fence-journal.mjs';
 import {fenceHistoryHead,sameFenceHistoryHead} from './fence-history-head.mjs';
 
 // Bound replay BEFORE parsing archives. This is a fail-closed operational cap,
@@ -81,7 +81,8 @@ export class MigrationFence{
    file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
    const {records:events,budget}=await this.records(file,{withBudget:true}),state=reduceFenceEvents(events);
    await this.assertAnchor(events);
-   if(state.pending.length||state.v1Pending?.length)throw Error('deployment_fence_pending');
+   if(state.pending.length||state.v1Pending?.length||state.v1TeamAuthorization?.pending)
+    throw Error('deployment_fence_pending');
    await file.sync();
    await file.close();file=await this.openFile(this.path,constants.O_RDONLY|constants.O_NOFOLLOW);
    const {bytes,parsed}=await this.#segment(file);
@@ -126,7 +127,9 @@ export class MigrationFence{
  async append(event){
   const validated=validateFenceEvent(event);
   if(validated.version!==2)throw Error('invalid_deployment_fence');
-  if(validated.type==='V1_WRITER_FLOOR'&&!this.anchor)throw Error('deployment_anchor_required');
+  if((validated.type==='V1_WRITER_FLOOR'||validated.type.startsWith('V1_TEAM_AUTHORIZATION_')
+    ||validated.type===productionPilotOpened||validated.type===productionPilotClosed)&&!this.anchor)
+   throw Error('deployment_anchor_required');
   return this.#enqueue(()=>this.#writeRecord(validated));
  }
  #enqueue(work){
@@ -143,7 +146,8 @@ export class MigrationFence{
    const before=await file.stat(),records=await this.records(file);
    await this.assertAnchor(records);
    const snapshot=reduceFenceEvents(records);
-   if(snapshot.pending.length||snapshot.v1Pending?.length)throw Error('deployment_fence_pending');
+   if(snapshot.pending.length||snapshot.v1Pending?.length||snapshot.v1TeamAuthorization?.pending)
+    throw Error('deployment_fence_pending');
    await file.sync();
    const dir=await this.openFile(directory,constants.O_RDONLY|constants.O_NOFOLLOW);
    try{await dir.sync();}finally{await dir.close();}
@@ -186,11 +190,22 @@ export class MigrationFence{
    }
    if(!records.some(r=>JSON.stringify(r)===key)){
     const snapshot=reduceFenceEvents([...records,record]);
+    if(record.type==='V1_PENDING_INTENT'&&record.pilotID&&snapshot.personalWritePilot?.type===productionPilotOpened){
+     const now=Date.now();
+     if(now<snapshot.personalWritePilot.issuedAt||now>=snapshot.personalWritePilot.expiresAt)
+      throw Error('vault_write_temporarily_unavailable');
+    }
     const line=Buffer.from(key+'\n'),size=(await file.stat()).size;
     if(size+line.length>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
     if(budget.bytes+line.length>FENCE_MAX_REPLAY_BYTES||budget.records+1>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
-    if(!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'
-      ||record.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||record.type==='V1_SESSION_REVOKED'
+    const teamPending=snapshot.v1TeamAuthorization?.pending;
+    // Leave room to close even if unrelated registered users fill the journal.
+    const closeReservation=snapshot.personalWritePilot?.type===productionPilotOpened
+     ? Buffer.byteLength(JSON.stringify({version:2,type:productionPilotClosed,pilotID:snapshot.personalWritePilot.pilotID})+'\n') : 0;
+    const atomicAccountDeletion=(snapshot.v1Pending??[]).some(intent=>intent.type==='V1_ACCOUNT_DELETION_PENDING_INTENT');
+    if(closeReservation||record.type===productionPilotClosed||teamPending||!record.version||record.type==='PENDING_INTENT'||record.type==='V1_PENDING_INTENT'
+      ||record.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||record.type==='V1_ACCOUNT_DELETION_PENDING_INTENT'
+      ||record.type==='V1_SESSION_REVOKED'
       ||record.type==='V1_DEVICE_REVOKED'||record.type==='V1_ACCOUNT_REVOKED'
       ||record.type==='V1_PASSWORD_RESET_ISSUED'||record.type==='V1_PASSWORD_RESET_COMPLETED'
       ||record.type==='V1_PERSONAL_PILOT_CLOSED'){
@@ -200,10 +215,13 @@ export class MigrationFence{
       version:2,type:'CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
      })+'\n'),0)+(snapshot.v1Pending??[]).reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({
       version:2,type:'V1_CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
-     })+'\n'),0);
-     if(size+line.length+reserved>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
-     const terminalCount=snapshot.pending.length+(snapshot.v1Pending??[]).length;
-     if(budget.bytes+line.length+reserved>FENCE_MAX_REPLAY_BYTES||budget.records+1+terminalCount>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
+     })+'\n'),0)+(teamPending&&!atomicAccountDeletion?Buffer.byteLength(JSON.stringify({
+      version:2,type:'V1_TEAM_AUTHORIZATION_CONFIRMED',intentID:teamPending.intentID,intentDigest:teamPending.intentDigest,
+     })+'\n'):0);
+     if(size+line.length+reserved+closeReservation>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
+     const terminalCount=snapshot.pending.length+(snapshot.v1Pending??[]).length+(teamPending&&!atomicAccountDeletion?1:0);
+     if(budget.bytes+line.length+reserved+closeReservation>FENCE_MAX_REPLAY_BYTES
+       ||budget.records+1+terminalCount+Number(closeReservation>0)>FENCE_MAX_REPLAY_RECORDS)throw Error('deployment_fence_history_limit');
     }
     // A failed write or barrier leaves the lock. Only this instance's exact
     // replay can re-confirm durability; restart requires deliberate recovery.
@@ -253,7 +271,8 @@ export class MigrationFence{
  async verifySchemaFloor(schemaVersion){return verifySchemaFloor(schemaVersion,await this.snapshot());}
  async verify({schemaVersion,publications}){
   const snapshot=await this.snapshot();verifySchemaFloor(schemaVersion,snapshot);
-  if(snapshot.pending.length||snapshot.v1Pending?.length)throw Error('deployment_fence_pending');
+  if(snapshot.pending.length||snapshot.v1Pending?.length||snapshot.v1TeamAuthorization?.pending)
+   throw Error('deployment_fence_pending');
   if(!Array.isArray(publications))throw Error('deployment_fence_mismatch');
   for(const r of snapshot.committed){
    const fields=r.sequence===undefined?['teamID','vaultID','attemptID','manifestHash']:['teamID','vaultID','generationID','sequence','headerHash','manifestHash'];

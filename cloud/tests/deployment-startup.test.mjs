@@ -6,11 +6,13 @@ const source=await readFile(new URL('../src/server.mjs',import.meta.url),'utf8')
 // Execute the actual startup function; transport seams cannot bind a socket or
 // send mail. Real process/request coverage is in vault-publication-store tests.
 const startup=source.slice(source.indexOf('async function start()'),source.indexOf('\nlet outboxPumpRunning'));
-function scenario({initiallyBlocked=false,blockDuringSMTP=false}={}){
+function scenario({initiallyBlocked=false,blockDuringSMTP=false,teamAcceptance=null,matchingAccounts=true}={}){
   const events=[];let blocked=initiallyBlocked;
   const start=vm.runInNewContext(`(${startup})`,{
     checkDeployment:async()=>{events.push('check');if(blocked)throw Error('deployment_fence_pending');},
     config:{allowRegistration:true,port:8080,host:'127.0.0.1'},
+    teamAcceptance, isolatedTeamWindowOpen:()=>true,
+    verifyIsolatedTeamAccounts:async()=>{events.push('accounts');if(!matchingAccounts)throw Error('invalid_isolated_team_accounts');},
     mailer:{verifyConnection:async()=>{events.push('smtp');await Promise.resolve();if(blockDuringSMTP)blocked=true;}},
     server:{listen:()=>events.push('listen')},scheduleOutboxPump:()=>events.push('pump'),
     store:{close:async()=>events.push('close')},process:{exit:()=>{throw Error('exit');}},console:{error(){},log(){}},
@@ -27,4 +29,9 @@ test('fence change during awaited SMTP verification prevents listen and pump',as
 });
 test('compatible startup verifies again after SMTP and then binds',async()=>{
   const s=scenario();await s.start();assert.deepEqual(s.events,['check','smtp','check','listen','pump']);
+});
+test('an isolated Team fixture with other accounts fails before listening',async()=>{
+  const s=scenario({teamAcceptance:{},matchingAccounts:false});
+  await assert.rejects(s.start(),/invalid_isolated_team_accounts/);
+  assert.deepEqual(s.events,['check','accounts']);
 });

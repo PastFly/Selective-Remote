@@ -14,16 +14,22 @@ import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
 import { createConfiguredMigrationFence } from './configured-migration-fence.mjs';
-import { createDeploymentGuard, currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
+import { createDeploymentGuard, currentCapabilities, supportsTeamAuthorizationRuntime, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 import { browserSessionBinding } from './browser-session-binding.mjs';
+import { isolatedTeamAcceptance, isolatedTeamWindowOpen, isolatedTeamRouteAllowed, verifyIsolatedTeamAccounts } from './isolated-team-acceptance.mjs';
+import { v1TeamRouteAllowed } from './v1-team-routes.mjs';
 import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write,
   personalVaultPilotHeader, personalVaultPilotValue, isPrivatePersonalPilotEnvironment, personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 
 const config = loadConfig();
+const teamAcceptance = isolatedTeamAcceptance(config, process.argv.slice(2), process.env);
 const privatePersonalPilotEnvironment = isPrivatePersonalPilotEnvironment(config);
 const configuredFence = createConfiguredMigrationFence(config.deployment);
 const deploymentFence = configuredFence.fence;
-const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence });
+const retainTeamAuthorization = Boolean(deploymentFence?.anchor)
+  && supportsTeamAuthorizationRuntime(config, currentCapabilities)
+  && (await deploymentFence.snapshot()).v1TeamAuthorization?.protocol === currentCapabilities.v1TeamAuthorizationProtocol;
+const store = new PostgresStore(config.databaseURL, null, { v1Fence: deploymentFence, retainTeamAuthorization });
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
   publication: Object.freeze({ ...config.publication, fence: deploymentFence }),
@@ -32,9 +38,10 @@ const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
 const service = new CloudService(store, runtimeConfig, mailer);
 const checkDeployment = deploymentFence
   ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
-    fence: deploymentFence, candidate: currentCapabilities }))
+    fence: deploymentFence, candidate: currentCapabilities, teamAuthorizationEnabled: retainTeamAuthorization,
+    productionTeamEnabled: config.productionTeamEnabled }))
   : async () => { throw Error('deployment_fence_required'); };
-const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
+const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool, { v1Fence: deploymentFence, retainTeamAuthorization }),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
@@ -66,7 +73,8 @@ async function route(request, response) {
   let deploymentEvidence;
   try { deploymentEvidence = await checkDeployment(); }
   catch { return sendError(response, 503, "publication_guard_unavailable"); }
-  const pilot = privatePersonalPilotEnvironment && personalWritePilotIsCurrent(deploymentEvidence.personalWritePilot)
+  const pilot = privatePersonalPilotEnvironment && deploymentEvidence.personalWritePilot?.type === 'V1_PERSONAL_PILOT_OPENED'
+    && personalWritePilotIsCurrent(deploymentEvidence.personalWritePilot)
     ? deploymentEvidence.personalWritePilot : null;
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
@@ -74,7 +82,10 @@ async function route(request, response) {
   }
   if (method === "GET" && url.pathname === "/v1/meta") {
     if (deploymentEvidence?.writerFloor === 1) response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
-    response.setHeader("X-Selective-V1-Write-Status", v1WriteStopReason);
+    // Released native clients query public metadata without credentials. The
+    // actual write always checks the authenticated account and the Vault ACL.
+    if (!deploymentEvidence.productionTeamEnabled && !isolatedTeamWindowOpen(teamAcceptance, deploymentEvidence))
+      response.setHeader("X-Selective-V1-Write-Status", v1WriteStopReason);
     if (pilot) response.setHeader(personalVaultPilotHeader, personalVaultPilotValue);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
@@ -153,16 +164,15 @@ async function route(request, response) {
     }
     // The retained pilot permits only the selected Personal owner in private staging.
     const personalPilotAllowed = pilot?.ownerID === session.user_id;
+    const teamRouteAllowed = (deploymentEvidence.productionTeamEnabled === true && v1TeamRouteAllowed(method, url.pathname, true))
+      || isolatedTeamRouteAllowed(teamAcceptance, deploymentEvidence, session.user_id, method, url.pathname);
     if (v1WriteRequiresFence(method, url.pathname)
-      && (url.pathname !== "/v1/vault" || !personalPilotAllowed)) {
+      && !(url.pathname === "/v1/vault" ? personalPilotAllowed : teamRouteAllowed)) {
       return sendError(response, 503, v1WriteStopReason);
     }
-    // Team membership, roles and device trust are not yet included in the
-    // anchored history. A restored database can otherwise resurrect access.
-    // Keep Team traffic and trust mutations closed until a durable security
-    // baseline and every transition are protected by the independent fence.
-    if (/^\/v1\/(?:teams|team-invitations)(?:\/|$)/i.test(url.pathname)
-      || (!['GET','HEAD'].includes(method) && /^\/v1\/(?:devices|device-trust)(?:\/|$)/i.test(url.pathname))) {
+    // Deny unpublished surfaces before dispatch, even for a valid session.
+    if (!teamRouteAllowed && (/^\/v1\/(?:teams|team-invitations)(?:\/|$)/i.test(url.pathname)
+      || (!['GET','HEAD'].includes(method) && /^\/v1\/(?:devices|device-trust)(?:\/|$)/i.test(url.pathname)))) {
       return sendError(response, 503, "team_security_temporarily_unavailable");
     }
     if (method === "GET" && url.pathname === "/v1/me") {
@@ -538,10 +548,14 @@ async function route(request, response) {
         response,
         async () => {
           await authRateLimiter.require("team_invitation_create_user", session.user_id);
+          const input = await readJSON(request, maxTeamBodyBytes);
+          // Only direct invitations to an existing fixture account are in scope.
+          if (teamAcceptance && (typeof input?.username !== "string" || input.email !== undefined
+              || (input.type !== undefined && input.type !== "username"))) throw Error("invalid_team_invitation");
           return service.createTeamInvitation(
             session,
             teamInvitationsMatch[1],
-            await readJSON(request, maxTeamBodyBytes),
+            input,
             idempotencyKey(request),
           );
         },
@@ -948,7 +962,11 @@ function sendError(response, status, code) { sendJSON(response, status, { error:
 function empty(response, status) { response.writeHead(status); response.end(); }
 
 async function start() {
-  await checkDeployment();
+  const evidence = await checkDeployment();
+  if (teamAcceptance) {
+    if (!isolatedTeamWindowOpen(teamAcceptance, evidence)) throw Error('isolated_team_history_unavailable');
+    await verifyIsolatedTeamAccounts(teamAcceptance, (sql) => store.pool.query(sql));
+  }
   if (config.allowRegistration) {
     try {
       await mailer.verifyConnection();

@@ -100,6 +100,7 @@ const operationStatuses = Object.freeze({
   account_not_found: 404,
   account_email_mismatch: 409,
   account_owns_teams: 409,
+  account_team_keys_need_rotation: 409,
   team_name_mismatch: 409,
   shared_vault_exists: 409,
   shared_vault_wrapper_exists: 409,

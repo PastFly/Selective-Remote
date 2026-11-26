@@ -2,7 +2,7 @@ import { VaultMigrationStore } from './vault-migration-store.mjs';
 import { VaultPublicationStore } from './vault-publication-store.mjs';
 import { WholePublicationStore } from './whole-publication-store.mjs';
 import { holdV1CommitFence } from './v1-commit-fence.mjs';
-import { createPublicationFenceTransaction } from './publication-fence-coordinator.mjs';
+import { createPublicationFenceTransaction, createTeamAuthorizationTransaction } from './publication-fence-coordinator.mjs';
 import { assertV1DataFloor, readV1VaultState, v1CiphertextHash } from './v1-data-fence.mjs';
 import { personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 import pg from "pg";
@@ -79,6 +79,30 @@ async function retainWrapperChanges(fenced,client,snapshot,teamID,vaultIDs){
     return {...current,beforeEnvelopeHash:old.envelopeHash};
   });
   await fenced.beforeCommit({kind:'V1_WRAPPER_BATCH',operationID:randomUUID(),changes});
+}
+
+async function accountDeletionChanges(query, history, userID) {
+  const remaining = new Map((await readV1VaultState(query))
+    .map(row => [row.vaultKind + ":" + row.vaultID, row]));
+  let vault = null;
+  const changes = [];
+  for (const previous of history.v1Committed) {
+    const key = previous.vaultKind + ":" + previous.vaultID;
+    const current = remaining.get(key);
+    if (previous.vaultKind === "PERSONAL" && previous.ownerID === userID) {
+      if (vault || current) throw new Error("deployment_v1_data_mismatch");
+      vault = previous;
+      continue;
+    }
+    if (!current || current.ownerID !== previous.ownerID || current.revision !== previous.revision
+        || current.ciphertextHash !== previous.ciphertextHash) throw new Error("deployment_v1_data_mismatch");
+    remaining.delete(key);
+    if (current.envelopeHash === previous.envelopeHash) continue;
+    if (current.vaultKind !== "TEAM") throw new Error("deployment_v1_data_mismatch");
+    changes.push({ ...current, beforeEnvelopeHash: previous.envelopeHash });
+  }
+  if (remaining.size) throw new Error("deployment_v1_data_mismatch");
+  return { userID, vault, changes };
 }
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -164,16 +188,23 @@ async function finishResourceMutation(client, receipt, { teamID, vaultID }, resu
 }
 
 export class PostgresStore {
-  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null } = {}) {
+  constructor(databaseURL, pool = null, { writerFence = holdV1CommitFence, v1Fence = null, retainTeamAuthorization = false } = {}) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
     if (!pool) {
       this.pool.on("error", () => {
         console.error(JSON.stringify({ level: "error", message: "Idle Cloud database connection lost" }));
       });
     }
-    this.access = new AccessSurfaceStore(this.pool);
+    this.access = new AccessSurfaceStore(this.pool, { v1Fence, retainTeamAuthorization });
     this.writerFence = writerFence;
     this.v1Fence = v1Fence;
+    this.retainTeamAuthorization = retainTeamAuthorization;
+  }
+
+  teamAuthorizationTransaction(client, retainVaultOutcome = false) {
+    return createTeamAuthorizationTransaction({
+      client, fence: this.v1Fence, retainVaultOutcome, retainTeamAuthorization: this.retainTeamAuthorization,
+    });
   }
 
   migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
@@ -226,14 +257,15 @@ export class PostgresStore {
     resourceID, policyClass, parentFolderID = null, idempotencyKey, _retryAttempt = 0 }) {
     requireResourceIdentityInput({ resourceID, policyClass, parentFolderID });
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
       const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
         operation: "create_identity", payload: { actorUserID, actorDeviceID,
           resourceID, policyClass, parentFolderID } });
       if (receipt?.replay) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return receipt.replay;
       }
       const result = await client.query(
@@ -245,10 +277,10 @@ export class PostgresStore {
         [resourceID, teamID, vaultID, policyClass, parentFolderID],
       );
       const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
-      await client.query("COMMIT");
+      await transaction.commit();
       return stable;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
         return this.registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
           resourceID, policyClass, parentFolderID, idempotencyKey,
@@ -256,13 +288,14 @@ export class PostgresStore {
       }
       if (error?.code === "23505" || ["resource_id_collision","tombstoned_resource_identity"].includes(error?.message)) throw new Error("resource_id_exists");
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   async getResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID }) {
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
       const result = await client.query(
         `SELECT id, team_id, vault_id, policy_class, parent_folder_id,
@@ -272,12 +305,12 @@ export class PostgresStore {
         [teamID, vaultID, resourceID],
       );
       if (!result.rows[0]) throw new Error("resource_not_found");
-      await client.query("COMMIT");
+      await transaction.commit();
       return result.rows[0];
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   async moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID,
@@ -289,14 +322,15 @@ export class PostgresStore {
       throw new Error("invalid_resource_version");
     }
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
       const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
         operation: "move_identity", payload: { actorUserID, actorDeviceID,
           resourceID, parentFolderID, expectedVersion } });
       if (receipt?.replay) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return receipt.replay;
       }
       const result = await client.query(
@@ -310,17 +344,17 @@ export class PostgresStore {
       );
       if (!result.rows[0]) throw new Error("resource_version_conflict");
       const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
-      await client.query("COMMIT");
+      await transaction.commit();
       return stable;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
         return this.moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
           resourceID, parentFolderID, expectedVersion, idempotencyKey,
           _retryAttempt: _retryAttempt + 1 });
       }
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   async tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
@@ -329,14 +363,15 @@ export class PostgresStore {
       throw new Error("invalid_resource_version");
     }
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
       const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
         operation: "tombstone_identity", payload: { actorUserID, actorDeviceID,
           resourceID, expectedVersion } });
       if (receipt?.replay) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return receipt.replay;
       }
       const result = await client.query(
@@ -350,17 +385,17 @@ export class PostgresStore {
       );
       if (!result.rows[0]) throw new Error("resource_version_conflict");
       const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
-      await client.query("COMMIT");
+      await transaction.commit();
       return stable;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
         return this.tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
           resourceID, expectedVersion, idempotencyKey,
           _retryAttempt: _retryAttempt + 1 });
       }
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   // Dormant internal primitive: no HTTP route calls this method. Publication is one transaction.
@@ -386,14 +421,15 @@ export class PostgresStore {
       seen.add(identity);
     }
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
       const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
         operation: "publish_crypto", payload: { actorUserID, actorDeviceID,
           resourceID, expectedManifestVersion, ciphertext, wrappers } });
       if (receipt?.replay) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return receipt.replay;
       }
       const resource = await client.query(
@@ -491,17 +527,17 @@ export class PostgresStore {
         );
       }
       const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, pointer.rows[0]);
-      await client.query("COMMIT");
+      await transaction.commit();
       return stable;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
         return this.publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
           resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey,
           _retryAttempt: _retryAttempt + 1 });
       }
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   // Internal cleanup after recipient revocation; current admitted devices retain coverage.
@@ -516,14 +552,15 @@ export class PostgresStore {
       throw new Error("invalid_resource_v2_wrapper_revoke");
     }
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
       const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
         operation: "revoke_wrapper", payload: { actorUserID, actorDeviceID, resourceID,
           part, keyVersion, membershipID, membershipEpoch, deviceID, expectedManifestVersion } });
       if (receipt?.replay) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return receipt.replay;
       }
       const resource = await client.query(
@@ -553,24 +590,32 @@ export class PostgresStore {
       if (!revoked.rows[0]) throw new Error("resource_wrapper_not_found");
       const stable = await finishResourceMutation(client, receipt, { teamID, vaultID },
         revoked.rows[0]);
-      await client.query("COMMIT");
+      await transaction.commit();
       return stable;
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
         return this.revokeResourceWrapper({ actorUserID, actorDeviceID, teamID, vaultID,
           resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID,
           expectedManifestVersion, idempotencyKey, _retryAttempt: _retryAttempt + 1 });
       }
       throw error;
-    } finally { client.release(); }
+    } finally { await transaction.release(); }
   }
 
   async deleteAccount(userID, _retryAttempt = 0) {
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client, this.retainTeamAuthorization);
+    const query = (sql, values) => client.query(sql, values);
     let retry = false;
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
+      let history;
+      if (transaction.publication) {
+        await this.writerFence(client, this.v1Fence);
+        history = await this.retainedAuthorization();
+        await assertV1DataFloor(query, history);
+      }
       const user = await client.query(
         "SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL FOR UPDATE",
         [userID],
@@ -585,9 +630,10 @@ export class PostgresStore {
       );
       if (ownerships.rows[0]) throw new Error("account_owns_teams");
       const memberships = await client.query(
-        `SELECT member.id, member.team_id, member.role, member.epoch
+        `SELECT member.id, member.team_id, member.role, member.epoch,
+                team.archived_at IS NOT NULL AS team_archived
          FROM team_memberships AS member
-         JOIN teams AS team ON team.id = member.team_id AND team.archived_at IS NULL
+         JOIN teams AS team ON team.id = member.team_id
          WHERE member.user_id = $1 AND member.revoked_at IS NULL
          ORDER BY member.team_id, member.id FOR UPDATE`,
         [userID],
@@ -598,6 +644,7 @@ export class PostgresStore {
            WHERE id = $1 AND revoked_at IS NULL`,
           [membership.id],
         );
+        if (membership.team_archived) continue;
         const affected = await client.query(
           `WITH affected AS (
              UPDATE shared_vaults SET rotation_required = true, updated_at = now()
@@ -620,23 +667,83 @@ export class PostgresStore {
           metadata: { role: membership.role, epoch: Number(membership.epoch), affectedVaults: affected.rowCount },
         });
       }
+      await client.query(
+        `UPDATE vault_access_grants SET revoked_at = now(), updated_at = now(), version = version + 1
+         WHERE principal_kind = 'USER' AND principal_id = $1 AND revoked_at IS NULL`,
+        [userID],
+      );
+      // Retire current resource recipients before the device FK cascades.
+      // Lock the affected pointers and retain at least one usable recipient.
+      const orphaned = await client.query(
+        `WITH affected AS MATERIALIZED (
+           SELECT pointer.*
+           FROM vault_resource_manifest_pointers_v2 AS pointer
+           JOIN shared_vaults AS vault ON vault.id = pointer.vault_id AND vault.team_id = pointer.team_id
+           WHERE vault.format_state = 'V2_PREPARING' AND vault.archived_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM vault_resource_key_wrappers_v2 AS wrapper
+               JOIN devices AS device ON device.id = wrapper.device_id AND device.user_id = $1
+               WHERE (wrapper.team_id, wrapper.vault_id, wrapper.resource_id, wrapper.part, wrapper.key_version) =
+                 (pointer.team_id, pointer.vault_id, pointer.resource_id, pointer.part, pointer.key_version)
+                 AND wrapper.obsolete_at IS NULL
+             )
+           ORDER BY pointer.team_id, pointer.vault_id, pointer.resource_id, pointer.part
+           FOR UPDATE OF vault, pointer
+         )
+         SELECT 1 FROM affected AS pointer WHERE NOT EXISTS (
+           SELECT 1 FROM vault_resource_key_wrappers_v2 AS wrapper
+           JOIN team_memberships AS member ON member.id = wrapper.membership_id
+             AND member.team_id = wrapper.team_id AND member.epoch = wrapper.membership_epoch
+             AND member.revoked_at IS NULL
+           JOIN devices AS device ON device.id = wrapper.device_id AND device.user_id = member.user_id
+             AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
+             AND device.public_key_algorithm = 'p256-ecdh-v1'
+           JOIN users AS recipient ON recipient.id = device.user_id AND recipient.id <> $1
+             AND recipient.disabled_at IS NULL AND recipient.email_verified_at IS NOT NULL
+           JOIN team_membership_device_admissions AS admission ON admission.membership_id = member.id
+             AND admission.membership_epoch = member.epoch AND admission.device_id = device.id
+           WHERE (wrapper.team_id, wrapper.vault_id, wrapper.resource_id, wrapper.part, wrapper.key_version) =
+             (pointer.team_id, pointer.vault_id, pointer.resource_id, pointer.part, pointer.key_version)
+             AND wrapper.obsolete_at IS NULL
+           FOR SHARE OF member, device, recipient, admission
+         ) LIMIT 1`,
+        [userID],
+      );
+      if (orphaned.rows.length) throw new Error("account_team_keys_need_rotation");
+      await client.query(
+        `UPDATE vault_resource_key_wrappers_v2 AS wrapper SET obsolete_at = now()
+         FROM devices AS device, shared_vaults AS vault
+         WHERE device.user_id = $1 AND wrapper.device_id = device.id AND wrapper.obsolete_at IS NULL
+           AND vault.id = wrapper.vault_id AND vault.team_id = wrapper.team_id
+           AND vault.format_state = 'V2_PREPARING' AND vault.archived_at IS NULL
+           AND EXISTS (SELECT 1 FROM vault_resource_manifest_pointers_v2 AS pointer
+             WHERE (pointer.team_id, pointer.vault_id, pointer.resource_id, pointer.part, pointer.key_version) =
+               (wrapper.team_id, wrapper.vault_id, wrapper.resource_id, wrapper.part, wrapper.key_version))`,
+        [userID],
+      );
       const removed = await client.query("DELETE FROM users WHERE id = $1 RETURNING id", [userID]);
       if (!removed.rows[0]) throw new Error("account_not_found");
-      const history = await this.retainedAuthorization();
-      if (history?.writerFloor === 1) {
+      const accountDeletion = transaction.publication ? await accountDeletionChanges(query, history, userID) : undefined;
+      if (!accountDeletion && (await this.retainedAuthorization())?.writerFloor === 1) {
         await this.v1Fence.append({ version: 2, type: "V1_ACCOUNT_REVOKED", userID });
       }
-      await client.query("COMMIT");
+      await transaction.commit({ accountDeletion });
       return { deleted: true };
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
         // Deletion, membership revocation, rotation tasks and audit all rolled back.
         // Retry only the same authenticated identity; never broaden this operation.
         retry = true;
-      } else throw error;
+      } else {
+        if (error?.code === "P0001" && ["resource_v2_last_published_wrapper",
+          "resource_v2_published_wrapper_delete_forbidden"].includes(error.message)) {
+          throw new Error("account_team_keys_need_rotation");
+        }
+        throw error;
+      }
     } finally {
-      client.release();
+      await transaction.release();
     }
     if (retry) {
       await new Promise(resolve => setTimeout(resolve, 20 * (_retryAttempt + 1)));
@@ -646,9 +753,10 @@ export class PostgresStore {
 
   async createUser({ email, username, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
-    const fenced = this.v1Fence ? createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}) : null;
+    const transaction = this.teamAuthorizationTransaction(client, true);
+    const fenced = transaction.publication;
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       if (fenced) {
         await this.writerFence(client,this.v1Fence);
         const snapshot = await this.v1Fence.snapshot();
@@ -690,11 +798,10 @@ export class PostgresStore {
         [user.id, verificationHash, verificationExpiresAt],
       );
       if (fenced) await retainEmptyVaultCreation(fenced,client,'PERSONAL',user.id,vault.rows[0].id);
-      if (fenced) { await fenced.commit(); await fenced.confirm(); }
-      else await client.query("COMMIT");
+      await transaction.commit();
       return user;
     } catch (error) {
-      try { if (fenced) await fenced.rollback(); else await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       if (error?.code === "23505" && error?.constraint === "users_username_unique") {
         throw new Error("username_exists");
       }
@@ -706,7 +813,7 @@ export class PostgresStore {
       }
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -747,16 +854,23 @@ export class PostgresStore {
   }
 
   async updateUsername(userID, username) {
+    const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      const result = await this.pool.query(
+      await transaction.begin();
+      const result = await client.query(
         "UPDATE users SET username = $2, updated_at = now() WHERE id = $1 AND disabled_at IS NULL RETURNING username",
         [userID, username],
       );
       if (!result.rows[0]) throw new Error("account_not_found");
+      await transaction.commit();
       return result.rows[0].username;
     } catch (error) {
+      try { await transaction.rollback(); } catch {}
       if (error?.code === "23505" && error?.constraint === "users_username_unique") throw new Error("username_exists");
       throw error;
+    } finally {
+      await transaction.release();
     }
   }
 
@@ -826,8 +940,9 @@ export class PostgresStore {
 
   async consumeEmailVerificationToken(tokenHash) {
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       const token = await client.query(
         `UPDATE email_verification_tokens AS token SET consumed_at = now()
          FROM users AS owner
@@ -841,7 +956,7 @@ export class PostgresStore {
         [tokenHash],
       );
       if (!token.rows[0]) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return null;
       }
       const user = await client.query(
@@ -850,13 +965,13 @@ export class PostgresStore {
          RETURNING id, email, display_name, email_verified_at, created_at`,
         [token.rows[0].user_id],
       );
-      await client.query("COMMIT");
+      await transaction.commit();
       return user.rows[0] ?? null;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -1027,8 +1142,9 @@ export class PostgresStore {
 
   async createSession({ userID, verifiedPasswordHash, device, sessionHash, expiresAt }) {
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       // Password verification happens before this transaction. Hold the
       // identity lock through session insertion so a concurrent reset either
       // invalidates this login or subsequently revokes the new session.
@@ -1116,12 +1232,12 @@ export class PostgresStore {
         [userID, device.id, sessionHash, expiresAt],
       );
       await client.query("UPDATE account_identities SET last_used_at = now() WHERE user_id = $1 AND provider = 'password'", [userID]);
-      await client.query("COMMIT");
+      await transaction.commit();
     } catch (error) {
-      await client.query("ROLLBACK");
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -1189,8 +1305,9 @@ export class PostgresStore {
 
   async revokeDevice(userID, deviceID, actorDeviceID = null) {
     const client = await this.pool.connect();
+    const transaction = this.teamAuthorizationTransaction(client);
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       if (actorDeviceID !== null) {
         const actor = await client.query(
           `SELECT id FROM devices
@@ -1209,7 +1326,7 @@ export class PostgresStore {
         [userID, deviceID],
       );
       if (!result.rows[0]) {
-        await client.query("COMMIT");
+        await transaction.commit();
         return false;
       }
       await client.query(
@@ -1241,13 +1358,13 @@ export class PostgresStore {
       if (history?.writerFloor === 1) {
         await this.v1Fence.append({ version: 2, type: "V1_DEVICE_REVOKED", deviceID });
       }
-      await client.query("COMMIT");
+      await transaction.commit();
       return true;
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 
@@ -2826,11 +2943,12 @@ export class PostgresStore {
   }
 
   async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
+    const retainVaultOutcome = ['team.vault.put','team.vault.create','team.vault.wrapper.grant','team.invitation.accept'].includes(operation);
     const client = await this.pool.connect();
-    const fenced=['team.vault.put','team.vault.create','team.vault.wrapper.grant','team.invitation.accept'].includes(operation)&&this.v1Fence
-      ?createPublicationFenceTransaction({query:(sql,values)=>client.query(sql,values),fence:this.v1Fence}):null;
+    const transaction = this.teamAuthorizationTransaction(client, retainVaultOutcome);
+    const fenced = transaction.publication;
     try {
-      await client.query("BEGIN");
+      await transaction.begin();
       let snapshot=null;
       if(fenced){
         await this.writerFence(client, this.v1Fence);
@@ -2851,7 +2969,7 @@ export class PostgresStore {
            WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
           [actorUserID, operation, idempotencyKey],
         );
-        await client.query("COMMIT");
+        await transaction.commit();
         return replay.rows[0]?.response ?? {};
       }
       const response = await mutation(client,fenced,snapshot);
@@ -2860,13 +2978,13 @@ export class PostgresStore {
          WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
         [actorUserID, operation, idempotencyKey, JSON.stringify(response)],
       );
-      if(fenced){await fenced.commit();await fenced.confirm();}else await client.query("COMMIT");
+      await transaction.commit();
       return response;
     } catch (error) {
-      try { if(fenced)await fenced.rollback();else await client.query("ROLLBACK"); } catch {}
+      try { await transaction.rollback(); } catch {}
       throw error;
     } finally {
-      client.release();
+      await transaction.release();
     }
   }
 }

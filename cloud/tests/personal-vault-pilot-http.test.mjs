@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { request as forwardHTTP } from "node:http";
-import { createServer as createHTTPS, request as requestHTTPS } from "node:https";
-import { createServer } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -17,7 +14,7 @@ import { hashPassword } from "../src/security.mjs";
 import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 import { readV1VaultState, v1CiphertextHash } from "../src/v1-data-fence.mjs";
 import { personalWritePilotIsCurrent } from "../src/v1-write-fence.mjs";
-import { isolatedPublicationDatabase, publicationRuntimeFixture, stopPublicationRuntime } from "./publication-runtime-fixture.mjs";
+import { isolatedPublicationDatabase, loopbackHTTPSProxy, publicationRuntimeFixture, stopPublicationRuntime } from "./publication-runtime-fixture.mjs";
 import { syntheticHttpAnchor, syntheticHttpAnchorAvailable } from "./synthetic-http-anchor-fixture.mjs";
 
 const fenceHeaders = {
@@ -56,31 +53,6 @@ test("a scoped pilot cannot close over a pending write or be reopened using its 
   assert.equal(personalWritePilotIsCurrent(pilot, pilot.expiresAt), false);
 });
 
-async function listen(server) {
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  return server.address().port;
-}
-
-async function close(server) {
-  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-}
-
-function localHTTPS(url, ca, request = {}) {
-  return new Promise((resolve, reject) => {
-    const outgoing = requestHTTPS(url, { method: request.method, headers: request.headers, ca }, incoming => {
-      const chunks = [];
-      incoming.on("data", chunk => chunks.push(chunk));
-      incoming.on("error", reject);
-      incoming.on("end", () => resolve(new Response(chunks.length ? Buffer.concat(chunks) : null, {
-        status: incoming.statusCode, headers: incoming.headers,
-      })));
-    });
-    outgoing.on("error", reject);
-    outgoing.setTimeout(5000, () => outgoing.destroy(new Error("pilot_fixture_https_timeout")));
-    outgoing.end(request.body);
-  });
-}
-
 test("private HTTPS pilot syncs two authenticated writers across restart and closes on production or revocation", {
   skip: !process.env.TEST_DATABASE_URL || !syntheticHttpAnchorAvailable,
   timeout: 120_000,
@@ -111,25 +83,8 @@ test("private HTTPS pilot syncs two authenticated writers across restart and clo
     await fence.append({ version: 2, type: "V1_WRITER_FLOOR", writerProtocol: 1 });
     const pilotID = randomUUID();
 
-    const keyPath = join(directory, "server.key"), certPath = join(directory, "server.crt");
-    execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-      "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", keyPath, "-out", certPath],
-    { stdio: "ignore" });
-    const [key, cert] = await Promise.all([readFile(keyPath), readFile(certPath)]);
-    const socket = createServer();
-    const cloudPort = await listen(socket);
-    await close(socket);
-    proxy = createHTTPS({ key, cert }, (incoming, response) => {
-      const internal = forwardHTTP({ hostname: "127.0.0.1", port: cloudPort, path: incoming.url,
-        method: incoming.method, headers: incoming.headers }, upstream => {
-        response.writeHead(upstream.statusCode, upstream.headers);
-        upstream.pipe(response);
-      });
-      internal.on("error", () => response.writeHead(502).end());
-      incoming.pipe(internal);
-    });
-    const origin = `https://127.0.0.1:${await listen(proxy)}`;
-    const fetchValue = (path, options) => localHTTPS(origin + path, cert, options);
+    proxy = await loopbackHTTPSProxy(directory);
+    const {origin, cloudPort, fetchValue} = proxy;
     const cloudDirectory = fileURLToPath(new URL("../", import.meta.url));
     const runtimeEnv = environment => ({
       PATH: process.env.PATH, DATABASE_URL: db.databaseURL, CLOUD_HOST: "127.0.0.1",
@@ -226,7 +181,7 @@ test("private HTTPS pilot syncs two authenticated writers across restart and clo
     assert.equal((await nativeRead()).revision, 2);
   } finally {
     await stopPublicationRuntime(runtime);
-    if (proxy?.listening) await close(proxy);
+    await proxy?.close();
     await independent?.cleanup();
     await journal?.cleanup();
     await db.cleanup();

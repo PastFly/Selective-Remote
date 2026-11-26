@@ -8,9 +8,9 @@ import { installV1CommitFence } from "../src/v1-commit-fence.mjs";
 export const migrationDirectory = fileURLToPath(
   new URL("../migrations/", import.meta.url),
 );
-test("migration publication schema exists and latest version is 22", async () => {
+test("migration publication schema remains present", async () => {
   const m = await loadMigrations(migrationDirectory);
-  assert.equal(m.at(-1).version, 22);
+  assert.ok(m.some(item => item.version === 19 && item.name === "019_vault_v2_migration_publication.sql"));
 });
 test(
   "PG16 applies publication foundation without activating existing Vaults",

@@ -14,7 +14,7 @@ import {readV1VaultState} from '../src/v1-data-fence.mjs';
 import {isolatedPublicationDatabase,publicationRuntimeFixture,stopPublicationRuntime} from './publication-runtime-fixture.mjs';
 import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http-anchor-fixture.mjs';
 
-test('old database restore cannot resurrect a logged-out session with Personal Vault access', {skip:!process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable,timeout:60000,todo:'session revocation is not yet retained by the independent security history'},async()=>{
+test('old database restore cannot resurrect a logged-out session with Personal Vault access', {skip:!process.env.TEST_DATABASE_URL||!syntheticHttpAnchorAvailable,timeout:60000},async()=>{
  const db=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL),dir=await mkdtemp(join(tmpdir(),'sr-session-revoke-restore-'));let restored,fixture,anchor,runtime;
  try{
   const user=randomUUID(),device=randomUUID(),session=randomUUID(),token='t'.repeat(43),pepper='s'.repeat(32);
@@ -34,11 +34,16 @@ test('old database restore cannot resurrect a logged-out session with Personal V
   assert.equal((await fetch(origin+'/v1/vault',{headers})).status,200);
   assert.equal((await fetch(origin+'/v1/auth/logout',{method:'POST',headers})).status,204);
   assert.equal((await fetch(origin+'/v1/vault',{headers})).status,401);
-  assert.deepEqual(await fence.anchor.read(),oldHead,'logout should not be assumed retained until proven');
+  const retainedHead=await fence.anchor.read();
+  assert.equal(retainedHead.position,oldHead.position+1);
+  assert.notEqual(retainedHead.digest,oldHead.digest);
+  assert.deepEqual((await fence.readRecords()).at(-1),{version:2,type:'V1_SESSION_REVOKED',sessionID:session});
   await stopPublicationRuntime(runtime);runtime=null;
   restored=await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);await run('pg_restore',['--clean','--if-exists','--no-owner','--no-acl','--dbname',restored.databaseURL,dump]);
+  assert.equal((await restored.pool.query('SELECT revoked_at FROM sessions WHERE id=$1',[session])).rows[0].revoked_at,null);
   origin=await server(restored.databaseURL);
   const result=await fetch(origin+'/v1/vault',{headers});console.log('SYNTHETIC_LOGGED_OUT_SESSION_AFTER_DB_RESTORE_STATUS='+result.status);
-  assert.notEqual(result.status,200,'restored logged-out session must not receive Personal Vault');
+  assert.equal(result.status,401,'the retained logout must still deny access after restore');
+  assert.deepEqual(await fence.anchor.read(),retainedHead);
  }finally{await stopPublicationRuntime(runtime);await restored?.cleanup();await anchor?.cleanup();await fixture?.cleanup();await db.cleanup();await rm(dir,{recursive:true,force:true});}
 });

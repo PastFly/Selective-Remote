@@ -30,6 +30,7 @@ test("numbered migrations have stable checksums", async () => {
     { version: 20, name: "020_vault_publication_readers.sql" },
     { version: 21, name: "021_whole_generation_publication.sql" },
     { version: 22, name: "022_publication_prestart_cancellation.sql" },
+    { version: 23, name: "023_deleted_account_access_policy.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
 });

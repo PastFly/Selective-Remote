@@ -11,8 +11,18 @@ const archiveSHA='c1bfeecf1d7404fa74728f9db72e697decbd8119ccc6f5a294d795756dfcfc
 const hash=value=>createHash('sha256').update(value).digest('hex'),hex=(value,n)=>typeof value==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(value);
 const fail=code=>{throw Error('staging_install_'+code);};
 export function validateInstallerCapabilities(capabilities){
- if(!capabilities||Object.keys(capabilities).length!==10||capabilities.teamSafetyStopVersion!==1||capabilities.emptyVaultCreationVersion!==1||capabilities.v1AnchorProtocol!==1||capabilities.wrapperEnvelopeVersion!==1||capabilities.version!==1||capabilities.fenceVersion!==2
-  ||capabilities.maxSchemaVersion!==22||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
+ const hasTeamProtocol=Object.hasOwn(capabilities??{},'v1TeamAuthorizationProtocol');
+ const hasRegistrationVersion=Object.hasOwn(capabilities??{},'v1TeamAuthorizationRegistrationVersion');
+ const hasProductionTeam=Object.hasOwn(capabilities??{},'v1ProductionTeamVersion');
+ const hasProductionPilot=Object.hasOwn(capabilities??{},'v1ProductionPersonalPilotVersion');
+ const expectedFieldCount=10+[hasTeamProtocol,hasRegistrationVersion,hasProductionTeam,hasProductionPilot].filter(Boolean).length;
+ if(!capabilities||Object.keys(capabilities).length!==expectedFieldCount
+  ||(hasProductionTeam&&(!hasRegistrationVersion||capabilities.v1ProductionTeamVersion!==1))
+  ||(hasProductionPilot&&(!hasProductionTeam||capabilities.v1ProductionPersonalPilotVersion!==1))
+  ||(hasRegistrationVersion&&(!hasTeamProtocol||capabilities.v1TeamAuthorizationRegistrationVersion!==1))
+  ||(hasTeamProtocol&&(capabilities.v1TeamAuthorizationProtocol!==2||capabilities.maxSchemaVersion!==23))
+  ||capabilities.teamSafetyStopVersion!==1||capabilities.emptyVaultCreationVersion!==1||capabilities.v1AnchorProtocol!==1||capabilities.wrapperEnvelopeVersion!==1||capabilities.version!==1||capabilities.fenceVersion!==2
+  ||![22,23].includes(capabilities.maxSchemaVersion)||capabilities.readerProjectionVersion!==1||capabilities.wholePublicationVersion!==1
   ||capabilities.v1WriterProtocol!==1)fail('candidate_code');
  return true;
 }

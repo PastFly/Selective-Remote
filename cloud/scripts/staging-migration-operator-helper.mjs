@@ -1,13 +1,15 @@
-import {readFile,lstat,realpath,mkdir,mkdtemp,writeFile,rename,open,rm} from 'node:fs/promises';
+import {readFile,lstat,realpath,mkdir,mkdtemp,writeFile,rename,open,rm,rmdir} from 'node:fs/promises';
 import {createHash,randomBytes} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-const execute=promisify(execFile),root='/opt/selective-remote-controller',operator='/var/lib/selective-remote-controller/operator';
-const fenceDirectory='/var/lib/selective-remote-controller/publication';
+import {controllerRoot as root,controllerState,validateControllerProject,validateControllerSettings,validateFenceDirectory} from './verify-staging-controller.mjs';
+const execute=promisify(execFile),operator=join(controllerState,'operator');
+const fenceDirectory=join(controllerState,'publication');
 const operations=['preview','start','upload','upload-reader','verify-identities','validate','discard','activate','check-compatibility','reconcile-fence'];
 const fail=code=>{throw Error('staging_operator_'+code);};
+const teamRecoveryCleanupError='staging_operator_team_recovery_cleanup';
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -62,7 +64,7 @@ async function protectedBytes(path,privateParent=true){
  if(await realpath(path)!==path)fail('permissions');const st=await lstat(path),parent=await lstat(dirname(path));
  if(!st.isFile()||st.uid!==0||(st.mode&0o777)!==0o600||parent.uid!==0||(privateParent?(parent.mode&0o777)!==0o700:(parent.mode&0o022)!==0))fail('permissions');return readFile(path);
 }
-async function input(){const chunks=[];let size=0;for await(const chunk of process.stdin){size+=chunk.length;if(size>96*1024*1024)fail('input_limit');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks));}catch{fail('request');}}
+async function input(limit=96*1024*1024){const chunks=[];let size=0;for await(const chunk of process.stdin){size+=chunk.length;if(size>limit)fail('input_limit');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks));}catch{fail('request');}}
 function canonicalEmails(emails){
  if(!Array.isArray(emails)||emails.length!==2||new Set(emails).size!==2||emails.some(email=>typeof email!=='string'||email!==email.toLowerCase()||!/^[-a-z0-9._+]+@[-a-z0-9.]+\.[a-z]{2,}$/.test(email)))fail('emails');return emails;
 }
@@ -198,13 +200,114 @@ async function provision(args,request,settings,identity){
  }finally{await rm(lock,{recursive:true});}
 }
 
+async function verifyOperatorImage(identity,run=execute){
+ const image=JSON.parse((await run('/usr/bin/docker',['image','inspect','--format','{{json .}}',identity.imageDigest],{encoding:'utf8',maxBuffer:4*1024*1024})).stdout);
+ if(image.Id!==identity.imageDigest||image.Config?.Labels?.['org.opencontainers.image.revision']!==identity.sourceSHA)fail('identity');
+}
+
+export async function withTeamAuthorizationRecoveryLocks(work,stateDirectory=controllerState){
+ const operatorDirectory=join(stateDirectory,'operator');
+ for(const directory of [stateDirectory,operatorDirectory]){
+  const stat=await lstat(directory);
+  if(await realpath(directory)!==directory||!stat.isDirectory()||stat.uid!==process.getuid()||(stat.mode&0o022))fail('permissions');
+ }
+ // Same order as operator provisioning, which takes its context lock before
+ // invoking the staging controller. The latter may open traffic.
+ const contextLock=join(operatorDirectory,'operator-context.json.lock');
+ const controllerLock=join(stateDirectory,'controller.lock');
+ let retain=false;
+ try{await mkdir(contextLock,{mode:0o700});}catch{fail('context_locked');}
+ try{
+  try{await mkdir(controllerLock,{mode:0o700});}catch{fail('controller_locked');}
+  try{return await work();}
+  catch(error){retain=error.message===teamRecoveryCleanupError;throw error;}
+  finally{if(!retain)await rmdir(controllerLock);}
+ }finally{if(!retain)await rmdir(contextLock);}
+}
+
+async function assertTeamRecoveryTrafficClosed(settings,identity,run){
+ const docker=args=>run('/usr/bin/docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024});
+ const cloud=await docker(['inspect','--format','{{.State.Running}} {{.Image}}','cloud-cloud-1']);
+ const proxy=await docker(['inspect','--format','{{.State.Running}}','cloud-caddy-1']);
+ if(cloud.stdout.trim()!=='false '+identity.imageDigest||proxy.stdout.trim()!=='false')fail('team_recovery_traffic');
+ const network=JSON.parse((await docker(['network','inspect','--format','{{json .}}',settings.network])).stdout);
+ const ids=(await docker(['ps','--quiet','--no-trunc'])).stdout.trim().split(/\s+/).filter(Boolean);
+ if(ids.some(id=>!validContainerID(id)))fail('team_recovery_traffic');
+ const containers=ids.length?JSON.parse((await docker(['inspect',...ids])).stdout):[];
+ validateControllerProject(network,containers);
+ if(containers.some(container=>container.Config?.Labels?.['com.docker.compose.project']==='cloud'
+    &&container.Config.Labels['com.docker.compose.service']!=='postgres'))fail('team_recovery_traffic');
+}
+const validContainerID=id=>/^[a-f0-9]{64}$/.test(id);
+
+// Deployment-wide recovery is an explicit root command, outside the
+// synthetic Vault operator allowlist. It never stops or starts services.
+export async function runTeamAuthorizationRecoveryContainer({settings,identity,request,run=execute}){
+ if(!sameIdentity(settings,identity)||settings.version!==1||Object.hasOwn(settings,'registrationMode')||settings.anchorProtocol!==1
+   ||!uuid(settings.anchorDeploymentID)||settings.teamSafetyStopVersion!==1||settings.network!=='cloud_private'
+   ||settings.fencePath!==fenceDirectory+'/journal'||!object(request)
+   ||Object.keys(request).sort().join(',')!=='intentID,operation'||request.operation!=='reconcile-team-authorization'
+   ||!uuid(request.intentID))fail('team_recovery_scope');
+ await verifyOperatorImage(identity,run);
+ await assertTeamRecoveryTrafficClosed(settings,identity,run);
+ const options={identity,identityPath:operator+'/controller-identity.json',
+  anchorDeploymentID:settings.anchorDeploymentID,fencePath:'/publication-fence/journal'};
+ const created=await run('/usr/bin/docker',['create','-i','--pull=never','--network',settings.network,
+  '--read-only','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges',
+  '--env-file',settings.envPath,'--mount',`type=bind,src=${fenceDirectory},dst=/publication-fence`,
+  '--mount',`type=bind,src=${operator},dst=${operator},readonly`,
+  '--entrypoint','node',identity.imageDigest,'/app/scripts/staging-team-authorization-recovery.mjs',
+  JSON.stringify(options)],{encoding:'utf8',timeout:30000,maxBuffer:65536});
+ const id=created.stdout.trim();
+ if(!validContainerID(id))fail('team_recovery_failed');
+ let result;
+ try{
+  const running=run('/usr/bin/docker',['start','--attach','--interactive',id],{encoding:'utf8',timeout:120000,maxBuffer:65536});
+  running.child.stdin.on('error',()=>{});running.child.stdin.end(JSON.stringify(request));
+  result=JSON.parse((await running).stdout);
+ }catch(error){
+  const code=error.stderr?.trim();
+  if(/^[a-z_]+$/.test(code??''))throw Error(code);
+  fail('team_recovery_failed');
+ }finally{
+  // Killing the Docker client on timeout need not stop the container. Retain
+  // the controller locks if Docker cannot prove cleanup of this exact child.
+  try{await run('/usr/bin/docker',['rm','--force',id],{encoding:'utf8',timeout:30000,maxBuffer:65536});}
+  catch{throw Error(teamRecoveryCleanupError);}
+ }
+ if(!object(result)||Object.keys(result).sort().join(',')!=='intentID,status'||result.intentID!==request.intentID
+   ||!['pending','confirmed','aborted'].includes(result.status))fail('team_recovery_receipt');
+ return result;
+}
+
+async function readOperatorAuthority(){
+ const settings=JSON.parse(await protectedBytes(root+'/settings.json')),identity=JSON.parse(await protectedBytes(operator+'/controller-identity.json'));
+ if(!sameIdentity(settings,identity)||digest(await readFile(root+'/bundle.sha256'))!==identity.controllerDigest)fail('identity');
+ return {settings,identity};
+}
+
 async function main(){
  if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==root)fail('owner');
  const args=process.argv.slice(2);
  const activationFault=args[0]==='--activation-fault'?operatorActivationFault(args):undefined;
- if(args.length&&activationFault===undefined&&!['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration','--disable-public-registration'].includes(args[0]))fail('arguments');
- const settings=JSON.parse(await protectedBytes(root+'/settings.json')),identity=JSON.parse(await protectedBytes(operator+'/controller-identity.json'));
- if(!sameIdentity(settings,identity)||digest(await readFile(root+'/bundle.sha256'))!==identity.controllerDigest)fail('identity');
+ const recoverTeam=args.length===1&&args[0]==='--recover-team-authorization';
+ if(args.length&&!recoverTeam&&activationFault===undefined&&!['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration','--disable-public-registration'].includes(args[0]))fail('arguments');
+ if(recoverTeam){
+  const request=await input(1024);
+  const result=await withTeamAuthorizationRecoveryLocks(async()=>{
+   const {settings,identity}=await readOperatorAuthority();
+   assertOperatorMode(settings,args);
+   validateControllerSettings(settings);
+   await execute('/usr/bin/sha256sum',['--strict','--status','-c','bundle.sha256'],{cwd:root,timeout:30000});
+   if(await realpath(fenceDirectory)!==fenceDirectory)fail('permissions');
+   validateFenceDirectory(await lstat(fenceDirectory));
+   if(digest(await protectedBytes(settings.envPath,false))!==settings.envDigest)fail('environment');
+   return runTeamAuthorizationRecoveryContainer({settings,identity,request});
+  });
+  process.stdout.write(JSON.stringify(result));
+  return;
+ }
+ const {settings,identity}=await readOperatorAuthority();
  assertOperatorMode(settings,args);
  const request=await input();
  if(activationFault!==undefined)operatorActivationFault(args,request);
@@ -214,8 +317,7 @@ async function main(){
  const scoped=validateOperatorRequest(context,request,identity);
  if(digest(await protectedBytes(settings.envPath,false))!==settings.envDigest)fail('environment');
  if(request.operation==='activate')await protectedBytes(context.activationPolicyPath);
- const image=JSON.parse((await execute('/usr/bin/docker',['image','inspect','--format','{{json .}}',identity.imageDigest],{encoding:'utf8',maxBuffer:4*1024*1024})).stdout);
- if(image.Id!==identity.imageDigest||image.Config?.Labels?.['org.opencontainers.image.revision']!==identity.sourceSHA)fail('identity');
+ await verifyOperatorImage(identity);
  const temp=await mkdtemp(operator+'/request-');
  try{
   const envFile=join(temp,'operator.env');await writeFile(envFile,[
