@@ -1,7 +1,13 @@
 import Foundation
 
 enum AppCopy {
+    static let personalVaultWriteUnsupported = "cloud.personalVault.writeUnsupported"
+
     static let translations: [String: (ru: String, en: String)] = [
+        personalVaultWriteUnsupported: (
+            "Сервер Cloud не подтвердил поддержку защищённой записи. Изменения с этого Mac пока не отправлены.",
+            "The Cloud server did not confirm support for protected writes. Changes from this Mac have not been sent."
+        ),
         "menu.session.title": ("Сеанс", "Session"),
         "ssh.key.save_private.title": ("Сохранить новый приватный SSH-ключ", "Save New Private SSH Key"),
         "diagnostics.export.title": ("Экспорт диагностики", "Export Diagnostics"),

@@ -45,6 +45,7 @@ enum SyncLifecycle: Equatable, Sendable {
 enum SyncIssue: Equatable, Sendable {
     case vaultLocked, sessionExpired, keyOrWrapperMissing, rotationRequired
     case conflict, transientFailure, unknownFailure, writeTemporarilyUnavailable
+    case personalVaultWriteUnsupported
 
     static func isWriteTemporarilyUnavailable(_ error: Error) -> Bool {
         guard let cloudError = error as? SelectiveRemoteCloudError,
@@ -53,6 +54,9 @@ enum SyncIssue: Equatable, Sendable {
     }
 
     func message(english: Bool) -> String? {
+        if self == .personalVaultWriteUnsupported {
+            return UpdateLocalization.key(AppCopy.personalVaultWriteUnsupported, english: english)
+        }
         guard self == .writeTemporarilyUnavailable else { return nil }
         return english
             ? "Writing to Cloud is temporarily unavailable to protect your data. Keep your local copies."
@@ -60,6 +64,7 @@ enum SyncIssue: Equatable, Sendable {
     }
 
     static func classifyPersonal(_ error: Error) -> Self {
+        if error as? SelectiveRemoteCloudError == .personalVaultWriteUnsupported { return .personalVaultWriteUnsupported }
         if isWriteTemporarilyUnavailable(error) { return .writeTemporarilyUnavailable }
         if case .conflicts = error as? SelectiveRemotePersonalVaultImportError { return .conflict }
         if let error = error as? SelectiveRemotePersonalVaultError {
