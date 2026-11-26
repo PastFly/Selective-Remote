@@ -1,8 +1,8 @@
 import { isUUID } from './security.mjs';
+import { v1TeamRouteAllowed } from './v1-team-routes.mjs';
 import { isPrivatePersonalPilotEnvironment } from './v1-write-fence.mjs';
 import { teamAuthorizationProtocol } from './v1-team-authorization.mjs';
 
-// The ordinary server entry point, including the image's default command, stays closed.
 // A closed-signup, loopback-only fixture gets the V1 operations used by the two clients.
 export function isolatedTeamAcceptance(config, args, env, now = Date.now()) {
   const accounts = env.STAGING_TEAM_ACCOUNT_IDS;
@@ -32,19 +32,6 @@ export function isolatedTeamWindowOpen(policy, evidence, now = Date.now()) {
     && evidence.teamAuthorizationProtocol === teamAuthorizationProtocol && !evidence.personalWritePilot);
 }
 
-const reads = new Set(['teams', 'team-invitations', 'teams/:id/vaults', 'teams/:id/members',
-  'teams/:id/invitations', 'teams/:id/device-admission-policy', 'teams/:id/activity', 'teams/:id/access-vaults',
-  'teams/:id/vaults/:id', 'teams/:id/vaults/:id/key-devices', 'teams/:id/vaults/:id/access-context',
-  'teams/:id/members/:id/devices']);
-const creates = new Set(['devices/bootstrap-key', 'device-trust', 'teams', 'team-invitations/accept',
-  'teams/:id/invitations', 'teams/:id/invitations/:id/wrappers', 'teams/:id/vaults',
-  'teams/:id/vaults/:id/wrappers', 'teams/:id/members/:id/devices/:id']);
-const routes = new Map([['GET', reads], ['POST', creates], ['PATCH', new Set(['teams/:id/members/:id'])],
-  ['PUT', new Set(['teams/:id/vaults/:id'])]]);
-
 export function isolatedTeamRouteAllowed(policy, evidence, userID, method, path) {
-  if (!isolatedTeamWindowOpen(policy, evidence) || !policy.ids.includes(userID) || !path.startsWith('/v1/')) return false;
-  const parts = path.slice(4).split('/');
-  if (parts.includes(':id')) return false;
-  return routes.get(method)?.has(parts.map(part => isUUID(part) ? ':id' : part).join('/')) === true;
+  return isolatedTeamWindowOpen(policy, evidence) && policy.ids.includes(userID) && v1TeamRouteAllowed(method, path);
 }

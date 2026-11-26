@@ -26,10 +26,12 @@ function requireCandidate(candidate) {
   const emptyCreateAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion'].sort().join(',')
     && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1;
   const fields=Object.keys(candidate??{}).sort().join(',');
+  const registered = ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol','v1TeamAuthorizationRegistrationVersion'];
+  const productionTeam = [...registered, 'v1ProductionTeamVersion'];
   const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion'],
     ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion'],
     ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol'],
-    ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol','v1TeamAuthorizationRegistrationVersion']];
+    registered, productionTeam, [...productionTeam, 'v1ProductionPersonalPilotVersion']];
   const extended=variants.some(extra=>fields===[...keys,'v1WriterProtocol','emptyVaultCreationVersion',...extra].sort().join(',')
     &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1
     &&extra.every(k=>candidate[k]===(k==='v1TeamAuthorizationProtocol'?teamAuthorizationProtocol:1)));
@@ -53,7 +55,9 @@ function requireResolved(snapshot) {
     throw Error('deployment_fence_pending');
 }
 
-function requireTeamAuthorizationCapability(snapshot, candidate, teamAuthorizationEnabled) {
+function requireTeamAuthorizationCapability(snapshot, candidate, teamAuthorizationEnabled, productionTeamEnabled) {
+  if (snapshot.productionPersonalPilotHistory && candidate.v1ProductionTeamVersion !== 1) throw Error('deployment_code_floor');
+  if (productionTeamEnabled && !snapshot.v1TeamAuthorization) throw Error('deployment_team_authorization_unavailable');
   if (!snapshot.v1TeamAuthorization) return;
   if (!teamAuthorizationEnabled || snapshot.v1TeamAuthorization.protocol !== teamAuthorizationProtocol ||
     candidate.v1TeamAuthorizationProtocol !== teamAuthorizationProtocol ||
@@ -115,25 +119,30 @@ export function createDeploymentGuard(check, {
 
 // This is also executed by the independent host controller against a selected
 // image's metadata. The controller pins that image and this checker separately.
-export async function verifyDeploymentCompatibility({ query, fence, candidate, mode = 'traffic', teamAuthorizationEnabled = true }) {
+export async function verifyDeploymentCompatibility({ query, fence, candidate, mode = 'traffic', teamAuthorizationEnabled = true,
+  productionTeamEnabled = false }) {
   requireCandidate(candidate);
+  if (productionTeamEnabled) {
+    if (candidate.v1ProductionTeamVersion !== 1 || !teamAuthorizationEnabled) throw Error('deployment_code_floor');
+    requireIndependentV1Anchor(fence);
+  }
   if(fence?.anchor&&candidate.v1AnchorProtocol!==1)throw Error('deployment_code_floor');
   if(fence?.anchor&&candidate.teamSafetyStopVersion!==1)throw Error('deployment_code_floor');
   if (!['traffic', 'maintenance-upgrade'].includes(mode)) throw Error('invalid_deployment_mode');
   const before = await fence.snapshot();
   requireResolved(before);
-  requireTeamAuthorizationCapability(before, candidate, teamAuthorizationEnabled);
+  requireTeamAuthorizationCapability(before, candidate, teamAuthorizationEnabled, productionTeamEnabled);
   const beforeWriterFloor = requireWriterFloor(before, candidate);
   if (beforeWriterFloor) requireIndependentV1Anchor(fence);
   const version = await readMigrationSchemaVersion(query);
-  if (version > candidate.maxSchemaVersion) throw Error('deployment_schema_floor');
+  if (version > candidate.maxSchemaVersion || (productionTeamEnabled && version < teamAuthorizationSchemaFloor)) throw Error('deployment_schema_floor');
   // Explicit maintenance keeps traffic closed. Only a pristine journal may
   // forward-upgrade an old V1 database; a retained intent/floor cannot be erased.
   if (mode === 'maintenance-upgrade' && version < 19 && !before.committed.length && !before.outcomes.length) {
     if (beforeWriterFloor) throw Error('deployment_writer_floor');
     const after = await fence.snapshot();
     requireResolved(after);
-    requireTeamAuthorizationCapability(after, candidate, teamAuthorizationEnabled);
+    requireTeamAuthorizationCapability(after, candidate, teamAuthorizationEnabled, productionTeamEnabled);
     if (requireWriterFloor(after, candidate)) throw Error('deployment_writer_floor');
     if (after.committed.length || after.outcomes.length) throw Error('deployment_schema_floor');
     return { compatible: true, schemaVersion: version, maintenanceOnly: true };
@@ -143,7 +152,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const publications = await readActivePublications(query, version);
   const after = await fence.snapshot();
   requireResolved(after);
-  requireTeamAuthorizationCapability(after, candidate, teamAuthorizationEnabled);
+  requireTeamAuthorizationCapability(after, candidate, teamAuthorizationEnabled, productionTeamEnabled);
   if (!sameTeamAuthorization(before.v1TeamAuthorization, after.v1TeamAuthorization))
     throw Error('deployment_team_authorization_history_changed');
   const afterWriterFloor = requireWriterFloor(after, candidate);
@@ -159,6 +168,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
     }
     const final=await fence.snapshot();
     requireResolved(final);
+    requireTeamAuthorizationCapability(final, candidate, teamAuthorizationEnabled, productionTeamEnabled);
     if (!sameTeamAuthorization(after.v1TeamAuthorization, final.v1TeamAuthorization))
       throw Error('deployment_team_authorization_history_changed');
     if(requireWriterFloor(final,candidate)!==afterWriterFloor
@@ -181,6 +191,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
       || after.committed.some(record => !samePublication(record, byScope.get(`${record.teamID}\0${record.vaultID}`))))
     throw Error('deployment_fence_mismatch');
   return { compatible: true, schemaVersion: version, ...(afterWriterFloor ? { writerFloor: afterWriterFloor } : {}),
+    ...(productionTeamEnabled ? {productionTeamEnabled:true} : {}),
     ...(after.v1TeamAuthorization ? { teamAuthorizationProtocol: after.v1TeamAuthorization.protocol } : {}),
     ...(personalWritePilot ? { personalWritePilot } : {}) };
 }

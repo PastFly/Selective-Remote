@@ -17,6 +17,7 @@ import { createConfiguredMigrationFence } from './configured-migration-fence.mjs
 import { createDeploymentGuard, currentCapabilities, supportsTeamAuthorizationRuntime, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 import { browserSessionBinding } from './browser-session-binding.mjs';
 import { isolatedTeamAcceptance, isolatedTeamWindowOpen, isolatedTeamRouteAllowed, verifyIsolatedTeamAccounts } from './isolated-team-acceptance.mjs';
+import { v1TeamRouteAllowed } from './v1-team-routes.mjs';
 import { v1WriteFenceHeader, v1WriteFenceValue, v1WriteRequiresFence, v1WriteFenceAccepted, unwrapV1Write,
   personalVaultPilotHeader, personalVaultPilotValue, isPrivatePersonalPilotEnvironment, personalWritePilotIsCurrent } from './v1-write-fence.mjs';
 
@@ -37,7 +38,8 @@ const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
 const service = new CloudService(store, runtimeConfig, mailer);
 const checkDeployment = deploymentFence
   ? createDeploymentGuard(() => verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
-    fence: deploymentFence, candidate: currentCapabilities, teamAuthorizationEnabled: retainTeamAuthorization }))
+    fence: deploymentFence, candidate: currentCapabilities, teamAuthorizationEnabled: retainTeamAuthorization,
+    productionTeamEnabled: config.productionTeamEnabled }))
   : async () => { throw Error('deployment_fence_required'); };
 const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool, { v1Fence: deploymentFence, retainTeamAuthorization }),
   (session, password) => service.requirePasswordReauthentication(session, password));
@@ -71,7 +73,8 @@ async function route(request, response) {
   let deploymentEvidence;
   try { deploymentEvidence = await checkDeployment(); }
   catch { return sendError(response, 503, "publication_guard_unavailable"); }
-  const pilot = privatePersonalPilotEnvironment && personalWritePilotIsCurrent(deploymentEvidence.personalWritePilot)
+  const pilot = privatePersonalPilotEnvironment && deploymentEvidence.personalWritePilot?.type === 'V1_PERSONAL_PILOT_OPENED'
+    && personalWritePilotIsCurrent(deploymentEvidence.personalWritePilot)
     ? deploymentEvidence.personalWritePilot : null;
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
@@ -81,7 +84,8 @@ async function route(request, response) {
     if (deploymentEvidence?.writerFloor === 1) response.setHeader(v1WriteFenceHeader, v1WriteFenceValue);
     // Released native clients query public metadata without credentials. The
     // actual write always checks the authenticated account and the Vault ACL.
-    if (!isolatedTeamWindowOpen(teamAcceptance, deploymentEvidence)) response.setHeader("X-Selective-V1-Write-Status", v1WriteStopReason);
+    if (!deploymentEvidence.productionTeamEnabled && !isolatedTeamWindowOpen(teamAcceptance, deploymentEvidence))
+      response.setHeader("X-Selective-V1-Write-Status", v1WriteStopReason);
     if (pilot) response.setHeader(personalVaultPilotHeader, personalVaultPilotValue);
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
@@ -160,13 +164,13 @@ async function route(request, response) {
     }
     // The retained pilot permits only the selected Personal owner in private staging.
     const personalPilotAllowed = pilot?.ownerID === session.user_id;
-    const teamRouteAllowed = isolatedTeamRouteAllowed(teamAcceptance, deploymentEvidence, session.user_id, method, url.pathname);
+    const teamRouteAllowed = (deploymentEvidence.productionTeamEnabled === true && v1TeamRouteAllowed(method, url.pathname, true))
+      || isolatedTeamRouteAllowed(teamAcceptance, deploymentEvidence, session.user_id, method, url.pathname);
     if (v1WriteRequiresFence(method, url.pathname)
       && !(url.pathname === "/v1/vault" ? personalPilotAllowed : teamRouteAllowed)) {
       return sendError(response, 503, v1WriteStopReason);
     }
-    // Keep Team traffic and trust mutations closed until every authorization
-    // transition and the rollback image pass the retained-history acceptance.
+    // Deny unpublished surfaces before dispatch, even for a valid session.
     if (!teamRouteAllowed && (/^\/v1\/(?:teams|team-invitations)(?:\/|$)/i.test(url.pathname)
       || (!['GET','HEAD'].includes(method) && /^\/v1\/(?:devices|device-trust)(?:\/|$)/i.test(url.pathname)))) {
       return sendError(response, 503, "team_security_temporarily_unavailable");

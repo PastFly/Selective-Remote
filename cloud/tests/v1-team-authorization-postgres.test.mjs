@@ -162,7 +162,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         await db.pool.query("UPDATE devices SET last_seen_at=last_seen_at+interval '10 seconds' WHERE id=$1", [device]);
         assert.equal(await readV1TeamAuthorizationDigest(query), baseline);
         await fence.append({ version: 2, type: "V1_TEAM_AUTHORIZATION_BASELINE", authorizationProtocol: teamAuthorizationProtocol, digest: baseline });
-        const { v1TeamAuthorizationProtocol: _older, v1TeamAuthorizationRegistrationVersion: _registered, ...oldCandidate } = verifiedCandidate;
+        const { v1TeamAuthorizationProtocol: _older, v1TeamAuthorizationRegistrationVersion: _registered, v1ProductionTeamVersion: _prodTeam, v1ProductionPersonalPilotVersion: _prodPilot, ...oldCandidate } = verifiedCandidate;
         await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old candidate reached SQL"), candidate: oldCandidate }), /deployment_code_floor/u);
         await assert.rejects(verifyDeploymentCompatibility({ fence, query: () => assert.fail("old candidate reached SQL"),
             candidate: { ...verifiedCandidate, v1TeamAuthorizationProtocol: 1 } }), /deployment_code_floor/u);
@@ -172,7 +172,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
             assert.match(sql, /schema_migrations/u);
             return { rows: [{ version: 22 }] };
         } }), /deployment_schema_floor/u);
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         const archive = join(directory, "before-team-role-change.dump");
         await exec("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", archive, db.databaseURL]);
@@ -193,21 +193,21 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         const updated = await readV1TeamAuthorizationDigest(query);
         assert.notEqual(updated, baseline);
         assert.equal(roleChanged.v1TeamAuthorization.digest, updated);
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         restored = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
         await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl", "--dbname", restored.databaseURL, archive]);
         const restoredQuery = (sql, params) => restored.pool.query(sql, params);
         assert.equal(await readV1TeamAuthorizationDigest(restoredQuery), baseline);
         await assert.rejects(
-            verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate }),
+            verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate, productionTeamEnabled:true }),
             /deployment_team_authorization_mismatch/u,
         );
 
         const promoted = await store.updateTeamMembershipRole({ ...change, idempotencyKey: randomUUID(), role: "editor" });
         assert.equal(promoted.membership.role, "editor");
         await assert.rejects(
-            verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate }),
+            verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate, productionTeamEnabled:true }),
             /deployment_team_authorization_mismatch/u,
         );
         assert.equal((await store.updateTeamMembershipRole(change)).membership.role, "viewer");
@@ -348,7 +348,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
 
         assert.equal((await store.createSharedVault(createVault)).vault.id, vaultIntent.vaultID);
         assert.equal((await fence.snapshot()).v1TeamAuthorization.pending, null);
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         const secondVault = { ...createVault, name: "Synthetic restart recovery Vault", idempotencyKey: randomUUID() };
         await assert.rejects(lostReplyStore.createSharedVault(secondVault), /synthetic_lost_commit_response/u);
@@ -375,7 +375,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         assert.deepEqual(await recover(db.databaseURL, {}, secondRequest), { status: "confirmed", intentID: secondPair.intentID });
         assert.equal((await fence.anchor.read()).position, interruptedAnchor.position + 1);
         assert.equal((await store.createSharedVault(secondVault)).vault.id, secondVaultIntent.vaultID);
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         const vaultID = vaultIntent.vaultID, folder = randomUUID(), resource = randomUUID();
         const client = await db.pool.connect();
@@ -398,7 +398,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         } finally {
             try { await client.query("ROLLBACK"); } finally { client.release(); }
         }
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         const scope = { actorUserID: owner, actorDeviceID: ownerDevice, teamID: team, vaultID: preparingVault };
         const folderCreate = { ...scope, resourceID: randomUUID(), policyClass: "folder", idempotencyKey: randomUUID() };
@@ -456,9 +456,9 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         assert.deepEqual(await store.revokeResourceWrapper(revokeWrapper), revoked);
         await assert.rejects(restoredRights.getResourceIdentity(cryptoResource), /deployment_team_authorization_mismatch/u);
         await assert.rejects(restoredRights.revokeResourceWrapper(revokeWrapper), /deployment_team_authorization_mismatch/u);
-        await assert.rejects(verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate }),
+        await assert.rejects(verifyDeploymentCompatibility({ fence, query: restoredQuery, candidate: verifiedCandidate, productionTeamEnabled:true }),
             /deployment_team_authorization_mismatch/u);
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         await assert.rejects(store.deleteAccount(owner), /account_owns_teams/u);
         assert.equal((await store.session(memberSession)).user_id, member);
@@ -532,7 +532,7 @@ test("protected Team recovery checks Vaults, account deletion and resource right
         await assert.rejects(verifyDeploymentCompatibility({ fence, query: staleQuery, candidate: verifiedCandidate }), /deployment_v1_data_mismatch/u);
         assert.equal(await staleStore.session(memberSession), null);
         assert.deepEqual(await store.deleteAccount(account.id), { deleted: true });
-        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate })).compatible, true);
+        assert.equal((await verifyDeploymentCompatibility({ fence, query, candidate: verifiedCandidate, productionTeamEnabled:true })).productionTeamEnabled, true);
 
         rotationCopy = await isolatedPublicationDatabase(process.env.TEST_DATABASE_URL);
         await exec("pg_restore", ["--exit-on-error", "--clean", "--if-exists", "--no-owner", "--no-acl",

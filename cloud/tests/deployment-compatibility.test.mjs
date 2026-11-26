@@ -32,7 +32,7 @@ test('old/missing capability cannot query the DB or open traffic', async () => {
 });
 
 test('registered profiles require a compatible Team authorization runtime and keep the Personal pilot private', async () => {
-  const { v1TeamAuthorizationRegistrationVersion, ...previous } = candidate;
+  const { v1TeamAuthorizationRegistrationVersion, v1ProductionTeamVersion, v1ProductionPersonalPilotVersion, ...previous } = candidate;
   assert.equal(v1TeamAuthorizationRegistrationVersion, 1);
   for (const malformed of [
     {...candidate, maxSchemaVersion: 22},
@@ -72,6 +72,21 @@ test('registered profiles require a compatible Team authorization runtime and ke
   assert.deepEqual(s.events, []);
 });
 
+test('production Team traffic requires its release capability, TLS anchor and retained format-2 baseline', async () => {
+  const {v1ProductionPersonalPilotVersion, v1ProductionTeamVersion, ...previous} = candidate;
+  for (const manifest of [previous, {...candidate, v1ProductionTeamVersion: 2}]) {
+    await assert.rejects(verifyDeploymentCompatibility({...scenario(), candidate:manifest, productionTeamEnabled:true}), /deployment_code_floor/);
+  }
+  assert.equal(v1ProductionTeamVersion, 1);
+  const s = scenario();
+  await assert.rejects(verifyDeploymentCompatibility({...s, candidate, productionTeamEnabled:true}), /deployment_anchor_required/);
+  s.fence.anchor = {read:async () => ({}), advance:async () => {}};
+  await assert.rejects(verifyDeploymentCompatibility({...s, candidate, productionTeamEnabled:true}), /deployment_team_authorization_unavailable/);
+  const snapshot = await s.fence.snapshot();
+  s.fence.snapshot = async () => ({...snapshot, productionPersonalPilotHistory:true});
+  await assert.rejects(verifyDeploymentCompatibility({...s, candidate:previous}), /deployment_code_floor/);
+});
+
 test('a pending outcome stops traffic before DB access', async () => {
   const s = scenario({ pending: [{ intentID: randomUUID() }] });
   await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate }), /deployment_fence_pending/);
@@ -88,7 +103,7 @@ test('old and unknown newer schemas deny before publication queries', async () =
 
 test('a schema-22 candidate cannot start against the account-deletion migration', async () => {
   const s = scenario({ schema: '23' });
-  const {v1TeamAuthorizationProtocol: _team, v1TeamAuthorizationRegistrationVersion: _registration, ...previous} = candidate;
+  const {v1TeamAuthorizationProtocol: _team, v1TeamAuthorizationRegistrationVersion: _registration, v1ProductionTeamVersion: _prodTeam, v1ProductionPersonalPilotVersion: _prodPilot, ...previous} = candidate;
   await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: { ...previous, maxSchemaVersion: 22 } }),
     /deployment_schema_floor/);
   assert.ok(!s.events.includes('publications'));
@@ -206,7 +221,7 @@ test('only explicit empty-journal maintenance can upgrade a pre019 DB; never tra
 test('a retained writer floor denies an old candidate before database access', async () => {
   const s = scenario();
   s.fence.snapshot = async () => ({ schemaFloor:19, writerFloor:1, committed:[], pending:[], outcomes:[] });
-  const { v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, teamSafetyStopVersion: _____, v1TeamAuthorizationProtocol: ______, v1TeamAuthorizationRegistrationVersion: _registration, ...oldCandidate } = candidate;
+  const { v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, teamSafetyStopVersion: _____, v1TeamAuthorizationProtocol: ______, v1TeamAuthorizationRegistrationVersion: _registration, v1ProductionTeamVersion: _prodTeam, v1ProductionPersonalPilotVersion: _prodPilot, ...oldCandidate } = candidate;
   await assert.rejects(verifyDeploymentCompatibility({ ...s, candidate: oldCandidate }), /deployment_writer_floor/);
   assert.deepEqual(s.events, []);
 });

@@ -13,8 +13,12 @@ const fail=code=>{throw Error('staging_install_'+code);};
 export function validateInstallerCapabilities(capabilities){
  const hasTeamProtocol=Object.hasOwn(capabilities??{},'v1TeamAuthorizationProtocol');
  const hasRegistrationVersion=Object.hasOwn(capabilities??{},'v1TeamAuthorizationRegistrationVersion');
- const expectedFieldCount=10+Number(hasTeamProtocol)+Number(hasRegistrationVersion);
+ const hasProductionTeam=Object.hasOwn(capabilities??{},'v1ProductionTeamVersion');
+ const hasProductionPilot=Object.hasOwn(capabilities??{},'v1ProductionPersonalPilotVersion');
+ const expectedFieldCount=10+[hasTeamProtocol,hasRegistrationVersion,hasProductionTeam,hasProductionPilot].filter(Boolean).length;
  if(!capabilities||Object.keys(capabilities).length!==expectedFieldCount
+  ||(hasProductionTeam&&(!hasRegistrationVersion||capabilities.v1ProductionTeamVersion!==1))
+  ||(hasProductionPilot&&(!hasProductionTeam||capabilities.v1ProductionPersonalPilotVersion!==1))
   ||(hasRegistrationVersion&&(!hasTeamProtocol||capabilities.v1TeamAuthorizationRegistrationVersion!==1))
   ||(hasTeamProtocol&&(capabilities.v1TeamAuthorizationProtocol!==2||capabilities.maxSchemaVersion!==23))
   ||capabilities.teamSafetyStopVersion!==1||capabilities.emptyVaultCreationVersion!==1||capabilities.v1AnchorProtocol!==1||capabilities.wrapperEnvelopeVersion!==1||capabilities.version!==1||capabilities.fenceVersion!==2

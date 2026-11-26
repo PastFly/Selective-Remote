@@ -11,7 +11,7 @@ test('staging installer accepts only the reviewed writer-capable metadata', () =
 });
 
 test('registered staging requires the full reviewed Team protocol 2 manifest', () => {
-  const registered = { ...currentCapabilities, v1TeamAuthorizationRegistrationVersion: 1 };
+  const { v1ProductionTeamVersion, v1ProductionPersonalPilotVersion, ...registered } = currentCapabilities;
   const { v1TeamAuthorizationRegistrationVersion, ...earlier } = registered;
   const { v1TeamAuthorizationProtocol, ...missingProtocol } = registered;
   assert.doesNotThrow(() => validateInstallerCapabilities(registered));

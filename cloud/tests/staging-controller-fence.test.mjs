@@ -295,7 +295,7 @@ test('controller validates writer capability metadata without accepting unknown 
 });
 
 test('controller checks the registered Team manifest before touching the deployment', async () => {
-  const registered = { ...currentCapabilities, v1TeamAuthorizationRegistrationVersion: 1 };
+  const { v1ProductionTeamVersion, v1ProductionPersonalPilotVersion, ...registered } = currentCapabilities;
   const { v1TeamAuthorizationRegistrationVersion, ...earlier } = registered;
   const { v1TeamAuthorizationProtocol, ...missingProtocol } = registered;
   assert.doesNotThrow(() => validateCandidateCapabilities(registered));
@@ -384,4 +384,95 @@ test('protected Team safety stop floor rejects anchor-capable images without the
  assert.throws(()=>validateCandidateCapabilities(old,floor),/deployment_code_floor/);
  let queried=false;const f=await fixtureController({metadata:old,fence:emptyFence,query:()=>{queried=true;throw Error('unexpected_query');}});
  await assert.rejects(f.promise,/deployment_code_floor/);assert.equal(queried,false);assert.ok(!f.stages.includes('open-traffic'));
+});
+
+function productionPair(role = 'forward') {
+  const pair = {
+    rollback: {sourceSHA:'3'.repeat(40), imageDigest:'sha256:'+'4'.repeat(64)},
+    forward: {sourceSHA:'5'.repeat(40), imageDigest:'sha256:'+'6'.repeat(64)},
+  };
+  return {...settings(),...pair[role],productionReleasePair:pair,anchorProtocol:1,
+    anchorDeploymentID:'11111111-1111-4111-8111-111111111111',registrationMode:'production-v1'};
+}
+const {v1ProductionPersonalPilotVersion: ignoredPilotCapability, ...teamManifest} = currentCapabilities;
+const rollbackManifest = {...teamManifest,v1ProductionTeamVersion:1};
+const forwardManifest = {...rollbackManifest,v1ProductionPersonalPilotVersion:1};
+
+test('protected production requires two exact immutable roles with distinct capabilities', () => {
+  const s = productionPair();
+  assert.equal(validateControllerSettings(s),s);
+  for (const change of [
+    {sourceSHA:s.productionReleasePair.rollback.sourceSHA}, {anchorDeploymentID:null},
+    {anchorProtocol:undefined}, {registrationMode:undefined}, {productionReleasePair:null},
+    {productionReleasePair:{...s.productionReleasePair,rollback:s.productionReleasePair.forward}},
+  ]) assert.throws(() => validateControllerSettings({...s,...change}));
+  validateCandidateCapabilities(forwardManifest,s);
+  validateCandidateCapabilities(rollbackManifest,productionPair('rollback'));
+  for (const invalid of [rollbackManifest,{...forwardManifest,v1ProductionTeamVersion:2},{...forwardManifest,extra:1}])
+    assert.throws(() => validateCandidateCapabilities(invalid,s), /deployment_code_floor/);
+  assert.throws(() => validateCandidateCapabilities(forwardManifest,productionPair('rollback')), /deployment_code_floor/);
+});
+
+test('production pair requires open registration, HTTPS, explicit Team and scoped forward writes', async () => {
+  const {rootCertificates} = await import('node:tls');
+  const s = productionPair();
+  const env = {
+    ALLOW_REGISTRATION:'true',PUBLICATION_ENVIRONMENT:'production',PUBLICATION_READER_ENABLED:'false',
+    WHOLE_PUBLICATION_ENABLED:'false',CLOUD_PUBLIC_ORIGIN:'https://fixture.example',
+    CLOUD_PRODUCTION_TEAM_ENABLED:'true',CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:'true',
+    PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:synthetic@anchor.example/fence',
+    PUBLICATION_FENCE_ANCHOR_ID:s.anchorDeploymentID,PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64'),
+  };
+  const evaluate = (settings, values, image=imageEnvironment) => {
+    const model=compose(settings);
+    Object.assign(model.services.cloud.environment,values);
+    return validateControllerCompose(model,settings,{...environmentEvidence,imageEnvironment:image,
+      dockerEnvironment:[...dockerEnvironment,...Object.entries(values).map(([k,v])=>k+'='+v)]});
+  };
+  assert.equal(evaluate(s,env).ALLOW_REGISTRATION,'true');
+  for (const changed of [{ALLOW_REGISTRATION:'false'},{CLOUD_PUBLIC_ORIGIN:'http://fixture.example'},
+    {CLOUD_PRODUCTION_TEAM_ENABLED:'false'},{CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:'TRUE'}])
+    assert.throws(()=>evaluate(s,{...env,...changed}),/deployment_production_scope/);
+  assert.throws(()=>evaluate(s,env,[...imageEnvironment,'CLOUD_PRODUCTION_TEAM_ENABLED=true']),/deployment_production_scope/);
+  assert.throws(()=>evaluate(productionPair('rollback'),env),/deployment_production_scope/);
+  assert.equal(evaluate(productionPair('rollback'),{...env,CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:'false'}).ALLOW_REGISTRATION,'true');
+  const {productionReleasePair: pair,...legacy} = s;
+  assert.throws(()=>evaluate(legacy,env),/deployment_production_scope/);
+});
+
+test('pair readiness checks both pins and retained state without changing traffic or writing', async () => {
+  const calls = [];
+  const runCommand = async args => {
+    calls.push(args);
+    if (args.stage==='candidate-metadata') return forwardManifest;
+    if (args.stage==='peer-metadata') return rollbackManifest;
+  };
+  assert.deepEqual(await verifyControllerFixture({candidate:productionPair(),verifyProductionPair:true,runCommand}),
+    {productionPairVerified:true});
+  assert.deepEqual(calls.map(x=>x.stage),['attest','candidate-metadata','peer-metadata','storage','assert-project','check','check']);
+  const checks=calls.filter(x=>x.stage==='check');
+  assert.deepEqual(checks.map(x=>!!x.peer),[true,false]);
+  assert.ok(checks.every(x=>x.mode==='traffic'&&x.requireClosedPilot));
+  await assert.rejects(verifyControllerFixture({candidate:productionPair(),runCommand:async args=>{
+    if(args.stage==='check' && args.peer) throw Error('deployment_pilot_open');
+    assert.notEqual(args.stage,'close-traffic');return runCommand(args);
+  }}),/deployment_pilot_open/);
+});
+
+test('pilot open attests the running forward runtime, rollback may close and verifies closure', async () => {
+  const pilotID=randomUUID();
+  for(const action of ['open','close']){
+    const stages=[],role=action==='open'?'forward':'rollback';
+    const operation=action==='open'?[action,pilotID,randomUUID(),randomUUID(),'5']:[action,pilotID];
+    await verifyControllerFixture({candidate:productionPair(role),pilotOperation:operation,runCommand:async args=>{
+      stages.push(args);
+      if(args.stage==='candidate-metadata')return role==='forward'?forwardManifest:rollbackManifest;
+      if(args.stage==='peer-metadata')return role==='forward'?rollbackManifest:forwardManifest;
+    }});
+    assert.deepEqual(stages.filter(x=>x.stage==='check').map(x=>x.requireClosedPilot),action==='open'?[true,true]:[false,false,true]);
+    assert.equal(stages.some(x=>x.stage==='verify-running-forward'),action==='open');
+    assert.ok(!stages.some(x=>x.stage==='close-traffic'||x.stage==='open-traffic'));
+  }
+  await assert.rejects(verifyControllerFixture({candidate:productionPair('rollback'),pilotOperation:['open'],
+    runCommand:()=>assert.fail('reached candidate')}),/deployment_production_scope/);
 });

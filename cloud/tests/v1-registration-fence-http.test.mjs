@@ -3,7 +3,7 @@ import {syntheticHttpAnchor,syntheticHttpAnchorAvailable} from './synthetic-http
 // trust only the ephemeral self-signed certificate and never log its messages.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {generateKeyPairSync, randomUUID} from 'node:crypto';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createServer as createTlsServer} from 'node:tls';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
@@ -94,9 +94,20 @@ async function exerciseRegistration(environment) {
       }
       assert.fail('Cloud did not become ready');
     }
+    if (environment === 'production') {
+      // A new installation has neither an empty-create nor a wrapper event yet.
+      const pristine = await fence.snapshot();
+      assert.equal(pristine.v1Committed.length, 0);
+      await startServer({...env, CLOUD_PRODUCTION_TEAM_ENABLED:'true'});
+      const meta = await fetchValue('/v1/meta');
+      assert.equal(meta.headers.get('x-selective-v1-write-fence'), '1');
+      assert.equal(meta.headers.get('x-selective-v1-write-status'), null);
+      assert.equal((await meta.json()).registrationEnabled, true);
+    }
     await startServer(env);
     const post=(path,body)=>fetchValue(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const tokens=[];
+    const devices=[];
     if (environment) {
       const metadata = await fetchValue('/v1/meta');
       assert.equal(metadata.status, 200);
@@ -107,6 +118,9 @@ async function exerciseRegistration(environment) {
     }
     for (const [index,suffix] of ['a','b'].entries()) {
       const device={id:randomUUID(),name:`TEST-ONLY-CODEX-${suffix}`,platform:'web',appVersion:'test'};
+      if (environment === 'production')
+        device.publicKey = generateKeyPairSync('ec', {namedCurve:'prime256v1'}).publicKey.export({format:'jwk'});
+      devices.push(device);
       const registration={email:`synthetic-registration-${suffix}@example.test`,username:`synthetic_register_${suffix}`,displayName:`Synthetic ${suffix}`,password:`TEST-ONLY-PASSWORD-${suffix}-123`,device};
       const registered=await post('/v1/auth/register',registration);
       assert.equal(registered.status,201,'synthetic registration failed');assert.deepEqual(await registered.json(),{verificationRequired:true});
@@ -172,6 +186,59 @@ async function exerciseRegistration(environment) {
       assert.equal(teams.status, 503);
       assert.deepEqual(await teams.json(), {error:'team_security_temporarily_unavailable'});
       assert.deepEqual(await fence.anchor.read(), before);
+      if (environment === 'production') {
+        const production = {...env, CLOUD_PRODUCTION_TEAM_ENABLED:'true'};
+        const pilotID = randomUUID();
+        const issuedAt = Date.now();
+        await fence.append({version:2, type:'V1_PRODUCTION_PERSONAL_PILOT_OPENED', pilotID,
+          ownerID:committed.ownerID, vaultID:id, issuedAt, expiresAt:issuedAt + 60000});
+        await startServer(production);
+        const meta = await fetchValue('/v1/meta');
+        assert.equal(meta.headers.get('x-selective-v1-write-status'), null);
+        assert.equal(meta.headers.get('x-selective-personal-vault-write-status'), null);
+        assert.equal((await fetchValue('/v1/teams')).status, 401);
+        const call = (token, path, method = 'GET', body) => fetchValue(path, {method,
+          headers:{Authorization:'Bearer ' + token, 'Content-Type':'application/json', 'Idempotency-Key':randomUUID(),
+            'X-Selective-V1-Write-Fence':'1', 'X-Selective-Personal-Vault-Writer':'migration-checkpoint-v1'},
+          ...(body && {body:JSON.stringify(body)})});
+        for (const [index, token] of tokens.entries()) {
+          assert.equal((await call(token, '/v1/teams')).status, 200);
+          assert.equal((await call(token, '/v1/vault/write-availability')).status, 503);
+          assert.equal((await call(token, '/v1/vault', 'PUT', {protocol:'framed-v1', envelope:{}})).status, 503);
+          const bootstrap = await call(token, '/v1/devices/bootstrap-key', 'POST', {publicKey:devices[index].publicKey,
+            password:`TEST-ONLY-PASSWORD-${['a','b'][index]}-123`});
+          assert.equal(bootstrap.status, 200);
+        }
+        const created = await call(tokens[0], '/v1/teams', 'POST', {name:'Synthetic registered Team'});
+        assert.equal(created.status, 201);
+        const teamPath = '/v1/teams/' + (await created.json()).team.id;
+        const invited = await call(tokens[0], teamPath + '/invitations', 'POST', {username:'synthetic_register_b', role:'viewer'});
+        assert.equal(invited.status, 201);
+        const invitationID = (await invited.json()).invitation.id;
+        const pending = await call(tokens[1], '/v1/team-invitations');
+        assert.equal((await pending.json()).invitations[0].id, invitationID);
+        const accepted = await call(tokens[1], '/v1/team-invitations/accept', 'POST', {invitationID});
+        assert.equal(accepted.status, 200);
+        const membership = (await accepted.json()).membership;
+        assert.equal(membership.role, 'viewer');
+        const memberPath = teamPath + '/members/' + membership.id;
+        const forbidden = await call(tokens[1], memberPath, 'PATCH', {role:'editor'});
+        assert.equal(forbidden.status, 403);
+        const changed = await call(tokens[0], memberPath, 'PATCH', {role:'editor'});
+        assert.equal(changed.status, 200);
+        assert.equal((await changed.json()).membership.role, 'editor');
+        const publication = await call(tokens[0], teamPath + '/vaults/' + randomUUID() + '/publication/header');
+        assert.equal(publication.status, 503);
+        const after = await fence.snapshot();
+        assert.equal(after.v1TeamAuthorization.digest, await readV1TeamAuthorizationDigest(query));
+        assert.equal(after.v1TeamAuthorization.pending, null);
+        assert.equal(after.personalWritePilot.pilotID, pilotID);
+        await fence.append({version:2, type:'V1_PRODUCTION_PERSONAL_PILOT_CLOSED', pilotID});
+        assert.equal((await fence.snapshot()).personalWritePilot, undefined);
+        assert.equal((await call(tokens[0], teamPath + '/members')).status, 200);
+        await startServer(env);
+        assert.equal((await call(tokens[0], teamPath + '/members')).status, 503);
+      }
       if (environment === 'staging') {
         const privateEnv = { ...env, ALLOW_REGISTRATION:'false' };
         delete privateEnv.STAGING_REGISTRATION_EMAIL_ALLOWLIST;

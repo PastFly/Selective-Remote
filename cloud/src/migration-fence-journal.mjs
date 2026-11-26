@@ -1,6 +1,8 @@
 import {createHash} from 'node:crypto';
 
 export const FENCE_MAX_BYTES = 4 * 1024 * 1024;
+export const productionPilotOpened = 'V1_PRODUCTION_PERSONAL_PILOT_OPENED';
+export const productionPilotClosed = 'V1_PRODUCTION_PERSONAL_PILOT_CLOSED';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const hash=/^[a-f0-9]{64}$/u;
 const isUUID=v=>typeof v==='string'&&uuid.test(v);
@@ -68,7 +70,7 @@ export function validateFenceEvent(value){
   if(!keys(value,['version','type','intentID','intentDigest'])||!isUUID(value.intentID)||!isHash(value.intentDigest))invalid();
   return {version:2,type:value.type,intentID:value.intentID,intentDigest:value.intentDigest};
  }
- if(value.type==='V1_PERSONAL_PILOT_OPENED'){
+ if(value.type==='V1_PERSONAL_PILOT_OPENED'||value.type===productionPilotOpened){
   if(!keys(value,['version','type','pilotID','ownerID','vaultID','issuedAt','expiresAt'])||
    ![value.pilotID,value.ownerID,value.vaultID].every(isUUID)||
    ![value.issuedAt,value.expiresAt].every(Number.isSafeInteger)||value.issuedAt<=0||
@@ -76,7 +78,7 @@ export function validateFenceEvent(value){
   return {version:2,type:value.type,pilotID:value.pilotID,ownerID:value.ownerID,vaultID:value.vaultID,
    issuedAt:value.issuedAt,expiresAt:value.expiresAt};
  }
- if(value.type==='V1_PERSONAL_PILOT_CLOSED'){
+ if(value.type==='V1_PERSONAL_PILOT_CLOSED'||value.type===productionPilotClosed){
   if(!keys(value,['version','type','pilotID'])||!isUUID(value.pilotID))invalid();
   return {version:2,type:value.type,pilotID:value.pilotID};
  }
@@ -180,6 +182,7 @@ export function reduceFenceEvents(events){
  const pilotIDs=new Set();
  const teamAuthorizationIntents=new Map(),teamAuthorizationOutcomes=new Map();
  let writerFloor=0,v1Baseline=null,personalWritePilot=null;
+ let productionPersonalPilotHistory=false;
  let teamAuthorizationBaseline=null,teamAuthorizationDigest=null,teamAuthorizationPending=null;
  let teamAuthorizationProtocol=0,teamAuthorizationUpgrade=null;
  for(const raw of events){
@@ -226,16 +229,21 @@ export function reduceFenceEvents(events){
    teamAuthorizationPending=null;
    continue;
   }
-  if(event.type==='V1_PERSONAL_PILOT_OPENED'){
+  if(event.type==='V1_PERSONAL_PILOT_OPENED'||event.type===productionPilotOpened){
    const vault=v1Committed.get('PERSONAL:'+event.vaultID);
    if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||teamAuthorizationPending||personalWritePilot||pilotIDs.has(event.pilotID)||
     vault?.ownerID!==event.ownerID||revokedAccountIDs.has(event.ownerID))conflict();
+   if(event.type===productionPilotOpened){
+    if(teamAuthorizationProtocol!==2||committed.size)conflict();
+    productionPersonalPilotHistory=true;
+   }else if(productionPersonalPilotHistory)conflict();
    pilotIDs.add(event.pilotID);
    personalWritePilot=event;
    continue;
   }
-  if(event.type==='V1_PERSONAL_PILOT_CLOSED'){
+  if(event.type==='V1_PERSONAL_PILOT_CLOSED'||event.type===productionPilotClosed){
    if(personalWritePilot?.pilotID!==event.pilotID||
+    (event.type===productionPilotClosed)!==(personalWritePilot.type===productionPilotOpened)||
     [...v1Pending.values()].some(intent=>intent.pilotID===event.pilotID))conflict();
    personalWritePilot=null;
    continue;
@@ -275,6 +283,9 @@ export function reduceFenceEvents(events){
    if(old){if(!same(old,intent))conflict();continue;}
    if([...v1Pending.values()].some(item=>item.type===accountDeletionType))conflict();
    if(event.vaultKind==='PERSONAL'&&revokedAccountIDs.has(event.ownerID))conflict();
+   // Registration still creates empty Vaults. All later Personal revisions need a production permit.
+   if(productionPersonalPilotHistory&&event.vaultKind==='PERSONAL'&&event.baseRevision>=0&&
+     (!event.pilotID||personalWritePilot?.type!==productionPilotOpened))conflict();
    if(event.pilotID&&(personalWritePilot?.pilotID!==event.pilotID||personalWritePilot.ownerID!==event.ownerID||
      personalWritePilot.vaultID!==event.vaultID||revokedAccountIDs.has(event.ownerID)))conflict();
    if(v1Operations.has(event.operationID))conflict();
@@ -291,7 +302,7 @@ export function reduceFenceEvents(events){
    const deletion=event.type===accountDeletionType;
    if(deletion){
     if(teamAuthorizationProtocol!==2||teamAuthorizationPending||v1Pending.size||
-      personalWritePilot||event.previousDigest!==teamAuthorizationDigest||teamAuthorizationIntents.has(event.authorizationIntentID))conflict();
+      personalWritePilot?.type==='V1_PERSONAL_PILOT_OPENED'||event.previousDigest!==teamAuthorizationDigest||teamAuthorizationIntents.has(event.authorizationIntentID))conflict();
     const previous=[...v1Committed.values()].find(item=>item.vaultKind==='PERSONAL'&&item.ownerID===event.userID);
     if(!same(previous??null,event.vault))conflict();
    }else{
@@ -387,6 +398,7 @@ export function reduceFenceEvents(events){
     v1TeamAuthorizationOutcomes:[...teamAuthorizationOutcomes.values()],
   }:{}),
   ...(personalWritePilot?{personalWritePilot}:{}),
+  ...(productionPersonalPilotHistory?{productionPersonalPilotHistory:true}:{}),
   ...(revokedSessionIDs.size?{revokedSessionIDs:[...revokedSessionIDs].sort(compare)}:{}),
   ...(revokedDeviceIDs.size?{revokedDeviceIDs:[...revokedDeviceIDs].sort(compare)}:{}),
   ...(deniedAccounts.size?{revokedAccountIDs:[...deniedAccounts].sort(compare)}:{}),
