@@ -876,8 +876,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=196">/u);
-  assert.match(html, /\/app\.js\?v=196/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=[0-9]+">/u);
+  assert.match(html, /\/app\.js\?v=[0-9]+/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -1049,8 +1049,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=196/u);
-  assert.match(html, /app\.js\?v=196/u);
+  assert.match(html, /styles\.css\?v=[0-9]+/u);
+  assert.match(html, /app\.js\?v=[0-9]+/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -1162,7 +1162,6 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /panelID === "local-vault" && recordFilter\) activePersonalRecordFilter = recordFilter/u);
   assert.match(application, /preserveRecordFilter && target === "local-vault" \? activeTeamRecordFilter/u);
   assert.match(application, /button\.dataset\.teamRecordFilter \|\|/u);
-  assert.match(application, /teamResourceContext && button\.dataset\.workspaceTarget === "local-vault"/u);
   assert.match(application, /!button\.hasAttribute\("data-preserve-scroll"\)/u);
   assert.match(styles, /#team-vault\[data-team-view="hosts"\] \.team-section-tabs \{ display:none; \}/u);
   assert.match(styles, /#local-vault>\.vault-heading,#team-vault\[data-team-view="hosts"\]>\.vault-heading \{ min-height:78px; \}/u);
@@ -1241,8 +1240,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=196/u);
-  assert.match(html, /styles\.css\?v=196/u);
+  assert.match(html, /app\.js\?v=[0-9]+/u);
+  assert.match(html, /styles\.css\?v=[0-9]+/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

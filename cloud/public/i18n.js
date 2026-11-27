@@ -17,7 +17,7 @@
   const en = new Map(Object.entries({
     "Команда и папка шифруются в Personal Vault и синхронизируются с приложением.": "The command and folder are encrypted in Personal Vault and synchronized with the app.",
     "Далее откроется первый сниппет. Группа появится после его сохранения в Personal Vault.": "Next, create the first snippet. The folder appears after it is saved in Personal Vault.",
-    "Не удалось сохранить запись. Проверьте поля и путь папки; исходная запись сохранена.": "Could not save the record. Check its fields and folder path; the original record is unchanged.",
+    "Не удалось сохранить запись. Введённые данные остались в форме.": "Could not save the record. Your changes remain in the form.",
     "Папка сниппета": "Snippet folder",
     "Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.": "Choose a folder or enter a nested path separated by /. Leave blank for no folder.",
     "Новая группа": "New folder",
@@ -451,7 +451,8 @@
     "Например, Host, команда или Production": "For example, Host, team, or Production",
     "Состояние локальной и Cloud-синхронизации": "Local and Cloud synchronization status",
     "Быстрый переход к разделу или записи": "Quickly open a section or record",
-    "Создать запись в открытом пространстве": "Create a record in the current workspace"
+    "＋ Добавить личную запись": "＋ Add personal record",
+    "Создать запись в личном Vault": "Create a record in Personal Vault"
   }));
 
   for (const [source, translation] of Object.entries({

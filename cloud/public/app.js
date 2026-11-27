@@ -748,6 +748,7 @@ export async function initializeLocalVault({
   const cancelButton = documentValue.querySelector("#local-record-cancel");
   const editorTitle = documentValue.querySelector("#local-record-editor-title");
   const editorHint = documentValue.querySelector("#local-record-editor-hint");
+  const editorFeedback = documentValue.querySelector("#local-record-feedback");
   const lockButton = documentValue.querySelector("#local-vault-lock");
   const type = documentValue.querySelector("#local-record-type");
   const title = documentValue.querySelector("#local-record-title");
@@ -864,6 +865,7 @@ export async function initializeLocalVault({
       forwarding: "Добавить Forwarding",
     };
     setText(createButton, labels[activeRecordFilter] ?? "Добавить запись");
+    if (createButton) createButton.hidden = activeRecordFilter === "snippet";
   }
 
   function resetEditor({ hide = true } = {}) {
@@ -874,6 +876,7 @@ export async function initializeLocalVault({
     saveButton.textContent = "Зашифровать и сохранить";
     cancelButton.textContent = "Отменить";
     cancelButton.hidden = hide;
+    setText(editorFeedback, "");
     setText(editorTitle, "Новая запись");
     setText(editorHint, "Выберите тип и заполните поля. Всё шифруется в браузере.");
     updateLabels();
@@ -935,6 +938,7 @@ export async function initializeLocalVault({
 
   function clearConflictUI() {
     conflictMode = false;
+    if (createButton) createButton.disabled = false;
     conflictPanel.hidden = true;
     conflictForm.reset();
     conflictList.replaceChildren();
@@ -946,6 +950,7 @@ export async function initializeLocalVault({
 
   function setConflictMode(active) {
     conflictMode = active;
+    if (createButton) createButton.disabled = active;
     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) control.disabled = active;
     for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = active;
     for (const button of snippetActions?.querySelectorAll("button") ?? []) button.disabled = active;
@@ -1242,6 +1247,7 @@ export async function initializeLocalVault({
     const generation = scopeGeneration;
     savePending = true;
     saveButton.disabled = true;
+    setText(editorFeedback, "");
     try {
       const existing = editingRecordID
         ? controller.document().records.find((record) => record.id === editingRecordID)
@@ -1272,7 +1278,7 @@ export async function initializeLocalVault({
       setText(message, wasEditing ? "Изменения зашифрованы и сохранены." : "Запись локально зашифрована и сохранена.");
       render();
     } catch {
-      if (generation === scopeGeneration) setText(message, "Не удалось сохранить запись. Проверьте поля и путь папки; исходная запись сохранена.");
+      if (generation === scopeGeneration) setText(editorFeedback, "Не удалось сохранить запись. Введённые данные остались в форме.");
     } finally {
       savePending = false;
       saveButton.disabled = conflictMode;
@@ -1943,7 +1949,10 @@ export function initializeTeamWorkspace({
     }
     // Folder disclosure is read-only navigation and must remain usable by Viewers.
     if (!publicationClient) for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
-    for (const button of [snippetCreate, snippetGroupCreate]) if (button) button.disabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
+    const creationDisabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
+    for (const button of [recordCreate, snippetCreate, snippetGroupCreate]) {
+      if (button) button.disabled = creationDisabled;
+    }
     recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
   }
 
@@ -1981,7 +1990,9 @@ export function initializeTeamWorkspace({
     recordSecretRow.hidden = !visibility.secret;
     hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";
     const createLabels = { all: "Добавить запись", host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
-    setText(recordEditorSummary, editingRecordID ? "Редактировать запись" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
+    const createLabel = activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись";
+    setText(recordCreate, createLabel);
+    setText(recordEditorSummary, editingRecordID ? "Редактировать запись" : createLabel);
   }
 
   function resetRecordEditor() {
@@ -3173,7 +3184,7 @@ export function initializeTeamWorkspace({
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     if (teamSummary) teamSummary.hidden = activeView === "hosts";
     workspace.hidden = activeView !== "hosts" || !controller;
-    recordCreate.hidden = activeView !== "hosts" || !controller;
+    recordCreate.hidden = activeView !== "hosts" || activeRecordFilter === "snippet" || !controller;
     recordCreate.disabled = !controller || !canEdit();
     if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     updateRecordLabels();
@@ -3290,7 +3301,7 @@ export function initializeTeamWorkspace({
     publishSyncObservation(documentValue, { scope: "team", type: "selection", vaultID: selectedVault?.id,
       recipient: client.session()?.id });
     workspace.hidden = activeView !== "hosts";
-    recordCreate.hidden = activeView !== "hosts";
+    recordCreate.hidden = activeView !== "hosts" || activeRecordFilter === "snippet";
     recordCreate.disabled = !canEdit();
     rotateButton.hidden = true;
     rotateButton.disabled = true;
@@ -5091,7 +5102,7 @@ export function initializePortalNavigation({
   };
   const teamTitles = {
     teams: "Команды", members: "Участники команд", vaults: "Папки команд",
-    hosts: "Хосты команд", activity: "Журнал активности", management: "Управление командой",
+    hosts: "Хосты команд", activity: "Журнал активности", access: "Доступ и общий доступ", management: "Управление командой",
   };
   const teamResourceTitles = {
     all: "Командный Vault",
@@ -5115,6 +5126,7 @@ export function initializePortalNavigation({
     "/app/team-forwarding": ["team-vault", null, "hosts", "forwarding"],
     "/app/team-activity": ["team-vault", null, "activity", null],
     "/app/team-management": ["team-vault", null, "management", null],
+    "/app/team-access": ["team-vault", null, "access", null],
     "/app/devices": ["workspace-devices", null, null, null],
     "/app/settings": ["workspace-settings", null, null, null],
     "/app/about": ["workspace-about", null, null, null],
@@ -5139,23 +5151,13 @@ export function initializePortalNavigation({
     if (panelID === "team-vault" && teamView === "hosts") activeTeamRecordFilter = teamRecordFilter || "all";
     if (panelID !== "local-vault") vaultUI?.closeEditor();
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
-    const teamResourceContext = panelID === "team-vault" && teamView === "hosts";
-    for (const button of sidebarButtons) {
-      const matchesPanel = button.dataset.workspaceTarget === panelID
-        || (teamResourceContext && button.dataset.workspaceTarget === "local-vault");
-      const matchesFilter = panelID === "local-vault"
-        ? (button.dataset.recordFilter || "all") === (recordFilter || "all")
-        : teamResourceContext && button.dataset.workspaceTarget === "local-vault"
-          ? button.dataset.recordFilter === activeTeamRecordFilter
-          : true;
-      const matchesTeamView = panelID !== "team-vault"
-        || !button.dataset.teamView
-        || button.dataset.teamView === (teamView || "teams");
-      button.classList.toggle("active", matchesPanel && matchesFilter && matchesTeamView);
+    for (const button of [...sidebarButtons, ...documentValue.querySelectorAll("[data-mobile-nav]")]) {
+      const current = button.dataset.workspaceTarget === panelID;
+      button.classList.toggle("active", current);
+      if (current) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
     }
-    for (const button of documentValue.querySelectorAll("[data-mobile-nav]")) {
-      button.classList.toggle("active", button.dataset.workspaceTarget === panelID);
-    }
+    if (workspaceCreate) workspaceCreate.hidden = panelID !== "workspace-overview";
     setText(workspaceTitle, panelID === "local-vault"
       ? resourceTitles[recordFilter || "all"]
       : panelID === "team-vault"
@@ -5331,18 +5333,37 @@ export function initializePortalNavigation({
   }
   commandOpen?.addEventListener("click", () => openCommandPalette());
   commandSearch?.addEventListener("input", renderCommands);
+  commandDialog?.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const results = [...commandResults.querySelectorAll("button")];
+    const index = results.indexOf(event.target);
+    if (!results.length || (index < 0 && event.target !== commandSearch)) return;
+    event.preventDefault();
+    const target = event.key === "ArrowDown"
+      ? results[index + 1] ?? results[0]
+      : index < 0 ? results.at(-1) : results[index - 1] ?? commandSearch;
+    target?.focus();
+  });
   documentValue.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") { event.preventDefault(); openCommandPalette({ fromKeyboard: true }); }
+    if (!sessionActive || !(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== "k") return;
+    if (documentValue.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    openCommandPalette({ fromKeyboard: true });
   });
   workspaceCreate?.addEventListener("click", () => {
-    const activePanel = documentValue.querySelector(".workspace-panel:not([hidden])");
-    const create = activePanel?.querySelector("#local-record-create:not([hidden]), #team-record-create:not([hidden])");
-    if (create) { create.click(); return; }
-    const contextualForm = activePanel?.querySelector("#team-create-form:not([hidden]), #team-vault-create-form:not([hidden])");
-    if (contextualForm) { contextualForm.scrollIntoView?.({ block: "center" }); contextualForm.querySelector("input")?.focus?.(); return; }
     selectWorkspacePanel("local-vault", "all");
-    requestedWorkspaceRoute = "/app/personal-vault"; setPath(requestedWorkspaceRoute);
-    documentValue.querySelector("#local-record-create")?.click();
+    requestedWorkspaceRoute = "/app/personal-vault";
+    setPath(requestedWorkspaceRoute);
+    const create = documentValue.querySelector("#local-record-create");
+    if (!create || create.disabled || create.closest("[hidden]")) {
+      const blockedHeading = documentValue.querySelector(
+        "#local-vault-waiting:not([hidden]) #local-vault-state-title, #local-vault-conflicts:not([hidden]) #local-vault-conflicts-title",
+      );
+      (blockedHeading ?? documentValue.querySelector("#local-vault-title"))?.focus();
+      return;
+    }
+    create.focus();
+    create.click();
   });
   documentValue.querySelector("#workspace-mobile-account-open")?.addEventListener("click", () => {
     setText(documentValue.querySelector("#workspace-mobile-account-name"), documentValue.querySelector("#cloud-account-name")?.textContent ?? "");
