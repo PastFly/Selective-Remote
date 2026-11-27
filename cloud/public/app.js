@@ -3059,9 +3059,10 @@ export function initializeTeamWorkspace({
       downloaded: `Team-ревизия ${result.revision} загружена и объединена локально.`,
       up_to_date: `Shared Vault синхронизирован · ревизия ${result.revision}.`,
       remote_changed: `Team Vault изменился до ревизии ${result.remoteRevision}. Следующий цикл повторит синхронизацию.`,
-      conflict: `Обнаружено конфликтов: ${result.conflicts.length}. Выберите версии явно.`,
     };
-    let status = messages[result.status] ?? "Синхронизация завершена.";
+    let status = result.status === "conflict"
+      ? `Обнаружено конфликтов: ${result.conflicts.length}. Выберите версии явно.`
+      : messages[result.status] ?? "Синхронизация завершена.";
     if (wrapperProvisioningFailed) {
       status += " Автоматическая выдача wrappers не подтверждена и будет безопасно повторена.";
     } else if ((wrapperProvisioning?.granted ?? 0) > 0) {
