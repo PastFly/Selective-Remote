@@ -1,0 +1,202 @@
+name: Package Cloud UI 9b56307
+
+on:
+  push:
+    branches: [codex/cloud-ui-package-9b56307]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      BASE_SHA: 9831990ce819e832110fef184020178274c014ae
+      CANDIDATE_SHA: 9b56307165256bc05a0a159326908c1828b07904
+      POSTGRES_IMAGE: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 9b56307165256bc05a0a159326908c1828b07904
+          fetch-depth: 3
+          persist-credentials: false
+
+      - name: Build and verify exact linux/amd64 images
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          git worktree add --detach "$RUNNER_TEMP/sr-base" "$BASE_SHA"
+
+          assets=(cloud/public/app.js cloud/public/i18n.js cloud/public/index.html cloud/public/styles.css)
+          exclusions=()
+          for asset in "${assets[@]}"; do exclusions+=(":(exclude)$asset"); done
+          git diff --exit-code "$BASE_SHA" "$CANDIDATE_SHA" -- cloud "${exclusions[@]}" ':(exclude)cloud/tests'
+          diff -u <(printf '%s\n' "${assets[@]}") \
+            <(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA" -- cloud/public)
+
+          out=$RUNNER_TEMP/sr-ui-package
+          mkdir -p "$out"
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$BASE_SHA" \
+            -t sr-cloud-ui:rollback "$RUNNER_TEMP/sr-base/cloud"
+          docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$CANDIDATE_SHA" \
+            -t "sr-cloud-ui:$CANDIDATE_SHA" cloud
+
+          # shellcheck disable=SC2016
+          runtime_manifest='
+            cd "$1"
+            { printf "%s\n" package.json deployment-compatibility.json; find migrations public scripts src -type f -print; } |
+              LC_ALL=C sort | while IFS= read -r file; do sha256sum "$file"; done
+          '
+          # shellcheck disable=SC2016
+          dependencies_manifest='
+            cd /app
+            find node_modules -type f -print | LC_ALL=C sort |
+              while IFS= read -r file; do sha256sum "$file"; done
+          '
+          verify_image() {
+            local image=$1 source=$2 directory=$3 output=$4
+            local identity id platform revision extra
+            identity=$(docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+            read -r id platform revision extra <<< "$identity"
+            [[ "$id" =~ ^sha256:[0-9a-f]{64}$ && "$platform" == linux/amd64 && "$revision" == "$source" && -z "$extra" ]]
+            sh -ec "$runtime_manifest" sh "$directory" > "$RUNNER_TEMP/source-files"
+            docker run --rm --network none --entrypoint sh "$image" -ec "$runtime_manifest" sh /app > "$output"
+            diff -u "$RUNNER_TEMP/source-files" "$output"
+            docker run --rm --network none --entrypoint sh "$image" -ec "$dependencies_manifest" > "$output.dependencies"
+            printf '%s\n' "$identity"
+          }
+          rollback=$(verify_image sr-cloud-ui:rollback "$BASE_SHA" "$RUNNER_TEMP/sr-base/cloud" "$RUNNER_TEMP/rollback-files")
+          candidate=$(verify_image "sr-cloud-ui:$CANDIDATE_SHA" "$CANDIDATE_SHA" cloud "$RUNNER_TEMP/candidate-files")
+          test "${rollback%% *}" != "${candidate%% *}"
+          diff -u "$RUNNER_TEMP/rollback-files.dependencies" "$RUNNER_TEMP/candidate-files.dependencies"
+          cp "$RUNNER_TEMP/candidate-files" "$out/runtime-files.sha256"
+          printf 'candidate=%s\nrehearsal_rollback=%s\n' "$candidate" "$rollback" > "$out/image-identities.txt"
+
+      - name: Smoke forward and rollback on the same isolated schema 22
+        shell: bash
+        run: |
+          set -euo pipefail
+          network=sr269-package
+          postgres=sr269-package-postgres
+          cloud=sr269-package-cloud
+          fixture=$RUNNER_TEMP/sr-ui-fixture
+          out=$RUNNER_TEMP/sr-ui-package
+          mkdir -p "$fixture"
+          : > "$fixture/journal"
+          chmod 0644 "$fixture/journal"
+
+          cleanup() {
+            docker rm -f -v "$cloud" "$postgres" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            rm -f "$fixture/cloud.env"
+          }
+          trap cleanup EXIT
+
+          umask 077
+          cat > "$fixture/cloud.env" <<EOF
+          DATABASE_URL=postgresql://sr_fixture@postgres:5432/sr_fixture
+          CLOUD_PUBLIC_ORIGIN=https://sr269-smoke.invalid
+          ALLOW_REGISTRATION=false
+          PUBLICATION_ENVIRONMENT=production
+          PUBLICATION_READER_ENABLED=false
+          WHOLE_PUBLICATION_ENABLED=false
+          PUBLICATION_FENCE_PATH=/fixture/journal
+          EOF
+          for key in SESSION_TOKEN_PEPPER ABUSE_TOKEN_PEPPER PROXY_SHARED_SECRET PASSWORD_RESET_TOKEN_PEPPER TEAM_INVITATION_TOKEN_PEPPER TEAM_OUTBOX_ENCRYPTION_KEY EMAIL_VERIFICATION_TOKEN_PEPPER; do
+            printf '%s=%s\n' "$key" "$(openssl rand -hex 32)" >> "$fixture/cloud.env"
+          done
+
+          docker network create --internal "$network" >/dev/null
+          docker run -d --name "$postgres" --network "$network" --network-alias postgres \
+            -e POSTGRES_USER=sr_fixture -e POSTGRES_DB=sr_fixture -e POSTGRES_HOST_AUTH_METHOD=trust \
+            "$POSTGRES_IMAGE" >/dev/null
+          for _ in {1..60}; do
+            if docker exec "$postgres" pg_isready -h 127.0.0.1 -U sr_fixture -d sr_fixture >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec "$postgres" pg_isready -h 127.0.0.1 -U sr_fixture -d sr_fixture >/dev/null
+          docker run --rm --network "$network" --env-file "$fixture/cloud.env" \
+            --entrypoint node sr-cloud-ui:rollback scripts/migrate.mjs
+
+          smoke() {
+            local image=$1
+            docker run -d --name "$cloud" --network "$network" --env-file "$fixture/cloud.env" \
+              --mount "type=bind,src=$fixture/journal,dst=/fixture/journal,readonly" "$image" >/dev/null
+            for _ in {1..60}; do
+              if docker exec "$cloud" node -e 'fetch("http://127.0.0.1:8080/readyz", { signal: AbortSignal.timeout(2000) }).then(r => {if(!r.ok) process.exitCode=1;}).catch(() => process.exitCode=1)' >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            docker exec -i "$cloud" node --input-type=module - <<'JS'
+          import assert from "node:assert/strict";
+          import { readFile } from "node:fs/promises";
+
+          const request = (path) => fetch('http://127.0.0.1:8080' + path, { signal: AbortSignal.timeout(5000) });
+          for (const [path, body] of [
+            ["/healthz", { status: "ok" }],
+            ["/readyz", { status: "ready" }],
+            ["/v1/meta", { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: false }],
+          ]) {
+            const response = await request(path);
+            assert.equal(response.status, 200, path);
+            assert.deepEqual(await response.json(), body, path);
+          }
+          assert.equal((await request("/v1/me")).status, 401);
+          for (const [path, file] of [
+            ["/", "index.html"], ["/app/team-access", "index.html"],
+            ["/app.js", "app.js"], ["/i18n.js", "i18n.js"], ["/styles.css", "styles.css"],
+          ]) {
+            const response = await request(path);
+            assert.equal(response.status, 200, path);
+            assert.equal(response.headers.get("cache-control"), "no-store", path);
+            assert.deepEqual(Buffer.from(await response.arrayBuffer()), await readFile("/app/public/" + file), path);
+          }
+          JS
+            docker rm -f -v "$cloud" >/dev/null
+          }
+          ledger() {
+            docker exec "$postgres" psql -X -qAt -v ON_ERROR_STOP=1 -U sr_fixture -d sr_fixture \
+              -c 'SELECT version, name, checksum_sha256 FROM schema_migrations ORDER BY version'
+          }
+          smoke sr-cloud-ui:rollback
+          ledger > "$fixture/base.ledger"
+          test "$(wc -l < "$fixture/base.ledger")" -eq 22
+          test "$(tail -1 "$fixture/base.ledger" | cut -d '|' -f 1)" = 22
+          smoke "sr-cloud-ui:$CANDIDATE_SHA"
+          ledger > "$fixture/candidate.ledger"
+          diff -u "$fixture/base.ledger" "$fixture/candidate.ledger"
+          smoke sr-cloud-ui:rollback
+          ledger > "$fixture/rollback.ledger"
+          diff -u "$fixture/base.ledger" "$fixture/rollback.ledger"
+          test ! -s "$fixture/journal"
+          printf '%s\n' 'base, forward and rollback passed on the same isolated schema 22' \
+            'registration intentionally off for this SMTP-free packaging smoke; anonymous access was denied on all three boots' \
+            'no HTTP ports, account creation, email, or production access' > "$out/smoke.txt"
+          cp "$fixture/base.ledger" "$out/schema-22-ledger.txt"
+
+      - name: Package and reload candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="sr-cloud-ui:$CANDIDATE_SHA"
+          cd "$RUNNER_TEMP/sr-ui-package"
+          docker image save "$image" | gzip -n > cloud-ui-linux-amd64.tar.gz
+          sha256sum cloud-ui-linux-amd64.tar.gz > cloud-ui-linux-amd64.tar.gz.sha256
+          sha256sum -c cloud-ui-linux-amd64.tar.gz.sha256
+          cat image-identities.txt cloud-ui-linux-amd64.tar.gz.sha256
+          docker image rm "$image"
+          gzip -dc cloud-ui-linux-amd64.tar.gz | docker image load
+          identity=$(docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+          test "candidate=$identity" = "$(head -1 image-identities.txt)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-ui-linux-amd64-9b56307
+          path: ${{ runner.temp }}/sr-ui-package/
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
