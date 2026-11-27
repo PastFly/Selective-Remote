@@ -127,7 +127,7 @@ jobs:
           browser="$(command -v google-chrome || command -v chromium || true)"
           test -n "$browser" || { echo "Chrome or Chromium is required"; exit 1; }
           PLAYWRIGHT_MODULE="$PWD/node_modules/playwright-core/index.mjs" CHROMIUM_PATH="$browser" \
-            node --test tests/workspace-mobile-sync-status-browser.test.mjs tests/public-mobile-locale-browser.test.mjs
+            node --test tests/workspace-mobile-sync-status-browser.test.mjs tests/public-mobile-locale-browser.test.mjs tests/workspace-navigation-browser.test.mjs
 
       - name: Apply migrations and test Team and device-trust storage
         working-directory: cloud
