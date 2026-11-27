@@ -1949,10 +1949,7 @@ export function initializeTeamWorkspace({
     }
     // Folder disclosure is read-only navigation and must remain usable by Viewers.
     if (!publicationClient) for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
-    const creationDisabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
-    for (const button of [recordCreate, snippetCreate, snippetGroupCreate]) {
-      if (button) button.disabled = creationDisabled;
-    }
+    for (const button of [snippetCreate, snippetGroupCreate]) if (button) button.disabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
     recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
   }
 
