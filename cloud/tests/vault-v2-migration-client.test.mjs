@@ -166,11 +166,13 @@ test("crash checkpoints preserve generated IDs and completed ciphertext exactly;
       cryptoValue: webcrypto,
     }),
   );
+  const tamperedCiphertext = Buffer.from(saved.ciphertext, "base64url");
+  tamperedCiphertext[0] ^= 1;
   await assert.rejects(
     openMigrationCheckpoint({
       checkpoint: {
         ...saved,
-        ciphertext: saved.ciphertext.slice(0, -2) + "AA",
+        ciphertext: tamperedCiphertext.toString("base64url"),
       },
       key: f.checkpointKey,
       scope: f.scope,
