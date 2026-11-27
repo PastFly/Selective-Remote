@@ -81,8 +81,8 @@ async function waitForBlockedPublisher(pool,pid){
  return pollPublicationTest(async()=>(await pool.query("SELECT count(*)::int n FROM pg_stat_activity WHERE pid=$1 AND datname=current_database() AND query LIKE 'LOCK TABLE devices,%' AND wait_event_type='Lock'",[pid])).rows[0].n>0,'blocked publisher');
 }
 
-test('reader schema20 remains present in latest schema22',async()=>{
- const versions=(await loadMigrations(directory)).map(m=>m.version);assert.ok(versions.includes(20));assert.equal(versions.at(-1),22);
+test('reader migration remains present in the current schema',async()=>{
+ const versions=(await loadMigrations(directory)).map(m=>m.version);assert.ok(versions.includes(20));
 });
 test('discard retains permanent identity, permits scoped successor and rejects cross scope or kind reuse',{skip:!database},async()=>{
  const pool=new pg.Pool({connectionString:database});

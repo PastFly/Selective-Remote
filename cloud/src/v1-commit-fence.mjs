@@ -19,6 +19,7 @@ const tables = [
   ['shared_vault_revisions', 'INSERT OR UPDATE OR DELETE'],
   ['shared_vault_key_wrappers', 'INSERT OR UPDATE OR DELETE'],
 ];
+const guardedTables = tables.map(([table]) => 'public.' + table).join(', ');
 
 export async function installV1CommitFence(pool) {
   const client = await pool.connect();
@@ -26,7 +27,7 @@ export async function installV1CommitFence(pool) {
     await client.query('BEGIN');
     // DDL waits for transactions that already modified any protected table.
     // Once it commits, later old writers cannot cross this boundary.
-    await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ACCESS EXCLUSIVE MODE');
+    await client.query(`LOCK TABLE ${guardedTables} IN ACCESS EXCLUSIVE MODE`);
     await client.query(`CREATE OR REPLACE FUNCTION public.selective_remote_require_framed_v1_writer()
       RETURNS trigger LANGUAGE plpgsql AS $$${functionBody}$$`);
     for (const [table, events] of tables) {
@@ -57,9 +58,14 @@ export async function holdV1CommitFence(client, fence) {
   requireIndependentV1Anchor(fence);
   // Hold the table locks through COMMIT/ROLLBACK: a concurrent restore or DDL
   // cannot invalidate the verified triggers after the check and before write.
-  await client.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN ROW EXCLUSIVE MODE');
+  await client.query(`LOCK TABLE ${guardedTables} IN ROW EXCLUSIVE MODE`);
   await assertV1CommitFence((sql, values) => client.query(sql, values));
   await useFramedV1Writer(client);
+}
+
+export async function holdV1CommitReadback(query) {
+  await query(`LOCK TABLE ${guardedTables} IN SHARE MODE`);
+  await assertV1CommitFence(query);
 }
 
 // Test-only candidate. Closing ingress and draining connections are necessary;
@@ -85,7 +91,7 @@ export async function armV1CommitFence({ pool, fence }) {
   const snapshotClient=await pool.connect();
   try {
     await snapshotClient.query('BEGIN');
-    await snapshotClient.query('LOCK TABLE public.personal_vaults, public.shared_vaults, public.vault_revisions, public.shared_vault_revisions, public.shared_vault_key_wrappers IN SHARE MODE');
+    await snapshotClient.query(`LOCK TABLE ${guardedTables} IN SHARE MODE`);
     let state=await fence.snapshot();
     if(state.v1BaselineID)await assertV1DataFloor((sql,values)=>snapshotClient.query(sql,values),state);
     else {
@@ -110,11 +116,19 @@ export async function armV1CommitFence({ pool, fence }) {
 // This only verifies the database component. An independently retained floor,
 // protected controller and restricted DDL privileges are still mandatory.
 export async function assertV1CommitFence(query) {
-  const expected = new Map(tables.map(([name, event]) => [name, {
+  const trigger = 'selective_remote_framed_v1_writer';
+  const expected = new Map(tables.map(([name, event]) => [trigger + ':' + name, {
     type: 31,
     columns: event.includes('UPDATE OF ') ? event.split('UPDATE OF ')[1].split(', ') : [],
   }]));
-  const result = await query(`SELECT c.relname, t.tgtype, t.tgenabled, t.tgnargs,
+  return assertWriterTriggers(query, {
+    expected, triggers: [trigger], functionBody, functionName: 'selective_remote_require_framed_v1_writer',
+    errorCode: 'v1_writer_fence_missing',
+  });
+}
+
+export async function assertWriterTriggers(query, { expected, triggers, functionBody, functionName, errorCode }) {
+  const result = await query(`SELECT c.relname, t.tgname, t.tgtype, t.tgenabled, t.tgnargs,
       t.tgdeferrable, t.tginitdeferred, t.tgconstraint,
       pg_catalog.pg_get_expr(t.tgqual,t.tgrelid) AS condition,
       ARRAY(SELECT a.attname::text FROM pg_catalog.unnest(t.tgattr::int2[]) WITH ORDINALITY AS x(num,ord)
@@ -126,18 +140,18 @@ export async function assertV1CommitFence(query) {
     JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
     JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace
     JOIN pg_catalog.pg_language l ON l.oid=p.prolang
-    WHERE n.nspname='public' AND t.tgname='selective_remote_framed_v1_writer' AND NOT t.tgisinternal`);
-  if (!result || !Array.isArray(result.rows) || result.rows.length !== expected.size) throw Error('v1_writer_fence_missing');
+    WHERE n.nspname='public' AND t.tgname=ANY($1) AND NOT t.tgisinternal`, [triggers]);
+  if (!result || !Array.isArray(result.rows) || result.rows.length !== expected.size) throw Error(errorCode);
   for (const row of result.rows) {
-    const rule = expected.get(row.relname);
+    const key = row.tgname + ':' + row.relname;
+    const rule = expected.get(key);
     if (!rule || Number(row.tgtype) !== rule.type || row.tgenabled !== 'O' || Number(row.tgnargs) !== 0
       || row.tgdeferrable !== false || row.tginitdeferred !== false || Number(row.tgconstraint) !== 0
       || row.condition !== null || !Array.isArray(row.columns) || row.columns.join(',') !== rule.columns.join(',')
       || row.prosrc !== functionBody || row.prosecdef !== false || row.proconfig !== null
-      || row.proc_schema !== 'public' || row.proname !== 'selective_remote_require_framed_v1_writer'
-      || row.lanname !== 'plpgsql' || row.returns_trigger !== true) throw Error('v1_writer_fence_missing');
-    expected.delete(row.relname);
+      || row.proc_schema !== 'public' || row.proname !== functionName
+      || row.lanname !== 'plpgsql' || row.returns_trigger !== true) throw Error(errorCode);
+    expected.delete(key);
   }
-  if (expected.size) throw Error('v1_writer_fence_missing');
   return true;
 }

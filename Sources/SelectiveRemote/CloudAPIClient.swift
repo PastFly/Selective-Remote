@@ -9,11 +9,14 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
     case invalidResponse
     case serviceError(Int, String?)
     case incompatibleAPI(Int)
+    case personalVaultWriteUnsupported
 
     var isAuthenticationLoss: Bool { self == .authenticationRequired || self == .logoutUnconfirmed }
 
     var errorDescription: String? {
         switch self {
+        case .personalVaultWriteUnsupported:
+            UpdateLocalization.key(AppCopy.personalVaultWriteUnsupported)
         case .invalidEndpoint:
             UpdateLocalization.text(
                 ru: "Укажите корректный адрес Selective Remote Cloud.",
@@ -509,7 +512,10 @@ actor SelectiveRemoteCloudAPIClient {
             throw SelectiveRemoteCloudError.serviceError(503, "vault_write_temporarily_unavailable")
         }
         guard http.value(forHTTPHeaderField: "X-Selective-V1-Write-Fence") == "1"
-        else { throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required") }
+        else {
+            if personal { throw SelectiveRemoteCloudError.personalVaultWriteUnsupported }
+            throw SelectiveRemoteCloudError.serviceError(426, "vault_client_upgrade_required")
+        }
         if personalPilot {
             let (_, availability) = try await authorizedResponse(
                 endpoint: endpoint, path: "v1/vault/write-availability",

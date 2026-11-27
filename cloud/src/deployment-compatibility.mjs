@@ -1,9 +1,23 @@
 import { readFile } from 'node:fs/promises';
 import { readMigrationSchemaVersion, readActivePublications } from './migration-compatibility.mjs';
+import { isPrivatePersonalPilotEnvironment } from './v1-write-fence.mjs';
 import { assertV1CommitFence, requireIndependentV1Anchor } from './v1-commit-fence.mjs';
 import { assertV1DataFloor } from './v1-data-fence.mjs';
+import { assertV1TeamAuthorization, assertV1TeamAuthorizationFence, teamAuthorizationProtocol,
+  teamAuthorizationSchemaFloor } from './v1-team-authorization.mjs';
 
 export const currentCapabilities = Object.freeze(JSON.parse(await readFile(new URL('../deployment-compatibility.json', import.meta.url), 'utf8')));
+// The previous format-2 runtime can maintain Team history only in closed staging.
+export function supportsTeamAuthorizationRuntime(config, candidate) {
+  if (candidate?.v1TeamAuthorizationProtocol !== teamAuthorizationProtocol) return false;
+  if (isPrivatePersonalPilotEnvironment(config)) return true;
+  if (candidate.v1TeamAuthorizationRegistrationVersion !== 1 || !config.allowRegistration
+      || config.publication.enabled || config.wholePublication.enabled
+      || config.publication.allowedVaultIDs.length || new URL(config.publicOrigin).protocol !== 'https:') return false;
+  if (config.publication.environment === 'production') return config.registrationEmailAllowlist === null;
+  return config.publication.environment === 'staging' && config.registrationEmailAllowlist?.length === 2;
+}
+
 function requireCandidate(candidate) {
   const keys = ['fenceVersion', 'maxSchemaVersion', 'readerProjectionVersion', 'version', 'wholePublicationVersion'];
   const legacy = candidate && Object.keys(candidate).sort().join(',') === keys.join(',');
@@ -12,11 +26,18 @@ function requireCandidate(candidate) {
   const emptyCreateAware = candidate && Object.keys(candidate).sort().join(',') === [...keys, 'v1WriterProtocol', 'emptyVaultCreationVersion'].sort().join(',')
     && candidate.v1WriterProtocol === 1 && candidate.emptyVaultCreationVersion === 1;
   const fields=Object.keys(candidate??{}).sort().join(',');
-  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion']];
+  const registered = ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol','v1TeamAuthorizationRegistrationVersion'];
+  const productionTeam = [...registered, 'v1ProductionTeamVersion'];
+  const variants=[['v1AnchorProtocol'],['wrapperEnvelopeVersion'],['v1AnchorProtocol','wrapperEnvelopeVersion'],
+    ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion'],
+    ['v1AnchorProtocol','wrapperEnvelopeVersion','teamSafetyStopVersion','v1TeamAuthorizationProtocol'],
+    registered, productionTeam, [...productionTeam, 'v1ProductionPersonalPilotVersion']];
   const extended=variants.some(extra=>fields===[...keys,'v1WriterProtocol','emptyVaultCreationVersion',...extra].sort().join(',')
-    &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&extra.every(k=>candidate[k]===1));
+    &&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1
+    &&extra.every(k=>candidate[k]===(k==='v1TeamAuthorizationProtocol'?teamAuthorizationProtocol:1)));
   if ((!legacy && !writerAware && !emptyCreateAware && !extended)
-      || candidate.version !== 1 || candidate.fenceVersion !== 2 || candidate.maxSchemaVersion !== 22
+      || (Object.hasOwn(candidate, 'v1TeamAuthorizationRegistrationVersion') && candidate.maxSchemaVersion !== teamAuthorizationSchemaFloor)
+      || candidate.version !== 1 || candidate.fenceVersion !== 2 || ![22, 23].includes(candidate.maxSchemaVersion)
       || candidate.readerProjectionVersion !== 1 || candidate.wholePublicationVersion !== 1)
     throw Error('deployment_code_floor');
 }
@@ -30,7 +51,22 @@ function requireWriterFloor(snapshot, candidate) {
 function requireResolved(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.pending) || !Array.isArray(snapshot.committed) || !Array.isArray(snapshot.outcomes))
     throw Error('invalid_deployment_fence');
-  if (snapshot.pending.length || snapshot.v1Pending?.length) throw Error('deployment_fence_pending');
+  if (snapshot.pending.length || snapshot.v1Pending?.length || snapshot.v1TeamAuthorization?.pending)
+    throw Error('deployment_fence_pending');
+}
+
+function requireTeamAuthorizationCapability(snapshot, candidate, teamAuthorizationEnabled, productionTeamEnabled) {
+  if (snapshot.productionPersonalPilotHistory && candidate.v1ProductionTeamVersion !== 1) throw Error('deployment_code_floor');
+  if (productionTeamEnabled && !snapshot.v1TeamAuthorization) throw Error('deployment_team_authorization_unavailable');
+  if (!snapshot.v1TeamAuthorization) return;
+  if (!teamAuthorizationEnabled || snapshot.v1TeamAuthorization.protocol !== teamAuthorizationProtocol ||
+    candidate.v1TeamAuthorizationProtocol !== teamAuthorizationProtocol ||
+    candidate.maxSchemaVersion < teamAuthorizationSchemaFloor) throw Error('deployment_code_floor');
+  if (snapshot.writerFloor !== 1 || !snapshot.v1BaselineID) throw Error('invalid_deployment_fence');
+}
+
+function sameTeamAuthorization(before, after) {
+  return before?.protocol === after?.protocol && before?.digest === after?.digest;
 }
 function samePublication(record, row) {
   if (!row || row.teamID !== record.teamID || row.vaultID !== record.vaultID || row.manifestHash !== record.manifestHash) return false;
@@ -83,23 +119,30 @@ export function createDeploymentGuard(check, {
 
 // This is also executed by the independent host controller against a selected
 // image's metadata. The controller pins that image and this checker separately.
-export async function verifyDeploymentCompatibility({ query, fence, candidate, mode = 'traffic' }) {
+export async function verifyDeploymentCompatibility({ query, fence, candidate, mode = 'traffic', teamAuthorizationEnabled = true,
+  productionTeamEnabled = false }) {
   requireCandidate(candidate);
+  if (productionTeamEnabled) {
+    if (candidate.v1ProductionTeamVersion !== 1 || !teamAuthorizationEnabled) throw Error('deployment_code_floor');
+    requireIndependentV1Anchor(fence);
+  }
   if(fence?.anchor&&candidate.v1AnchorProtocol!==1)throw Error('deployment_code_floor');
   if(fence?.anchor&&candidate.teamSafetyStopVersion!==1)throw Error('deployment_code_floor');
   if (!['traffic', 'maintenance-upgrade'].includes(mode)) throw Error('invalid_deployment_mode');
   const before = await fence.snapshot();
   requireResolved(before);
+  requireTeamAuthorizationCapability(before, candidate, teamAuthorizationEnabled, productionTeamEnabled);
   const beforeWriterFloor = requireWriterFloor(before, candidate);
   if (beforeWriterFloor) requireIndependentV1Anchor(fence);
   const version = await readMigrationSchemaVersion(query);
-  if (version > candidate.maxSchemaVersion) throw Error('deployment_schema_floor');
+  if (version > candidate.maxSchemaVersion || (productionTeamEnabled && version < teamAuthorizationSchemaFloor)) throw Error('deployment_schema_floor');
   // Explicit maintenance keeps traffic closed. Only a pristine journal may
   // forward-upgrade an old V1 database; a retained intent/floor cannot be erased.
   if (mode === 'maintenance-upgrade' && version < 19 && !before.committed.length && !before.outcomes.length) {
     if (beforeWriterFloor) throw Error('deployment_writer_floor');
     const after = await fence.snapshot();
     requireResolved(after);
+    requireTeamAuthorizationCapability(after, candidate, teamAuthorizationEnabled, productionTeamEnabled);
     if (requireWriterFloor(after, candidate)) throw Error('deployment_writer_floor');
     if (after.committed.length || after.outcomes.length) throw Error('deployment_schema_floor');
     return { compatible: true, schemaVersion: version, maintenanceOnly: true };
@@ -109,6 +152,9 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   const publications = await readActivePublications(query, version);
   const after = await fence.snapshot();
   requireResolved(after);
+  requireTeamAuthorizationCapability(after, candidate, teamAuthorizationEnabled, productionTeamEnabled);
+  if (!sameTeamAuthorization(before.v1TeamAuthorization, after.v1TeamAuthorization))
+    throw Error('deployment_team_authorization_history_changed');
   const afterWriterFloor = requireWriterFloor(after, candidate);
   if (afterWriterFloor) requireIndependentV1Anchor(fence);
   if (afterWriterFloor < beforeWriterFloor) throw Error('deployment_writer_floor');
@@ -116,8 +162,15 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
   if (afterWriterFloor) {
     await assertV1CommitFence(query);
     await assertV1DataFloor(query,after);
+    if (after.v1TeamAuthorization) {
+      await assertV1TeamAuthorizationFence(query);
+      await assertV1TeamAuthorization(query,after.v1TeamAuthorization);
+    }
     const final=await fence.snapshot();
     requireResolved(final);
+    requireTeamAuthorizationCapability(final, candidate, teamAuthorizationEnabled, productionTeamEnabled);
+    if (!sameTeamAuthorization(after.v1TeamAuthorization, final.v1TeamAuthorization))
+      throw Error('deployment_team_authorization_history_changed');
     if(requireWriterFloor(final,candidate)!==afterWriterFloor
       ||JSON.stringify([final.v1BaselineID,final.v1Committed,final.v1Outcomes])
         !==JSON.stringify([after.v1BaselineID,after.v1Committed,after.v1Outcomes]))throw Error('deployment_v1_history_changed');
@@ -138,5 +191,7 @@ export async function verifyDeploymentCompatibility({ query, fence, candidate, m
       || after.committed.some(record => !samePublication(record, byScope.get(`${record.teamID}\0${record.vaultID}`))))
     throw Error('deployment_fence_mismatch');
   return { compatible: true, schemaVersion: version, ...(afterWriterFloor ? { writerFloor: afterWriterFloor } : {}),
+    ...(productionTeamEnabled ? {productionTeamEnabled:true} : {}),
+    ...(after.v1TeamAuthorization ? { teamAuthorizationProtocol: after.v1TeamAuthorization.protocol } : {}),
     ...(personalWritePilot ? { personalWritePilot } : {}) };
 }

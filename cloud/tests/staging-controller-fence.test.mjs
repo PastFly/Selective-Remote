@@ -17,7 +17,7 @@ import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import pg from 'pg';
-import {verifyControllerFixture,validateControllerSettings,validateCandidateIdentity,validateCandidateCapabilities,validateControllerCompose,validateControllerProject} from '../scripts/verify-staging-controller.mjs';
+import {verifyControllerFixture,validateControllerSettings,validateCandidateIdentity,validateCandidateCapabilities,validateControllerCompose,validateControllerProject,runAuthorizationUpgradeContainer} from '../scripts/verify-staging-controller.mjs';
 import {verifyDeploymentCompatibility,currentCapabilities} from '../src/deployment-compatibility.mjs';
 import {MigrationFence} from '../src/migration-fence.mjs';
 import {applyMigrations,loadMigrations} from '../src/migrations.mjs';
@@ -45,6 +45,9 @@ async function fixtureController({query,fence,metadata=currentCapabilities,maint
   if(event.stage==='check')return verifyDeploymentCompatibility({candidate:event.metadata,mode:event.mode,fence,query:(sql,values)=>{queries.push(sql);return query(sql,values);}});
  }});return {promise,stages,queries,reports};
 }
+const originalCapabilities = {
+  version: 1, fenceVersion: 2, readerProjectionVersion: 1, wholePublicationVersion: 1, maxSchemaVersion: 22,
+};
 const emptyFence={snapshot:async()=>({schemaFloor:19,pending:[],committed:[],outcomes:[]}),verifySchemaFloor:async()=>true,verify:async()=>true};
 const emptyDB=async sql=>({rows:sql.includes('schema_migrations')?[{version:'22'}]:[]});
 test('protected identity/settings and rendered mounts reject alternate images, independent-history loss and startup overrides',()=>{
@@ -286,17 +289,61 @@ test('additional env-file dependencies are rejected even when their present valu
 
 test('controller validates writer capability metadata without accepting unknown versions', () => {
   assert.doesNotThrow(() => validateCandidateCapabilities(currentCapabilities));
-  const {v1WriterProtocol: _, emptyVaultCreationVersion: __, v1AnchorProtocol: ___, wrapperEnvelopeVersion: ____, teamSafetyStopVersion: _____, ...oldCandidate}=currentCapabilities;
-  assert.doesNotThrow(() => validateCandidateCapabilities(oldCandidate));
+  assert.doesNotThrow(() => validateCandidateCapabilities(originalCapabilities));
   for(const value of [0,2,null]) assert.throws(() => validateCandidateCapabilities({...currentCapabilities,v1WriterProtocol:value}),/deployment_code_floor/);
   assert.throws(() => validateCandidateCapabilities({...currentCapabilities,unexpected:true}),/deployment_code_floor/);
 });
 
+test('controller checks the registered Team manifest before touching the deployment', async () => {
+  const { v1ProductionTeamVersion, v1ProductionPersonalPilotVersion, ...registered } = currentCapabilities;
+  const { v1TeamAuthorizationRegistrationVersion, ...earlier } = registered;
+  const { v1TeamAuthorizationProtocol, ...missingProtocol } = registered;
+  assert.doesNotThrow(() => validateCandidateCapabilities(registered));
+  assert.doesNotThrow(() => validateCandidateCapabilities(earlier));
+  for (const invalid of [
+    missingProtocol,
+    { ...registered, v1TeamAuthorizationRegistrationVersion: 2 },
+    { ...registered, v1TeamAuthorizationProtocol: 1 },
+    { ...registered, maxSchemaVersion: 22 },
+    { ...registered, unreviewed: true },
+  ]) {
+    const controller = await fixtureController({ metadata: invalid, query: emptyDB, fence: emptyFence });
+    await assert.rejects(controller.promise, /deployment_code_floor/);
+    assert.deepEqual(controller.stages, ['attest', 'candidate-metadata']);
+  }
+});
+
+test('authorization format maintenance verifies and upgrades only after ingress closes', async () => {
+ const stages=[];
+ const result=await verifyControllerFixture({
+  candidate:{...settings(),anchorProtocol:1},
+  authorizationUpgrade:true,
+  runCommand:async({stage})=>{
+   stages.push(stage);
+   if(stage==='candidate-metadata')return currentCapabilities;
+  },
+ });
+ assert.deepEqual(stages,['attest','candidate-metadata','storage','assert-project','close-traffic','assert-closed',
+  'check-authorization-upgrade','migrate','upgrade-authorization','check']);
+ assert.deepEqual(result,{compatible:true,trafficOpened:false});
+});
+
+test('authorization upgrade removes its exact writable child after a failed start', async () => {
+ const id='a'.repeat(64), calls=[];
+ const docker=async command=>{
+  calls.push(command);
+  if(command[0]==='create')return {stdout:id+'\n'};
+  if(command[0]==='start')throw Error('fixture_timeout');
+  throw Error('fixture_cleanup_unavailable');
+ };
+ await assert.rejects(runAuthorizationUpgradeContainer(docker,['pinned-image']),/deployment_authorization_upgrade_cleanup/);
+ assert.deepEqual(calls,[['create','pinned-image'],['start','--attach',id],['rm','--force',id]]);
+});
+
 
 test('retained writer floor prevents old image startup before migration or traffic',async()=>{
- const {v1WriterProtocol:_,emptyVaultCreationVersion:__,v1AnchorProtocol:___,wrapperEnvelopeVersion:____,teamSafetyStopVersion:_____,...oldMetadata}=currentCapabilities;
  const fence={snapshot:async()=>({schemaFloor:19,writerFloor:1,pending:[],committed:[],outcomes:[]})};
- const f=await fixtureController({query:emptyDB,fence,metadata:oldMetadata});
+ const f=await fixtureController({query:emptyDB,fence,metadata:originalCapabilities});
  await assert.rejects(f.promise,/deployment_code_floor/);
  assert.ok(!f.stages.includes('migrate'));
  assert.ok(!f.stages.includes('open-traffic'));
@@ -337,4 +384,95 @@ test('protected Team safety stop floor rejects anchor-capable images without the
  assert.throws(()=>validateCandidateCapabilities(old,floor),/deployment_code_floor/);
  let queried=false;const f=await fixtureController({metadata:old,fence:emptyFence,query:()=>{queried=true;throw Error('unexpected_query');}});
  await assert.rejects(f.promise,/deployment_code_floor/);assert.equal(queried,false);assert.ok(!f.stages.includes('open-traffic'));
+});
+
+function productionPair(role = 'forward') {
+  const pair = {
+    rollback: {sourceSHA:'3'.repeat(40), imageDigest:'sha256:'+'4'.repeat(64)},
+    forward: {sourceSHA:'5'.repeat(40), imageDigest:'sha256:'+'6'.repeat(64)},
+  };
+  return {...settings(),...pair[role],productionReleasePair:pair,anchorProtocol:1,
+    anchorDeploymentID:'11111111-1111-4111-8111-111111111111',registrationMode:'production-v1'};
+}
+const {v1ProductionPersonalPilotVersion: ignoredPilotCapability, ...teamManifest} = currentCapabilities;
+const rollbackManifest = {...teamManifest,v1ProductionTeamVersion:1};
+const forwardManifest = {...rollbackManifest,v1ProductionPersonalPilotVersion:1};
+
+test('protected production requires two exact immutable roles with distinct capabilities', () => {
+  const s = productionPair();
+  assert.equal(validateControllerSettings(s),s);
+  for (const change of [
+    {sourceSHA:s.productionReleasePair.rollback.sourceSHA}, {anchorDeploymentID:null},
+    {anchorProtocol:undefined}, {registrationMode:undefined}, {productionReleasePair:null},
+    {productionReleasePair:{...s.productionReleasePair,rollback:s.productionReleasePair.forward}},
+  ]) assert.throws(() => validateControllerSettings({...s,...change}));
+  validateCandidateCapabilities(forwardManifest,s);
+  validateCandidateCapabilities(rollbackManifest,productionPair('rollback'));
+  for (const invalid of [rollbackManifest,{...forwardManifest,v1ProductionTeamVersion:2},{...forwardManifest,extra:1}])
+    assert.throws(() => validateCandidateCapabilities(invalid,s), /deployment_code_floor/);
+  assert.throws(() => validateCandidateCapabilities(forwardManifest,productionPair('rollback')), /deployment_code_floor/);
+});
+
+test('production pair requires open registration, HTTPS, explicit Team and scoped forward writes', async () => {
+  const {rootCertificates} = await import('node:tls');
+  const s = productionPair();
+  const env = {
+    ALLOW_REGISTRATION:'true',PUBLICATION_ENVIRONMENT:'production',PUBLICATION_READER_ENABLED:'false',
+    WHOLE_PUBLICATION_ENABLED:'false',CLOUD_PUBLIC_ORIGIN:'https://fixture.example',
+    CLOUD_PRODUCTION_TEAM_ENABLED:'true',CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:'true',
+    PUBLICATION_FENCE_ANCHOR_URL:'postgresql://runtime:synthetic@anchor.example/fence',
+    PUBLICATION_FENCE_ANCHOR_ID:s.anchorDeploymentID,PUBLICATION_FENCE_ANCHOR_CA_BASE64:Buffer.from(rootCertificates[0]).toString('base64'),
+  };
+  const evaluate = (settings, values, image=imageEnvironment) => {
+    const model=compose(settings);
+    Object.assign(model.services.cloud.environment,values);
+    return validateControllerCompose(model,settings,{...environmentEvidence,imageEnvironment:image,
+      dockerEnvironment:[...dockerEnvironment,...Object.entries(values).map(([k,v])=>k+'='+v)]});
+  };
+  assert.equal(evaluate(s,env).ALLOW_REGISTRATION,'true');
+  for (const changed of [{ALLOW_REGISTRATION:'false'},{CLOUD_PUBLIC_ORIGIN:'http://fixture.example'},
+    {CLOUD_PRODUCTION_TEAM_ENABLED:'false'},{CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:'TRUE'}])
+    assert.throws(()=>evaluate(s,{...env,...changed}),/deployment_production_scope/);
+  assert.throws(()=>evaluate(s,env,[...imageEnvironment,'CLOUD_PRODUCTION_TEAM_ENABLED=true']),/deployment_production_scope/);
+  assert.throws(()=>evaluate(productionPair('rollback'),env),/deployment_production_scope/);
+  assert.equal(evaluate(productionPair('rollback'),{...env,CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:'false'}).ALLOW_REGISTRATION,'true');
+  const {productionReleasePair: pair,...legacy} = s;
+  assert.throws(()=>evaluate(legacy,env),/deployment_production_scope/);
+});
+
+test('pair readiness checks both pins and retained state without changing traffic or writing', async () => {
+  const calls = [];
+  const runCommand = async args => {
+    calls.push(args);
+    if (args.stage==='candidate-metadata') return forwardManifest;
+    if (args.stage==='peer-metadata') return rollbackManifest;
+  };
+  assert.deepEqual(await verifyControllerFixture({candidate:productionPair(),verifyProductionPair:true,runCommand}),
+    {productionPairVerified:true});
+  assert.deepEqual(calls.map(x=>x.stage),['attest','candidate-metadata','peer-metadata','storage','assert-project','check','check']);
+  const checks=calls.filter(x=>x.stage==='check');
+  assert.deepEqual(checks.map(x=>!!x.peer),[true,false]);
+  assert.ok(checks.every(x=>x.mode==='traffic'&&x.requireClosedPilot));
+  await assert.rejects(verifyControllerFixture({candidate:productionPair(),runCommand:async args=>{
+    if(args.stage==='check' && args.peer) throw Error('deployment_pilot_open');
+    assert.notEqual(args.stage,'close-traffic');return runCommand(args);
+  }}),/deployment_pilot_open/);
+});
+
+test('pilot open attests the running forward runtime, rollback may close and verifies closure', async () => {
+  const pilotID=randomUUID();
+  for(const action of ['open','close']){
+    const stages=[],role=action==='open'?'forward':'rollback';
+    const operation=action==='open'?[action,pilotID,randomUUID(),randomUUID(),'5']:[action,pilotID];
+    await verifyControllerFixture({candidate:productionPair(role),pilotOperation:operation,runCommand:async args=>{
+      stages.push(args);
+      if(args.stage==='candidate-metadata')return role==='forward'?forwardManifest:rollbackManifest;
+      if(args.stage==='peer-metadata')return role==='forward'?rollbackManifest:forwardManifest;
+    }});
+    assert.deepEqual(stages.filter(x=>x.stage==='check').map(x=>x.requireClosedPilot),action==='open'?[true,true]:[false,false,true]);
+    assert.equal(stages.some(x=>x.stage==='verify-running-forward'),action==='open');
+    assert.ok(!stages.some(x=>x.stage==='close-traffic'||x.stage==='open-traffic'));
+  }
+  await assert.rejects(verifyControllerFixture({candidate:productionPair('rollback'),pilotOperation:['open'],
+    runCommand:()=>assert.fail('reached candidate')}),/deployment_production_scope/);
 });

@@ -1,4 +1,4 @@
-import test from 'node:test';import {tmpdir} from 'node:os';import {mkdtemp as makeTemp,realpath,rm} from 'node:fs/promises';import {join as pathJoin} from 'node:path';import {fileURLToPath} from 'node:url';
+import test from 'node:test';import {tmpdir} from 'node:os';import {lstat,mkdir,mkdtemp as makeTemp,realpath,rm,rmdir} from 'node:fs/promises';import {join as pathJoin} from 'node:path';import {fileURLToPath} from 'node:url';
 const temporary=[];async function temp(prefix){const dir=await realpath(await makeTemp(pathJoin(tmpdir(),prefix)));temporary.push(dir);return dir;}test.after(async()=>{await Promise.all(temporary.map(dir=>rm(dir,{recursive:true,force:true})));});
 import assert from 'node:assert/strict';
 import {validateEnrollment,scopedEnvironment,publicationEnvironment} from '../scripts/staging-migration-operator-helper.mjs';
@@ -93,4 +93,131 @@ test('actual file adapter pins scoped config before guarded restart and closes o
  await applyReviewedConfiguration({settings,nextSettings:settings,nextEnv,settingsPath,read:path=>readFile(path),run});assert.deepEqual(stages,['closed','guarded-restart']);
  await reset();const failures=[];await assert.rejects(applyReviewedConfiguration({settings,nextSettings:settings,nextEnv,settingsPath,read:path=>readFile(path),run:async(file,args)=>{if(file==='/bin/bash')throw Error('guard_denied');if(args[0]==='stop')failures.push('closed');return {stdout:'false\n'};}}),/guard_denied/);assert.deepEqual(failures,['closed','closed']);
  await reset();await writeFile(envPath,before+'UNREVIEWED=value\n');let dispatched=false;await assert.rejects(applyReviewedConfiguration({settings,nextSettings:settings,nextEnv,settingsPath,read:path=>readFile(path),run:async()=>{dispatched=true;}}),/environment/);assert.equal(dispatched,false);
+});
+
+test('Team recovery selects the protected staging identity, anchor and a stopped deployment',async()=>{
+ const identity={sourceSHA:'a'.repeat(40),imageDigest:'sha256:'+'b'.repeat(64),controllerDigest:'c'.repeat(64)};
+ const settings={version:1,...identity,network:'cloud_private',teamSafetyStopVersion:1,
+  fencePath:'/var/lib/selective-remote-controller/publication/journal',envPath:'/protected/staging.env',
+  anchorProtocol:1,anchorDeploymentID:id(501)};
+ const request={operation:'reconcile-team-authorization',intentID:id(502)};
+ const response={status:'confirmed',intentID:request.intentID};
+ const context={version:1,runID:'run-1',controllerIdentity:identity,
+  activationPolicyPath:'/var/lib/selective-remote-controller/operator/run-1-activation-policy.json',
+  allowedOperations:['reconcile-fence'],scopes:[scope]};
+ assert.throws(()=>operator.validateOperatorRequest(context,request,identity),/staging_operator_request/);
+ const containerID='e'.repeat(64),postgresID='f'.repeat(64);
+ const network={Name:'cloud_private',Labels:{'com.docker.compose.project':'cloud','com.docker.compose.network':'private'}};
+ const postgres={State:{Running:true},Config:{Labels:{'com.docker.compose.project':'cloud','com.docker.compose.service':'postgres'}},
+  NetworkSettings:{Networks:{cloud_private:{}}}};
+ const runFor=({cloudRunning=false,caddyRunning=false,cloudImage=identity.imageDigest,sourceSHA=identity.sourceSHA,
+  receipt=response,unexpectedContainer,cleanupFails=false}={})=>{
+  const calls=[];let input;
+  return {calls,input:()=>input,run(command,args){
+   calls.push({command,args});
+   if(args[0]==='image')return Promise.resolve({stdout:JSON.stringify({
+    Id:identity.imageDigest,Config:{Labels:{'org.opencontainers.image.revision':sourceSHA}},
+   })});
+   if(args[0]==='inspect'&&args[1]==='--format')return Promise.resolve({stdout:args.at(-1)==='cloud-cloud-1'
+    ? [cloudRunning,cloudImage].join(' ') : String(caddyRunning)});
+   if(args[0]==='network')return Promise.resolve({stdout:JSON.stringify(network)});
+   if(args[0]==='ps')return Promise.resolve({stdout:postgresID+(unexpectedContainer?'\n'+'1'.repeat(64):'')});
+   if(args[0]==='inspect')return Promise.resolve({stdout:JSON.stringify(unexpectedContainer?[postgres,unexpectedContainer]:[postgres])});
+   if(args[0]==='create')return Promise.resolve({stdout:containerID});
+   if(args[0]==='rm'){
+    assert.deepEqual(args,['rm','--force',containerID]);
+    if(cleanupFails)return Promise.reject(Error('synthetic_cleanup_failed'));
+    return Promise.resolve({stdout:containerID});
+   }
+   assert.deepEqual(args,['start','--attach','--interactive',containerID]);
+   const child=Promise.resolve({stdout:JSON.stringify(receipt)});
+   child.child={stdin:{on(){},end(data){input=JSON.parse(data);}}};return child;
+  }};
+ };
+ for(const patch of [{version:2},{registrationMode:'production-v1'},{anchorProtocol:undefined},{anchorDeploymentID:'wrong'},
+  {teamSafetyStopVersion:undefined},{network:'host'},{fencePath:'/tmp/other'}]){
+  const mock=runFor();
+  await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+   settings:{...settings,...patch},identity,request,run:mock.run,
+  }),/staging_operator_team_recovery_scope/);
+  assert.equal(mock.calls.length,0);
+ }
+ for(const badRequest of [{...request,confirmed:true},{...request,operation:'reconcile-fence'}]){
+  const mock=runFor();
+  await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+   settings,identity,request:badRequest,run:mock.run,
+  }),/staging_operator_team_recovery_scope/);
+  assert.equal(mock.calls.length,0);
+ }
+ for(const condition of [{cloudRunning:true},{caddyRunning:true},{cloudImage:'sha256:'+'d'.repeat(64)}]){
+  const mock=runFor(condition);
+  await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+   settings,identity,request,run:mock.run,
+  }),/staging_operator_team_recovery_traffic/);
+  assert.ok(mock.calls.every(call=>['image','inspect'].includes(call.args[0])));
+ }
+ const wrongImage=runFor({sourceSHA:'d'.repeat(40)});
+ await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+  settings,identity,request,run:wrongImage.run,
+ }),/staging_operator_identity/);
+ assert.equal(wrongImage.calls.length,1);
+ const foreign=runFor({unexpectedContainer:{...postgres,Config:{Labels:{}}}});
+ await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+  settings,identity,request,run:foreign.run,
+ }),/deployment_project_mismatch/);
+ assert.ok(!foreign.calls.some(call=>call.args[0]==='create'));
+ const extraCloud=runFor({unexpectedContainer:{...postgres,Config:{Labels:{
+  'com.docker.compose.project':'cloud','com.docker.compose.service':'cloud',
+ }}}});
+ await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+  settings,identity,request,run:extraCloud.run,
+ }),/staging_operator_team_recovery_traffic/);
+ assert.ok(!extraCloud.calls.some(call=>call.args[0]==='create'));
+ const mock=runFor();
+ assert.deepEqual(await operator.runTeamAuthorizationRecoveryContainer({settings,identity,request,run:mock.run}),response);
+ const invocation=mock.calls.find(call=>call.args[0]==='create');
+ assert.equal(invocation.command,'/usr/bin/docker');
+ assert.ok(invocation.args.includes('--pull=never')&&invocation.args.includes(identity.imageDigest));
+ assert.ok(invocation.args.includes('type=bind,src=/var/lib/selective-remote-controller/publication,dst=/publication-fence'));
+ assert.ok(invocation.args.includes('type=bind,src=/var/lib/selective-remote-controller/operator,dst=/var/lib/selective-remote-controller/operator,readonly'));
+ assert.equal(invocation.args.at(-2),'/app/scripts/staging-team-authorization-recovery.mjs');
+ assert.deepEqual(JSON.parse(invocation.args.at(-1)),{identity,
+  identityPath:'/var/lib/selective-remote-controller/operator/controller-identity.json',
+  anchorDeploymentID:settings.anchorDeploymentID,fencePath:'/publication-fence/journal'});
+ assert.deepEqual(mock.input(),request);
+ assert.deepEqual(mock.calls.at(-1).args,['rm','--force',containerID]);
+ const wrong=runFor({receipt:{...response,intentID:id(503)}});
+ await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+  settings,identity,request,run:wrong.run,
+ }),/staging_operator_team_recovery_receipt/);
+ const unfinished=runFor({cleanupFails:true});
+ await assert.rejects(()=>operator.runTeamAuthorizationRecoveryContainer({
+  settings,identity,request,run:unfinished.run,
+ }),/staging_operator_team_recovery_cleanup/);
+});
+
+test('Team recovery holds both existing operator locks and retains them when child cleanup is uncertain',async()=>{
+ const state=await temp('sr-team-recovery-locks-');
+ const operatorDirectory=pathJoin(state,'operator');
+ await mkdir(operatorDirectory,{mode:0o700});
+ const controllerLock=pathJoin(state,'controller.lock'),contextLock=pathJoin(operatorDirectory,'operator-context.json.lock');
+ const unexpected=()=>assert.fail('recovery ran without exclusive controller access');
+ await mkdir(controllerLock,{mode:0o700});
+ await assert.rejects(()=>operator.withTeamAuthorizationRecoveryLocks(unexpected,state),/staging_operator_controller_locked/);
+ await assert.rejects(lstat(contextLock),{code:'ENOENT'});
+ await rmdir(controllerLock);
+ await mkdir(contextLock,{mode:0o700});
+ await assert.rejects(()=>operator.withTeamAuthorizationRecoveryLocks(unexpected,state),/staging_operator_context_locked/);
+ await assert.rejects(lstat(controllerLock),{code:'ENOENT'});
+ await rmdir(contextLock);
+ assert.equal(await operator.withTeamAuthorizationRecoveryLocks(async()=>{
+  assert.ok((await lstat(controllerLock)).isDirectory()&&(await lstat(contextLock)).isDirectory());
+  return 'received';
+ },state),'received');
+ await assert.rejects(lstat(controllerLock),{code:'ENOENT'});
+ await assert.rejects(lstat(contextLock),{code:'ENOENT'});
+ await assert.rejects(()=>operator.withTeamAuthorizationRecoveryLocks(
+  async()=>{throw Error('staging_operator_team_recovery_cleanup');},state,
+ ),/staging_operator_team_recovery_cleanup/);
+ assert.ok((await lstat(controllerLock)).isDirectory()&&(await lstat(contextLock)).isDirectory());
 });

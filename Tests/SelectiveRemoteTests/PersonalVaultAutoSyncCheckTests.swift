@@ -343,6 +343,44 @@ struct PersonalVaultAutoSyncCheckTests {
         Issue.record("An unchanged outgoing snapshot must not remain pending forever")
     }
 
+    @Test("A missing server write capability keeps local changes pending until a confirmed retry", .timeLimit(.minutes(1)))
+    func serverWriteCapabilityRecovers() async throws {
+        let enabled = PersonalCheckRequests()
+        let puts = PersonalCheckRequests()
+        let fixture = try PersonalCheckFixture(remoteRevision: 5, supportsWrites: { enabled.count > 0 },
+                                               uploadResponse: { request, remote, _ in
+            puts.record()
+            return (try remote.acknowledge(request), try #require(HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )))
+        })
+        func send() async {
+            await fixture.sync.schedule(
+                endpoint: Self.endpoint, deviceID: Self.deviceID,
+                expectedSessionEpoch: SelectiveRemotePublicationLifecycle.epoch(endpoint: Self.endpoint),
+                profiles: [], snippets: [Self.localSnippet], forwarding: [], sshKeys: []
+            ).value
+        }
+        await send()
+        #expect(puts.count == 0)
+        #expect(fixture.keys.value?.revision == 5)
+        guard case let .unconfirmedUpload(issue) = try await check(fixture) else {
+            Issue.record("Equal revisions must not acknowledge unsent changes")
+            return
+        }
+        #expect(issue?.message(english: true)?.contains("Cloud server") == true)
+        #expect(issue?.message(english: false)?.contains("Сервер Cloud") == true)
+        enabled.record()
+        await send()
+        #expect(puts.count == 1)
+        guard case let .current(revision) = try await check(fixture) else {
+            Issue.record("The acknowledged retry should clear the write warning")
+            return
+        }
+        #expect(revision == 6)
+        #expect(fixture.keys.value?.revision == revision)
+    }
+
     @Test("An acknowledged PUT releases only its own pending local snapshot", .timeLimit(.minutes(1)))
     func successfulUploadAllowsConfirmation() async throws {
         let uploaded = AsyncStream<Void>.makeStream()
@@ -683,6 +721,7 @@ private struct PersonalCheckFixture {
          baseDocument: SelectiveRemoteVaultDocument? = nil,
          remoteDocument: SelectiveRemoteVaultDocument? = nil,
          historyRequests: PersonalCheckRequests = PersonalCheckRequests(),
+         supportsWrites: @escaping @Sendable () -> Bool = { true },
          beforeResponse: (@Sendable (PersonalCheckKeyStore) async -> Void)? = nil,
          uploadResponse: (@Sendable (URLRequest, PersonalCheckRemote, PersonalCheckKeyStore) async throws -> (Data, URLResponse))? = nil) throws {
         let endpoint = URL(string: "https://personal-check.example.invalid")!
@@ -725,7 +764,8 @@ private struct PersonalCheckFixture {
         let remote = PersonalCheckRemote(body: body)
         let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
             if request.url?.path == "/v1/meta" {
-                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["X-Selective-V1-Write-Fence": "1"])!)
+                let headers = supportsWrites() ? ["X-Selective-V1-Write-Fence": "1"] : [:]
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!)
             }
             if request.url?.path == "/v1/vault/revisions/5" {
                 historyRequests.record()

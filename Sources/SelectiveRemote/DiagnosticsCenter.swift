@@ -197,6 +197,7 @@ enum DiagnosticsReportBuilder {
             case .transientFailure: category = "transient_failure"
             case .unknownFailure: category = "unknown_failure"
             case .writeTemporarilyUnavailable: category = "vault_write_temporarily_unavailable"
+            case .personalVaultWriteUnsupported: category = "personal_vault_write_unsupported"
             }
             lines.append("Issue: \(category)")
         }

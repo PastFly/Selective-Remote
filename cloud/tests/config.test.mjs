@@ -16,6 +16,19 @@ const baseEnv = {
   PROXY_SHARED_SECRET: "b".repeat(64),
 };
 
+test("production Team access is explicit and requires the independent anchor configuration", () => {
+  assert.equal(loadConfig(baseEnv).productionTeamEnabled, false);
+  assert.throws(() => loadConfig({...baseEnv, CLOUD_PRODUCTION_TEAM_ENABLED:"yes"}), /must be true or false/);
+  assert.throws(() => loadConfig({...baseEnv, PUBLICATION_ENVIRONMENT:"production", CLOUD_PUBLIC_ORIGIN:"https://cloud.example.test",
+    ALLOW_REGISTRATION:"true", CLOUD_PRODUCTION_TEAM_ENABLED:"true"}), /invalid_production_team_configuration/);
+});
+
+test("production Personal pilot requires explicit Team access and a strict opt-in", () => {
+  assert.equal(loadConfig(baseEnv).productionPersonalPilotEnabled, false);
+  assert.throws(() => loadConfig({...baseEnv, CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:"true"}), /invalid_production_personal_pilot_configuration/);
+  assert.throws(() => loadConfig({...baseEnv, CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED:"yes"}), /must be true or false/);
+});
+
 test("runtime secrets reject placeholders and short values", () => {
   assert.throws(() => validateSecret("TEST_SECRET", "short"), /at least 32 random bytes/);
   assert.throws(

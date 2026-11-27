@@ -37,6 +37,24 @@ export function validateFenceDirectory(stat){
   return stat.gid;
 }
 
+const sourcePin = /^[a-f0-9]{40}$/;
+const imagePin = /^sha256:[a-f0-9]{64}$/;
+function activeRelease(settings) {
+  const pair = settings.productionReleasePair;
+  if (pair === undefined) return null;
+  const valid = value => value && Object.keys(value).sort().join(',') === 'imageDigest,sourceSHA' &&
+    typeof value.sourceSHA === 'string' && sourcePin.test(value.sourceSHA) &&
+    typeof value.imageDigest === 'string' && imagePin.test(value.imageDigest);
+  if (settings.registrationMode !== 'production-v1' || settings.anchorProtocol !== 1 ||
+      !pair || Object.keys(pair).sort().join(',') !== 'forward,rollback' ||
+      !valid(pair.rollback) || !valid(pair.forward) || pair.rollback.sourceSHA === pair.forward.sourceSHA ||
+      pair.rollback.imageDigest === pair.forward.imageDigest) fail('deployment_production_pair');
+  for (const role of ['forward', 'rollback']) {
+    if (pair[role].sourceSHA === settings.sourceSHA && pair[role].imageDigest === settings.imageDigest) return role;
+  }
+  fail('deployment_production_pair');
+}
+const peerRole = role => role === 'forward' ? 'rollback' : 'forward';
 export function validateControllerSettings(s){
   if(!s||s.version!==1||s.teamSafetyStopVersion!==1||!/^[a-f0-9]{40}$/.test(s.sourceSHA)||!/^sha256:[a-f0-9]{64}$/.test(s.imageDigest)
     ||(Object.hasOwn(s,'registrationMode')&&s.registrationMode!=='production-v1')
@@ -54,6 +72,9 @@ export function validateControllerSettings(s){
     if(!isAbsolute(path)||resolve(path)!==path||contains(path,controllerRoot)||contains(controllerRoot,path)
       ||contains(path,controllerState)||contains(controllerState,path))fail('deployment_fence_not_independent');
   }
+  const role = activeRelease(s);
+  if (Object.hasOwn(s,'productionBootstrapDigest') && (!role || !validHash(s.productionBootstrapDigest)))
+    fail('deployment_production_baseline_unavailable');
   return s;
 }
 export function validateCandidateIdentity(settings,image){
@@ -61,10 +82,28 @@ export function validateCandidateIdentity(settings,image){
     fail('deployment_candidate_digest');
 }
 export function validateCandidateCapabilities(candidate,settings={}){
-  const expected={version:1,fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1};
+  const expected={version:1,fenceVersion:2,readerProjectionVersion:1,wholePublicationVersion:1};
   const count=candidate&&Object.keys(candidate).length;
-  const validExtended=(count===9||count===10&&candidate.teamSafetyStopVersion===1)&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1&&candidate.wrapperEnvelopeVersion===1;
+  const baseFields=[...Object.keys(expected),'maxSchemaVersion','v1WriterProtocol','emptyVaultCreationVersion','v1AnchorProtocol','wrapperEnvelopeVersion'];
+  const fieldList=Object.keys(candidate??{}).sort().join(',');
+  const safeShape=fieldList===[...baseFields,'teamSafetyStopVersion'].sort().join(',')&&candidate.teamSafetyStopVersion===1;
+  const teamFields = [...baseFields, 'teamSafetyStopVersion', 'v1TeamAuthorizationProtocol'];
+  const registrationField = 'v1TeamAuthorizationRegistrationVersion';
+  const productionTeam = 'v1ProductionTeamVersion', productionPilot = 'v1ProductionPersonalPilotVersion';
+  const productionFields = [...teamFields, registrationField, productionTeam];
+  const productionShape = candidate?.[registrationField] === 1 && candidate?.[productionTeam] === 1 && (
+    fieldList === [...productionFields].sort().join(',') ||
+    (fieldList === [...productionFields, productionPilot].sort().join(',') && candidate[productionPilot] === 1));
+  const role = activeRelease(settings);
+  if (role && (!productionShape || (role === 'forward') !== (candidate[productionPilot] === 1)))
+    fail('deployment_code_floor');
+  const hasTeamFields = productionShape || fieldList === [...teamFields].sort().join(',') ||
+    (fieldList === [...teamFields, registrationField].sort().join(',') && candidate[registrationField] === 1);
+  const teamShape = hasTeamFields && candidate.teamSafetyStopVersion === 1 &&
+    candidate.v1TeamAuthorizationProtocol === 2 && candidate.maxSchemaVersion === 23;
+  const validExtended=(count===9||safeShape||teamShape)&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&candidate.v1AnchorProtocol===1&&candidate.wrapperEnvelopeVersion===1;
   if(!candidate||!(count===5||(count===6&&candidate.v1WriterProtocol===1)||(count===7&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1)||(count===8&&candidate.v1WriterProtocol===1&&candidate.emptyVaultCreationVersion===1&&((candidate.v1AnchorProtocol===1)!==(candidate.wrapperEnvelopeVersion===1)))||validExtended)
+    ||![22,23].includes(candidate.maxSchemaVersion)
     ||(settings.anchorProtocol===1&&candidate.v1AnchorProtocol!==1)
     ||(settings.teamSafetyStopVersion===1&&candidate.teamSafetyStopVersion!==1)
     ||Object.entries(expected).some(([k,v])=>candidate[k]!==v))fail('deployment_code_floor');
@@ -110,6 +149,18 @@ function effectiveEnvironment(cloud,{imageEnvironment,dockerEnvironment}={},sett
     if(actual.ALLOW_REGISTRATION!=='true'||expected.ALLOW_REGISTRATION!=='true')fail('deployment_registration_scope');
     try{if(!stagingRegistrationEmails(actual.STAGING_REGISTRATION_EMAIL_ALLOWLIST,actual.PUBLICATION_ENVIRONMENT))fail('deployment_registration_scope');}
     catch{fail('deployment_registration_scope');}
+  }
+  const role = activeRelease(settings);
+  const team = 'CLOUD_PRODUCTION_TEAM_ENABLED', personal = 'CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED';
+  if (role) {
+    let origin;
+    try { origin = new URL(actual.CLOUD_PUBLIC_ORIGIN); } catch { fail('deployment_production_scope'); }
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash ||
+        actual.ALLOW_REGISTRATION !== 'true' || actual[team] !== 'true' ||
+        ![undefined, 'false', ...(role === 'forward' ? ['true'] : [])].includes(actual[personal]) ||
+        base[team] === 'true' || base[personal] === 'true') fail('deployment_production_scope');
+  } else if ([team, personal].some(key => actual[key] !== undefined && actual[key] !== 'false')) {
+    fail('deployment_production_scope');
   }
   return actual;
 }
@@ -166,21 +217,73 @@ export async function readControllerComposeEnvironment(docker,compose,settings,e
 
 // Production uses this exact orchestration. Tests substitute command transport,
 // then run the retained compatibility checker against a real disposable DB.
-export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false}){
+export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false,authorizationUpgrade=false,verifyProductionPair=false,pilotOperation=null,bootstrap=null}){
   const step=async(stage,extra={})=>{report({stage});return runCommand({stage,candidate,...extra});};
+  const role = activeRelease(candidate);
+  if ((verifyProductionPair || pilotOperation || bootstrap) && !role ||
+      bootstrap && (!['inspect','apply'].includes(bootstrap) || bootstrap === 'apply' && !validHash(candidate.productionBootstrapDigest)) ||
+      pilotOperation?.[0] === 'open' && role !== 'forward' || role && (maintenance || authorizationUpgrade))
+    fail('deployment_production_scope');
   await step('attest');
   const metadata=await step('candidate-metadata');
   validateCandidateCapabilities(metadata,candidate);
+  if (role) {
+    const peer = candidate.productionReleasePair[peerRole(role)];
+    validateCandidateCapabilities(await step('peer-metadata'), { ...candidate, ...peer });
+  }
+  if(authorizationUpgrade&&(!candidate.anchorProtocol||candidate.registrationMode||metadata.v1TeamAuthorizationProtocol!==2))
+    fail('deployment_code_floor');
   await step('storage');
   await step('assert-project');
+  const check = async mode => {
+    if (role) await step('check', {mode, peer:true, requireClosedPilot:pilotOperation?.[0] !== 'close'});
+    await step('check', {metadata, mode, ...(role ? {requireClosedPilot:pilotOperation?.[0] !== 'close'} : {})});
+  };
+  if (bootstrap) {
+    if (bootstrap === 'inspect') {
+      const evidence = await step('inspect-baseline');
+      report({stage:'complete',...evidence});
+      return evidence;
+    }
+    await step('check-baseline');
+    await step('close-traffic');
+    await step('assert-closed');
+    await step('attest');
+    await step('apply-baseline');
+    await check('traffic');
+    const result = {baselineVerified:true, trafficOpened:false};
+    report({stage:'complete',...result});
+    return result;
+  }
+  if (verifyProductionPair || pilotOperation) {
+    await check('traffic');
+    if (pilotOperation) {
+      if (pilotOperation[0] === 'open') await step('verify-running-forward');
+      await step('production-pilot', {pilotOperation});
+      if (pilotOperation[0] === 'close') {
+        await step('check', {metadata, mode:'traffic', requireClosedPilot:true});
+      }
+    }
+    const result = pilotOperation ? {pilotOperation:pilotOperation[0]} : {productionPairVerified:true};
+    report({stage:'complete', ...result});
+    return result;
+  }
   // Ordinary startup denies a restored old schema without even stopping the
   // current deployment. Explicit initial maintenance closes traffic FIRST.
-  if(!maintenance)await step('check',{metadata,mode:'traffic'});
+  if(!maintenance&&!authorizationUpgrade)await check('traffic');
   await step('close-traffic');
   await step('assert-closed');
-  await step('check',{metadata,mode:'maintenance-upgrade'});
+  if(authorizationUpgrade){
+    await step('check-authorization-upgrade');
+    await step('migrate');
+    await step('upgrade-authorization');
+    await step('check',{metadata,mode:'traffic'});
+    report({stage:'complete',trafficOpened:false});
+    return {compatible:true,trafficOpened:false};
+  }
+  await check('maintenance-upgrade');
   await step('migrate');
-  await step('check',{metadata,mode:'traffic'});
+  await check('traffic');
   await step('attest');
   try {
     await step('start-cloud');
@@ -216,6 +319,21 @@ async function invoke(file,args,options={}){
     fail(/^[a-z_]+$/.test(diagnostic??'')?diagnostic:'deployment_controller_command_failed');
   }
 }
+const authorizationUpgradeCleanupError='deployment_authorization_upgrade_cleanup';
+
+export async function runAuthorizationUpgradeContainer(docker,args){
+  // A timed-out Docker client does not terminate a running container.
+  const created=await docker(['create',...args]);
+  const id=created.stdout.trim();
+  if(!/^[a-f0-9]{64}$/.test(id))fail('deployment_controller_command_failed');
+  try{
+    return await docker(['start','--attach',id]);
+  }finally{
+    try{await docker(['rm','--force',id]);}
+    catch{fail(authorizationUpgradeCleanupError);}
+  }
+}
+
 export async function runControllerTrafficStage(stage, { docker, compose, inspectProject }) {
   if (stage === 'close-traffic') {
     return docker([...compose, 'stop', 'cloud', 'caddy']);
@@ -236,8 +354,8 @@ export async function runControllerTrafficStage(stage, { docker, compose, inspec
   fail('invalid_deployment_stage');
 }
 
-export async function runController({maintenance=false, verifyInstallation=false}={}){
-  if (maintenance && verifyInstallation) fail('invalid_deployment_arguments');
+export async function runController({maintenance=false, verifyInstallation=false, authorizationUpgrade=false, verifyProductionPair=false, pilotOperation=null, bootstrap=null}={}){
+  if ([maintenance,verifyInstallation,authorizationUpgrade,verifyProductionPair,pilotOperation,bootstrap].filter(Boolean).length>1) fail('invalid_deployment_arguments');
   if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==controllerRoot)fail('deployment_controller_owner');
   await protectedPath(join(controllerRoot,'settings.json'));
   const settings=validateControllerSettings(JSON.parse(await readFile(join(controllerRoot,'settings.json'),'utf8')));
@@ -248,20 +366,27 @@ export async function runController({maintenance=false, verifyInstallation=false
   const fenceGroup=validateFenceDirectory(await lstat(fenceDirectory));
   const lock=join(controllerState,'controller.lock');
   try{await mkdir(lock,{mode:0o700});}catch{fail('deployment_controller_locked');}
-  let temp;
+  let temp,retainLock=false;
   try{
     const env={PATH:'/usr/bin:/bin',...settings.storage,PUBLICATION_IMAGE_DIGEST:settings.imageDigest,PUBLICATION_FENCE_DIRECTORY:dirname(settings.fencePath)};
     const compose=['compose','--project-name','cloud','--project-directory',settings.cloudDirectory,'--env-file',settings.envPath,...settings.composeFiles.flatMap(f=>['-f',f.path])];
     const docker=(args,options={})=>invoke('/usr/bin/docker',args,{env,...options});
-    let imageEnvironment,dockerEnvironment;
+    const role = activeRelease(settings);
+    const peerPin = role ? settings.productionReleasePair[peerRole(role)] : null;
+    let imageEnvironment,dockerEnvironment,effective;
+    const inspectPin = async pin => {
+      const image = JSON.parse((await docker(['image','inspect','--format','{{json .}}',pin.imageDigest])).stdout);
+      validateCandidateIdentity(pin,image);
+      return image;
+    };
     const attest=async()=>{
       await protectedPath(join(controllerRoot,'bundle.sha256'));
       if(digest(await readFile(join(controllerRoot,'bundle.sha256')))!==settings.controllerDigest)fail('deployment_controller_digest');
       await invoke('/usr/bin/sha256sum',['--strict','--status','-c','bundle.sha256'],{cwd:controllerRoot,env});
       await pinnedFile(settings.envPath,settings.envDigest);
       for(const f of settings.composeFiles)await pinnedFile(f.path,f.sha256);
-      const image=JSON.parse((await docker(['image','inspect','--format','{{json .}}',settings.imageDigest])).stdout);
-      validateCandidateIdentity(settings,image);imageEnvironment=image.Config?.Env;
+      imageEnvironment=(await inspectPin(settings)).Config?.Env;
+      if (peerPin) await inspectPin(peerPin);
     };
     if (verifyInstallation) {
       await attest();
@@ -278,48 +403,96 @@ export async function runController({maintenance=false, verifyInstallation=false
       const containers=ids.length?JSON.parse((await docker(['inspect',...ids])).stdout):[];
       validateControllerProject(network,containers);
     };
-    return await verifyControllerFixture({candidate:settings,maintenance,report:event=>process.stdout.write(JSON.stringify(event)+'\n'),runCommand:async({stage,metadata,mode})=>{
+    return await verifyControllerFixture({candidate:settings,maintenance,authorizationUpgrade,verifyProductionPair,pilotOperation,bootstrap,report:event=>process.stdout.write(JSON.stringify(event)+'\n'),runCommand:async({stage,mode,peer=false,requireClosedPilot=false})=>{
       if(stage==='attest')return attest();
-      if(stage==='candidate-metadata'){
-        const id=(await docker(['create','--network','none','--env-file',settings.envPath,'--entrypoint','/bin/true',settings.imageDigest])).stdout.trim();
+      if(stage==='candidate-metadata' || stage==='peer-metadata'){
+        const isPeer = stage === 'peer-metadata';
+        const manifest = join(temp, isPeer ? 'peer.json' : 'candidate.json');
+        const pin = isPeer ? peerPin : settings;
+        const id=(await docker(['create','--pull=never','--network','none',...(isPeer ? [] : ['--env-file',settings.envPath]),'--entrypoint','/bin/true',pin.imageDigest])).stdout.trim();
         if(!/^[a-f0-9]{64}$/.test(id))fail('deployment_candidate_metadata');
         try{
-          dockerEnvironment=JSON.parse((await docker(['inspect','--format','{{json .Config.Env}}',id])).stdout);
-          await docker(['cp',id+':/app/deployment-compatibility.json',join(temp,'candidate.json')]);
+          if (!isPeer) dockerEnvironment=JSON.parse((await docker(['inspect','--format','{{json .Config.Env}}',id])).stdout);
+          await docker(['cp',id+':/app/deployment-compatibility.json',manifest]);
         }
         finally{await docker(['rm',id]);}
-        const bytes=await readFile(join(temp,'candidate.json'));if(bytes.length>4096)fail('deployment_candidate_metadata');
+        const bytes=await readFile(manifest);if(bytes.length>4096)fail('deployment_candidate_metadata');
         return JSON.parse(bytes);
       }
       if(stage==='storage'){
         await invoke('/bin/bash',[join(controllerRoot,'scripts/validate-postgres-storage.sh'),'--check'],{env});
         await invoke(process.execPath,[join(controllerRoot,'scripts/validate-postgres-bind-source.mjs'),...settings.composeFiles.map(f=>f.path)],{env});
-        const effective=await readControllerComposeEnvironment(docker,compose,settings,{imageEnvironment,dockerEnvironment});
+        effective=await readControllerComposeEnvironment(docker,compose,settings,{imageEnvironment,dockerEnvironment});
         await writeFile(join(temp,'effective.env'),Object.entries(effective).map(([key,value])=>key+'='+value).join('\n')+'\n',{mode:0o600,flag:'wx'});return;
       }
       if(stage==='assert-project')return inspectProject();
-      if(stage==='check'){
+      if (stage === 'verify-running-forward') {
+        const id = (await docker([...compose,'ps','--quiet','cloud'])).stdout.trim();
+        if (!/^[a-f0-9]{12,64}$/.test(id)) fail('deployment_candidate_digest');
+        const [running] = JSON.parse((await docker(['inspect',id])).stdout);
+        if (!running?.State?.Running || running.Image !== settings.imageDigest) fail('deployment_candidate_digest');
+        const values = environmentMap(running.Config?.Env);
+        if (effective.CLOUD_PRODUCTION_PERSONAL_PILOT_ENABLED !== 'true' ||
+            Object.keys({...effective,...values}).some(k => values[k] !== effective[k])) fail('deployment_environment_mismatch');
+        return runControllerTrafficStage('verify-cloud-ready', {docker, compose, inspectProject});
+      }
+      if(['check','check-authorization-upgrade','upgrade-authorization','production-pilot','inspect-baseline','check-baseline','apply-baseline'].includes(stage)){
         // A fresh process reads the independently retained checker + journal.
         // Candidate code is never used to decide whether it is safe to start.
-        return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--group-add',String(fenceGroup),'--security-opt','no-new-privileges',
+        const writable = stage==='upgrade-authorization' || stage==='production-pilot' || stage==='apply-baseline';
+        const journalMode=writable?'':',readonly';
+        const command=stage==='check'
+          ? ['check-deployment-compatibility.mjs','--candidate','/candidate.json',...(mode==='maintenance-upgrade'?['--maintenance-upgrade']:[]),...(requireClosedPilot?['--require-closed-pilot']:[])]
+          : stage.endsWith('-baseline') ? ['bootstrap-production-fence.mjs',stage.split('-')[0],...(stage === 'inspect-baseline'?[]:[settings.productionBootstrapDigest])]
+          : stage==='production-pilot' ? ['production-personal-vault-pilot.mjs',...pilotOperation]
+          : ['staging-upgrade-team-authorization.mjs',...(stage==='check-authorization-upgrade'?['--preflight']:[])];
+        const [script,...args]=command;
+        const checkerArgs=['--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--group-add',String(fenceGroup),'--security-opt','no-new-privileges',
           '--env-file',join(temp,'effective.env'),
           '--mount',`type=bind,src=${controllerRoot},dst=/controller,readonly`,
-          '--mount',`type=bind,src=${dirname(settings.fencePath)},dst=/publication-fence,readonly`,
-          '--mount',`type=bind,src=${join(temp,'candidate.json')},dst=/candidate.json,readonly`,
-          nodeImage,'node','/controller/scripts/check-deployment-compatibility.mjs','--candidate','/candidate.json',...(mode==='maintenance-upgrade'?['--maintenance-upgrade']:[])]);
+          '--mount',`type=bind,src=${dirname(settings.fencePath)},dst=/publication-fence${journalMode}`,
+          '--mount',`type=bind,src=${join(temp,peer?'peer.json':'candidate.json')},dst=/candidate.json,readonly`,
+          nodeImage,'node',`/controller/scripts/${script}`,...args];
+        const result = writable
+          ? await runAuthorizationUpgradeContainer(docker,checkerArgs)
+          : await docker(['run','--rm',...checkerArgs]);
+        if (stage === 'inspect-baseline') {
+          const {schemaVersion,baselineDigest} = JSON.parse(result.stdout);
+          if (![22,23].includes(schemaVersion) || !validHash(baselineDigest)) fail('deployment_production_baseline_unavailable');
+          return {schemaVersion,baselineDigest};
+        }
+        return;
       }
       if(stage==='migrate')return docker(['run','--rm','--pull=never','--network',settings.network,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
         '--env-file',join(temp,'effective.env'),'--entrypoint','node',settings.imageDigest,'scripts/migrate.mjs']);
       return runControllerTrafficStage(stage, { docker, compose, inspectProject });
     }});
-  }finally{if(temp)await rm(temp,{recursive:true,force:true});await rm(lock,{recursive:true});}
+  }catch(error){
+    retainLock=error.message===authorizationUpgradeCleanupError;
+    throw error;
+  }finally{
+    if(!retainLock){
+      if(temp)await rm(temp,{recursive:true,force:true});
+      await rm(lock,{recursive:true});
+    }
+  }
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
     const args=process.argv.slice(2);
     const [mode] = args;
-    if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation'].includes(mode))
+    let pilotOperation = null;
+    if (mode === '--production-personal-pilot') {
+      const [, action, ...values] = args;
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      if (!(action === 'close' && values.length === 1 && uuid.test(values[0]) ||
+            action === 'open' && values.length === 4 && values.slice(0,3).every(v => uuid.test(v)) && /^(?:[1-9]|[1-5][0-9]|60)$/.test(values[3])))
+        fail('invalid_deployment_arguments');
+      pilotOperation = args.slice(1);
+    } else if (args.length > 1 || mode !== undefined && !['--maintenance-upgrade', '--verify-installation', '--upgrade-team-authorization','--verify-production-pair','--inspect-production-baseline','--bootstrap-production-pair'].includes(mode))
       fail('invalid_deployment_arguments');
-    await runController({ maintenance: mode === '--maintenance-upgrade', verifyInstallation: mode === '--verify-installation' });
+    await runController({ maintenance: mode === '--maintenance-upgrade', verifyInstallation: mode === '--verify-installation',
+      authorizationUpgrade: mode === '--upgrade-team-authorization', verifyProductionPair: mode === '--verify-production-pair', pilotOperation,
+      bootstrap: mode === '--inspect-production-baseline' ? 'inspect' : mode === '--bootstrap-production-pair' ? 'apply' : null });
   }catch(error){process.stderr.write(/^[a-z_]+$/.test(error?.message??'')?error.message+'\n':'deployment_controller_failed\n');process.exitCode=1;}
 }

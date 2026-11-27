@@ -1,6 +1,8 @@
 import {createHash} from 'node:crypto';
 
 export const FENCE_MAX_BYTES = 4 * 1024 * 1024;
+export const productionPilotOpened = 'V1_PRODUCTION_PERSONAL_PILOT_OPENED';
+export const productionPilotClosed = 'V1_PRODUCTION_PERSONAL_PILOT_CLOSED';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const hash=/^[a-f0-9]{64}$/u;
 const isUUID=v=>typeof v==='string'&&uuid.test(v);
@@ -31,6 +33,7 @@ function v1Tuple(value){
   ||!isUUID(value.ownerID)||!isUUID(value.vaultID)||!Number.isSafeInteger(value.revision)||value.revision<0||!isHash(value.ciphertextHash)||!isHash(value.envelopeHash))invalid();
  return {vaultKind:value.vaultKind,ownerID:value.ownerID,vaultID:value.vaultID,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash};
 }
+const accountDeletionType='V1_ACCOUNT_DELETION_PENDING_INTENT';
 
 // Normalized copies make ordering deterministic and prevent caller mutation across awaits.
 // Old flat records are supported as evidence, never silently treated as a commit.
@@ -44,7 +47,30 @@ export function validateFenceEvent(value){
   if(!keys(value,['version','type','writerProtocol'])||value.writerProtocol!==1)invalid();
   return {version:2,type:value.type,writerProtocol:value.writerProtocol};
  }
- if(value.type==='V1_PERSONAL_PILOT_OPENED'){
+ if(value.type==='V1_TEAM_AUTHORIZATION_BASELINE'){
+  if(!keys(value,['version','type','authorizationProtocol','digest'])||
+    ![1,2].includes(value.authorizationProtocol)||!isHash(value.digest))invalid();
+  return {version:2,type:value.type,authorizationProtocol:value.authorizationProtocol,digest:value.digest};
+ }
+ if(value.type==='V1_TEAM_AUTHORIZATION_FORMAT_UPGRADED'){
+  if(!keys(value,['version','type','previousDigest','nextDigest'])||
+    !isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest)invalid();
+  return {version:2,type:value.type,previousDigest:value.previousDigest,nextDigest:value.nextDigest};
+ }
+ if(value.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+  const fields=['version','type','intentID','previousDigest','nextDigest'];
+  const paired=Object.hasOwn(value,'vaultIntentID')||Object.hasOwn(value,'vaultIntentDigest');
+  if(!keys(value,paired?[...fields,'vaultIntentID','vaultIntentDigest']:fields)||!isUUID(value.intentID)||
+    !isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest||
+    (paired&&(!isUUID(value.vaultIntentID)||value.vaultIntentID===value.intentID||!isHash(value.vaultIntentDigest))))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,previousDigest:value.previousDigest,nextDigest:value.nextDigest,
+   ...(paired?{vaultIntentID:value.vaultIntentID,vaultIntentDigest:value.vaultIntentDigest}:{})};
+ }
+ if(value.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'||value.type==='V1_TEAM_AUTHORIZATION_ABORTED'){
+  if(!keys(value,['version','type','intentID','intentDigest'])||!isUUID(value.intentID)||!isHash(value.intentDigest))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,intentDigest:value.intentDigest};
+ }
+ if(value.type==='V1_PERSONAL_PILOT_OPENED'||value.type===productionPilotOpened){
   if(!keys(value,['version','type','pilotID','ownerID','vaultID','issuedAt','expiresAt'])||
    ![value.pilotID,value.ownerID,value.vaultID].every(isUUID)||
    ![value.issuedAt,value.expiresAt].every(Number.isSafeInteger)||value.issuedAt<=0||
@@ -52,7 +78,7 @@ export function validateFenceEvent(value){
   return {version:2,type:value.type,pilotID:value.pilotID,ownerID:value.ownerID,vaultID:value.vaultID,
    issuedAt:value.issuedAt,expiresAt:value.expiresAt};
  }
- if(value.type==='V1_PERSONAL_PILOT_CLOSED'){
+ if(value.type==='V1_PERSONAL_PILOT_CLOSED'||value.type===productionPilotClosed){
   if(!keys(value,['version','type','pilotID'])||!isUUID(value.pilotID))invalid();
   return {version:2,type:value.type,pilotID:value.pilotID};
  }
@@ -93,19 +119,29 @@ export function validateFenceEvent(value){
    ownerID:value.ownerID,vaultID:value.vaultID,baseRevision:value.baseRevision,revision:value.revision,ciphertextHash:value.ciphertextHash,envelopeHash:value.envelopeHash,
    ...(pilot?{pilotID:value.pilotID}:{})};
  }
- if(value.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
-  if(!keys(value,['version','type','intentID','operationID','changes'])||!isUUID(value.intentID)||!isUUID(value.operationID)
-    ||!Array.isArray(value.changes)||value.changes.length<1||value.changes.length>20000)invalid();
+ if(value.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||value.type===accountDeletionType){
+  const deletion=value.type===accountDeletionType;
+  const fields=deletion?['userID','vault','authorizationIntentID','previousDigest','nextDigest']:['operationID'];
+  if(!keys(value,['version','type','intentID','changes',...fields])||!isUUID(value.intentID)
+    ||!(deletion?isUUID(value.userID):isUUID(value.operationID))
+    ||!Array.isArray(value.changes)||(!deletion&&!value.changes.length)||value.changes.length>20000)invalid();
+  const vault=deletion&&value.vault!==null?v1Tuple(value.vault):null;
+  if(vault&&(vault.vaultKind!=='PERSONAL'||vault.ownerID!==value.userID))invalid();
+  if(deletion&&(!isUUID(value.authorizationIntentID)||value.authorizationIntentID===value.intentID
+    ||!isHash(value.previousDigest)||!isHash(value.nextDigest)||value.previousDigest===value.nextDigest))invalid();
   const changes=value.changes.map(change=>{
    if(!keys(change,['vaultKind','ownerID','vaultID','revision','ciphertextHash','beforeEnvelopeHash','envelopeHash'])
      ||change.vaultKind!=='TEAM'||!isUUID(change.ownerID)||!isUUID(change.vaultID)
-     ||!Number.isSafeInteger(change.revision)||change.revision<1||!isHash(change.ciphertextHash)
+     ||!Number.isSafeInteger(change.revision)||change.revision<(deletion?0:1)||!isHash(change.ciphertextHash)
      ||!isHash(change.beforeEnvelopeHash)||!isHash(change.envelopeHash)||change.beforeEnvelopeHash===change.envelopeHash)invalid();
    return {vaultKind:'TEAM',ownerID:change.ownerID,vaultID:change.vaultID,revision:change.revision,
     ciphertextHash:change.ciphertextHash,beforeEnvelopeHash:change.beforeEnvelopeHash,envelopeHash:change.envelopeHash};
   }).sort((a,b)=>compare(a.vaultID,b.vaultID));
-  if(new Set(changes.map(change=>change.vaultID)).size!==changes.length||new Set(changes.map(change=>change.ownerID)).size!==1)invalid();
-  return {version:2,type:value.type,intentID:value.intentID,operationID:value.operationID,changes};
+  if(new Set(changes.map(change=>change.vaultID)).size!==changes.length||
+    (!deletion&&new Set(changes.map(change=>change.ownerID)).size!==1))invalid();
+  return {version:2,type:value.type,intentID:value.intentID,
+   ...(deletion?{userID:value.userID,vault,authorizationIntentID:value.authorizationIntentID,
+    previousDigest:value.previousDigest,nextDigest:value.nextDigest}:{operationID:value.operationID}),changes};
  }
  if(['V1_CONFIRMED_COMMIT','V1_PROVEN_ABORT'].includes(value.type)){
   if(!keys(value,['version','type','intentID','intentDigest'])||!isUUID(value.intentID)||!isHash(value.intentDigest))invalid();
@@ -126,6 +162,12 @@ export function validateFenceEvent(value){
 
 export function fenceIntentDigest(value){
  const event=validateFenceEvent(value);
+ if(event.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+  return createHash('sha256').update('selective-remote/v1-team-authorization-intent/v1\0').update(canonical(event)).digest('hex');
+ }
+ if(event.type===accountDeletionType){
+  return createHash('sha256').update('selective-remote/v1-account-deletion-intent/v1\0').update(canonical(event)).digest('hex');
+ }
  if(event.version===2&&!['PENDING_INTENT','V1_PENDING_INTENT','V1_WRAPPER_BATCH_PENDING_INTENT'].includes(event.type))invalid();
  const domain=event.type==='V1_WRAPPER_BATCH_PENDING_INTENT'?'selective-remote/v1-wrapper-batch-fence-intent/v1\0':event.type==='V1_PENDING_INTENT'?'selective-remote/v1-writer-fence-intent/v1\0':event.version===2?'selective-remote/deployment-fence-intent/v2\0':'selective-remote/deployment-fence-intent/legacy-v1\0';
  return createHash('sha256').update(domain).update(canonical(event)).digest('hex');
@@ -138,20 +180,70 @@ export function reduceFenceEvents(events){
  const revokedSessionIDs=new Set(),revokedDeviceIDs=new Set(),revokedAccountIDs=new Set();
  const passwordResetIDs=new Map(),passwordIdentityIDs=new Map();
  const pilotIDs=new Set();
+ const teamAuthorizationIntents=new Map(),teamAuthorizationOutcomes=new Map();
  let writerFloor=0,v1Baseline=null,personalWritePilot=null;
+ let productionPersonalPilotHistory=false;
+ let teamAuthorizationBaseline=null,teamAuthorizationDigest=null,teamAuthorizationPending=null;
+ let teamAuthorizationProtocol=0,teamAuthorizationUpgrade=null;
  for(const raw of events){
   const event=validateFenceEvent(raw);
   if(event.type==='V1_WRITER_FLOOR'){if(pending.size||v1Pending.size)conflict();writerFloor=Math.max(writerFloor,event.writerProtocol);continue;}
-  if(event.type==='V1_PERSONAL_PILOT_OPENED'){
+  if(event.type==='V1_TEAM_AUTHORIZATION_BASELINE'){
+   if(teamAuthorizationBaseline){if(!same(teamAuthorizationBaseline,event))conflict();continue;}
+   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||personalWritePilot)conflict();
+   teamAuthorizationBaseline=event;
+   teamAuthorizationProtocol=event.authorizationProtocol;
+   teamAuthorizationDigest=event.digest;
+   continue;
+  }
+  if(event.type==='V1_TEAM_AUTHORIZATION_FORMAT_UPGRADED'){
+   if(teamAuthorizationUpgrade){if(!same(teamAuthorizationUpgrade,event))conflict();continue;}
+   if(teamAuthorizationProtocol!==1||teamAuthorizationPending||personalWritePilot||
+     pending.size||v1Pending.size||committed.size||event.previousDigest!==teamAuthorizationDigest)conflict();
+   teamAuthorizationUpgrade=event;
+   teamAuthorizationProtocol=2;
+   teamAuthorizationDigest=event.nextDigest;
+   continue;
+  }
+  if(event.type==='V1_TEAM_AUTHORIZATION_PENDING'){
+   const intent={...event,intentDigest:fenceIntentDigest(event)},prior=teamAuthorizationIntents.get(event.intentID);
+   if(prior){if(!same(prior,intent))conflict();continue;}
+   if(!teamAuthorizationBaseline||teamAuthorizationPending||pending.size||event.previousDigest!==teamAuthorizationDigest)conflict();
+   if(event.vaultIntentID&&v1Pending.get(event.vaultIntentID)?.intentDigest!==event.vaultIntentDigest)conflict();
+   teamAuthorizationIntents.set(event.intentID,intent);
+   teamAuthorizationPending=intent;
+   continue;
+  }
+  if(event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'||event.type==='V1_TEAM_AUTHORIZATION_ABORTED'){
+   const prior=teamAuthorizationOutcomes.get(event.intentID);
+   if(prior){if(!same(prior,event))conflict();continue;}
+   if(teamAuthorizationPending?.intentID!==event.intentID||
+     teamAuthorizationPending.intentDigest!==event.intentDigest)conflict();
+   if(teamAuthorizationPending.vaultIntentID){
+    const resolution=v1Outcomes.get(teamAuthorizationPending.vaultIntentID);
+    const expected=event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED'?'V1_CONFIRMED_COMMIT':'V1_PROVEN_ABORT';
+    if(resolution?.type!==expected||resolution.intentDigest!==teamAuthorizationPending.vaultIntentDigest)conflict();
+   }
+   if(event.type==='V1_TEAM_AUTHORIZATION_CONFIRMED')teamAuthorizationDigest=teamAuthorizationPending.nextDigest;
+   teamAuthorizationOutcomes.set(event.intentID,event);
+   teamAuthorizationPending=null;
+   continue;
+  }
+  if(event.type==='V1_PERSONAL_PILOT_OPENED'||event.type===productionPilotOpened){
    const vault=v1Committed.get('PERSONAL:'+event.vaultID);
-   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||personalWritePilot||pilotIDs.has(event.pilotID)||
+   if(writerFloor!==1||!v1Baseline||pending.size||v1Pending.size||teamAuthorizationPending||personalWritePilot||pilotIDs.has(event.pilotID)||
     vault?.ownerID!==event.ownerID||revokedAccountIDs.has(event.ownerID))conflict();
+   if(event.type===productionPilotOpened){
+    if(teamAuthorizationProtocol!==2||committed.size)conflict();
+    productionPersonalPilotHistory=true;
+   }else if(productionPersonalPilotHistory)conflict();
    pilotIDs.add(event.pilotID);
    personalWritePilot=event;
    continue;
   }
-  if(event.type==='V1_PERSONAL_PILOT_CLOSED'){
+  if(event.type==='V1_PERSONAL_PILOT_CLOSED'||event.type===productionPilotClosed){
    if(personalWritePilot?.pilotID!==event.pilotID||
+    (event.type===productionPilotClosed)!==(personalWritePilot.type===productionPilotOpened)||
     [...v1Pending.values()].some(intent=>intent.pilotID===event.pilotID))conflict();
    personalWritePilot=null;
    continue;
@@ -167,7 +259,8 @@ export function reduceFenceEvents(events){
    continue;
   }
   if(event.type==='V1_PASSWORD_RESET_ISSUED'||event.type==='V1_PASSWORD_RESET_COMPLETED'){
-   if(writerFloor!==1||!v1Baseline||revokedAccountIDs.has(event.userID))conflict();
+   if(writerFloor!==1||!v1Baseline||revokedAccountIDs.has(event.userID)||
+     [...v1Pending.values()].some(item=>item.type===accountDeletionType&&item.userID===event.userID))conflict();
    if(event.type==='V1_PASSWORD_RESET_ISSUED')passwordResetIDs.set(event.userID,event.resetID);
    else {
     if(passwordResetIDs.get(event.userID)!==event.resetID)conflict();
@@ -188,6 +281,11 @@ export function reduceFenceEvents(events){
    const digest=fenceIntentDigest(event),old=v1Intents.get(event.intentID);
    const intent={...event,intentDigest:digest},key=event.vaultKind+':'+event.vaultID;
    if(old){if(!same(old,intent))conflict();continue;}
+   if([...v1Pending.values()].some(item=>item.type===accountDeletionType))conflict();
+   if(event.vaultKind==='PERSONAL'&&revokedAccountIDs.has(event.ownerID))conflict();
+   // Registration still creates empty Vaults. All later Personal revisions need a production permit.
+   if(productionPersonalPilotHistory&&event.vaultKind==='PERSONAL'&&event.baseRevision>=0&&
+     (!event.pilotID||personalWritePilot?.type!==productionPilotOpened))conflict();
    if(event.pilotID&&(personalWritePilot?.pilotID!==event.pilotID||personalWritePilot.ownerID!==event.ownerID||
      personalWritePilot.vaultID!==event.vaultID||revokedAccountIDs.has(event.ownerID)))conflict();
    if(v1Operations.has(event.operationID))conflict();
@@ -197,24 +295,58 @@ export function reduceFenceEvents(events){
    if(event.baseRevision === -1 ? Boolean(previous) : event.baseRevision!==(previous?.revision??0))conflict();
    v1Owners.set(key,event.ownerID);v1Operations.set(event.operationID,event.intentID);v1Intents.set(event.intentID,intent);v1Pending.set(event.intentID,intent);continue;
   }
-  if(event.type==='V1_WRAPPER_BATCH_PENDING_INTENT'){
+  if(event.type==='V1_WRAPPER_BATCH_PENDING_INTENT'||event.type===accountDeletionType){
    if(writerFloor!==1||!v1Baseline||pending.size)conflict();
    const intent={...event,intentDigest:fenceIntentDigest(event)},old=v1Intents.get(event.intentID);
    if(old){if(!same(old,intent))conflict();continue;}
-   if(v1Operations.has(event.operationID))conflict();
+   const deletion=event.type===accountDeletionType;
+   if(deletion){
+    if(teamAuthorizationProtocol!==2||teamAuthorizationPending||v1Pending.size||
+      personalWritePilot?.type==='V1_PERSONAL_PILOT_OPENED'||event.previousDigest!==teamAuthorizationDigest||teamAuthorizationIntents.has(event.authorizationIntentID))conflict();
+    const previous=[...v1Committed.values()].find(item=>item.vaultKind==='PERSONAL'&&item.ownerID===event.userID);
+    if(!same(previous??null,event.vault))conflict();
+   }else{
+    if(v1Operations.has(event.operationID)||[...v1Pending.values()].some(item=>item.type===accountDeletionType))conflict();
+   }
    for(const change of event.changes){
     const key=change.vaultKind+':'+change.vaultID,previous=v1Committed.get(key);
     if(!previous||previous.ownerID!==change.ownerID||previous.revision!==change.revision
       ||previous.ciphertextHash!==change.ciphertextHash||previous.envelopeHash!==change.beforeEnvelopeHash)conflict();
     if([...v1Pending.values()].some(p=>p.type==='V1_WRAPPER_BATCH_PENDING_INTENT'?p.changes.some(item=>item.vaultKind===change.vaultKind&&item.vaultID===change.vaultID):p.vaultKind===change.vaultKind&&p.vaultID===change.vaultID))conflict();
    }
-   v1Operations.set(event.operationID,event.intentID);v1Intents.set(event.intentID,intent);v1Pending.set(event.intentID,intent);continue;
+   if(deletion){
+    // A single authenticated event fences both projections before COMMIT.
+    const authorization={
+     version:2,type:'V1_TEAM_AUTHORIZATION_PENDING',intentID:event.authorizationIntentID,
+     previousDigest:event.previousDigest,nextDigest:event.nextDigest,
+     vaultIntentID:event.intentID,vaultIntentDigest:intent.intentDigest,
+    };
+    teamAuthorizationPending={...authorization,intentDigest:fenceIntentDigest(authorization)};
+    teamAuthorizationIntents.set(authorization.intentID,teamAuthorizationPending);
+   }else v1Operations.set(event.operationID,event.intentID);
+   v1Intents.set(event.intentID,intent);v1Pending.set(event.intentID,intent);continue;
   }
   if(event.type==='V1_CONFIRMED_COMMIT'||event.type==='V1_PROVEN_ABORT'){
    const intent=v1Intents.get(event.intentID);if(!intent||intent.intentDigest!==event.intentDigest)conflict();
    const old=v1Outcomes.get(event.intentID);if(old){if(!same(old,event))conflict();continue;}
-   if(event.type==='V1_CONFIRMED_COMMIT'){
-    const changes=intent.type==='V1_WRAPPER_BATCH_PENDING_INTENT'?intent.changes:[intent];
+   const confirmed=event.type==='V1_CONFIRMED_COMMIT';
+   if(intent.type===accountDeletionType){
+    if(teamAuthorizationPending?.intentID!==intent.authorizationIntentID)conflict();
+    const authorization=teamAuthorizationPending;
+    teamAuthorizationOutcomes.set(authorization.intentID,{
+     version:2,type:confirmed?'V1_TEAM_AUTHORIZATION_CONFIRMED':'V1_TEAM_AUTHORIZATION_ABORTED',
+     intentID:authorization.intentID,intentDigest:authorization.intentDigest,
+    });
+    teamAuthorizationPending=null;
+    if(confirmed){
+     teamAuthorizationDigest=authorization.nextDigest;
+     revokedAccountIDs.add(intent.userID);
+     passwordResetIDs.delete(intent.userID);
+     if(intent.vault)v1Committed.delete('PERSONAL:'+intent.vault.vaultID);
+    }
+   }
+   if(confirmed){
+    const changes=intent.changes??[intent];
     for(const item of changes)v1Committed.set(item.vaultKind+':'+item.vaultID,
      {vaultKind:item.vaultKind,ownerID:item.ownerID,vaultID:item.vaultID,revision:item.revision,ciphertextHash:item.ciphertextHash,envelopeHash:item.envelopeHash});
    }
@@ -257,16 +389,25 @@ export function reduceFenceEvents(events){
   }
  }
  const finalCommitted=[...committed.values()].sort(compareVault),finalPending=[...pending.values()].sort((a,b)=>compare(a.intentID,b.intentID));
+ // Authentication is denied until the deletion is confirmed or proven aborted.
+ const deniedAccounts=new Set(revokedAccountIDs);
+ for(const intent of v1Pending.values())if(intent.type===accountDeletionType)deniedAccounts.add(intent.userID);
  return {...(writerFloor?{writerFloor}:{}),
+  ...(teamAuthorizationBaseline?{
+    v1TeamAuthorization:{protocol:teamAuthorizationProtocol,digest:teamAuthorizationDigest,pending:teamAuthorizationPending},
+    v1TeamAuthorizationOutcomes:[...teamAuthorizationOutcomes.values()],
+  }:{}),
   ...(personalWritePilot?{personalWritePilot}:{}),
+  ...(productionPersonalPilotHistory?{productionPersonalPilotHistory:true}:{}),
   ...(revokedSessionIDs.size?{revokedSessionIDs:[...revokedSessionIDs].sort(compare)}:{}),
   ...(revokedDeviceIDs.size?{revokedDeviceIDs:[...revokedDeviceIDs].sort(compare)}:{}),
-  ...(revokedAccountIDs.size?{revokedAccountIDs:[...revokedAccountIDs].sort(compare)}:{}),
+  ...(deniedAccounts.size?{revokedAccountIDs:[...deniedAccounts].sort(compare)}:{}),
   ...(passwordResetIDs.size?{passwordResetIDs:Object.fromEntries(passwordResetIDs)}:{}),
   ...(passwordIdentityIDs.size?{passwordIdentityIDs:Object.fromEntries(passwordIdentityIDs)}:{}),
   ...([...v1Intents.values()].some(item=>item.baseRevision===-1)?{emptyVaultCreationVersion:1}:{}),
   ...([...v1Intents.values()].some(item=>item.type==='V1_WRAPPER_BATCH_PENDING_INTENT')?{wrapperEnvelopeVersion:1}:{}),
   ...(v1Baseline?{v1BaselineID:v1Baseline.baselineID,v1Pending:[...v1Pending.values()],v1Committed:[...v1Committed.values()],v1Outcomes:[...v1Outcomes.values()]}:{}),
-  schemaFloor:Math.max(19,...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
+  schemaFloor:Math.max(teamAuthorizationProtocol===2?23:19,
+    ...finalCommitted.map(v=>v.schemaFloor),...finalPending.map(p=>p.schemaFloor)),committed:finalCommitted,
   pending:finalPending,outcomes:[...outcomes.values()].sort((a,b)=>compare(a.intentID,b.intentID))};
 }
